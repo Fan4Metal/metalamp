@@ -64,7 +64,7 @@ A double click or `Enter` plays: an artist plays its tracks, an album its tracks
 
 ### Playback
 
-The player bar holds Previous, Play/Pause, Stop and Next, the cover and the names of the track playing, shuffle, repeat (off, the playlist, the track), the volume with a mute button, and the seek bar with the time played and the length. The mouse wheel over the volume changes it in steps of 5 %.
+The player bar holds Previous, Play/Pause, Stop and Next, the cover and the names of the track playing, shuffle, repeat (off, the playlist, the track), the volume with a mute button, and the seek bar with the time played and the length. The mouse wheel anywhere over the title row and the player bar changes the volume in steps of 5 %.
 
 Media Foundation, the media framework of Windows, decodes the files, and the WASAPI shared mode plays them on the default device; a change of the default device or a device unplugged is followed without stopping. The track after the current one is opened in advance, so tracks of one format follow each other without a pause. An MP3 encoder adds silence before the music and after it; MetalAMP reads how much from the file's LAME tag and leaves it out, so an album recorded without pauses plays as one piece.
 

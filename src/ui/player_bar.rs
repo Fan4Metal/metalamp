@@ -154,7 +154,8 @@ pub fn show(ui: &mut Ui, now: &NowPlaying<'_>) -> Vec<BarCmd> {
     {
         cmds.push(BarCmd::Mute);
     }
-    // The volume slider: a click or a drag sets it, the wheel steps it.
+    // The volume slider: a click or a drag sets it (the wheel steps it
+    // anywhere over the title row and this bar: `App::ui`).
     let resp = ui.interact(
         slider.expand2(vec2(4.0, 6.0)),
         ui.id().with("volume"),
@@ -179,13 +180,6 @@ pub fn show(ui: &mut Ui, now: &NowPlaying<'_>) -> Vec<BarCmd> {
             .round()
             .clamp(0.0, 100.0) as u8;
         cmds.push(BarCmd::Volume(v));
-    }
-    if resp.hovered() || ui.rect_contains_pointer(speaker) {
-        let notches = crate::ui::wheel_notches(ui);
-        if notches != 0 {
-            let v = (i32::from(now.volume) + notches * 5).clamp(0, 100) as u8;
-            cmds.push(BarCmd::Volume(v));
-        }
     }
     resp.on_hover_text(format!("{} %", now.volume));
 

@@ -721,14 +721,32 @@ impl eframe::App for App {
         if !frameless::is_maximized(&ctx) {
             frameless::resize_edges(root_ui);
         }
-        egui::Panel::top("title")
+        let title_rect = egui::Panel::top("title")
             .exact_size(title::HEIGHT)
             .frame(egui::Frame::NONE)
-            .show(root_ui, |ui| self.title_row(ui));
-        egui::Panel::top("player")
+            .show(root_ui, |ui| self.title_row(ui))
+            .response
+            .rect;
+        let bar_rect = egui::Panel::top("player")
             .exact_size(crate::ui::player_bar::HEIGHT)
             .frame(egui::Frame::NONE)
-            .show(root_ui, |ui| self.player_bar(ui));
+            .show(root_ui, |ui| self.player_bar(ui))
+            .response
+            .rect;
+        // The wheel anywhere over the title row and the player bar steps
+        // the volume by 5, as over Winamp's main window.
+        if !self.about.open
+            && ctx
+                .pointer_hover_pos()
+                .is_some_and(|p| title_rect.union(bar_rect).contains(p))
+        {
+            let notches = crate::ui::wheel_notches(root_ui);
+            if notches != 0 {
+                let v = (i32::from(self.player.volume) + notches * 5).clamp(0, 100) as u8;
+                self.player.set_volume(v);
+                self.place_changed = Some(Instant::now());
+            }
+        }
         if self.settings.playlist_visible && !self.settings.library_folders.is_empty() {
             let panel = egui::Panel::right("playlist")
                 .resizable(true)
