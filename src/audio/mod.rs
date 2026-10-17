@@ -357,6 +357,11 @@ impl Player<'_> {
         self.eos = false;
         self.format_change = false;
         self.started = false;
+        // A track begun plays: a pause left on would keep the ring empty
+        // and the output stopped, the UI saying "playing" (a track chosen
+        // while paused was silent). `seek` and `recover` put their pause
+        // back after this.
+        self.paused = false;
         self.drained_since = None;
         self.shared.position_ms.store(from_ms, Relaxed);
     }
@@ -630,5 +635,44 @@ mod tests {
         let duration = engine.duration_ms();
         engine.send(Cmd::Seek(duration - 1000));
         assert!(wait(&|e| matches!(e, Event::Ended), 4));
+    }
+
+    /// A track chosen while paused plays (the pause used to stay on in the
+    /// engine: silence, the UI saying "playing"). `METALAMP_SAMPLE` as
+    /// above.
+    #[test]
+    #[ignore = "needs METALAMP_SAMPLE and a sound device; plays a few seconds"]
+    fn play_while_paused_plays() {
+        use std::time::Instant;
+        let file = PathBuf::from(std::env::var("METALAMP_SAMPLE").expect("METALAMP_SAMPLE"));
+        let engine = Engine::start(egui::Context::default());
+        engine.set_gain(0.05);
+        let wait = |what: &dyn Fn(&Event) -> bool, secs: u64| {
+            let until = Instant::now() + Duration::from_secs(secs);
+            while Instant::now() < until {
+                for e in engine.poll() {
+                    println!("{e:?} at {} ms", engine.position_ms());
+                    if what(&e) {
+                        return true;
+                    }
+                    assert!(!matches!(e, Event::Failed { .. }), "{e:?}");
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            false
+        };
+        engine.send(Cmd::Play {
+            id: 1,
+            path: file.clone(),
+        });
+        assert!(wait(&|e| matches!(e, Event::Started { id: 1 }), 5));
+        std::thread::sleep(Duration::from_millis(500));
+        engine.send(Cmd::Pause);
+        std::thread::sleep(Duration::from_millis(300));
+        engine.send(Cmd::Play { id: 2, path: file });
+        assert!(wait(&|e| matches!(e, Event::Started { id: 2 }), 5));
+        std::thread::sleep(Duration::from_millis(800));
+        let position = engine.position_ms();
+        assert!(position > 300, "the position stands at {position} ms: still paused");
     }
 }
