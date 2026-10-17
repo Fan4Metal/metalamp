@@ -27,6 +27,12 @@ pub struct Decoder {
     /// Samples before this time (100 ns) are dropped: what a seek asked
     /// for, as the reader starts at the frame that holds it.
     skip_to: Option<i64>,
+    /// An MP3's music among the samples decoded (`mp3gap`): what is
+    /// before and after it is the encoder's silence, cut for gapless
+    /// playback.
+    trim: Option<super::mp3gap::Trim>,
+    /// The index of the next sample the reader gives (per channel).
+    at: u64,
 }
 
 const STREAM: u32 = MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32;
@@ -53,18 +59,46 @@ impl Decoder {
         .ok()
         .and_then(|d| u64::try_from(&d).ok())
         .unwrap_or(0) as i64;
+        let is_mp3 = path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("mp3"));
+        let trim = if is_mp3 {
+            let head = super::mp3gap::read_head(path);
+            super::mp3gap::parse(&head).and_then(|i| super::mp3gap::trim_of(&i))
+        } else {
+            None
+        };
+        // The music's length, not the encoder's padding with it.
+        let duration = match trim {
+            Some(t) if rate > 0 => {
+                (i128::from(t.length) * i128::from(SECOND) / i128::from(rate)) as i64
+            }
+            _ => duration,
+        };
         Ok(Decoder {
             reader,
             rate,
             channels,
             duration,
             skip_to: None,
+            trim,
+            at: 0,
         })
+    }
+
+    /// The reader's time of the music's time `time` (both 100 ns).
+    fn reader_time(&self, time: i64) -> i64 {
+        match self.trim {
+            Some(t) if self.rate > 0 => {
+                time + (i128::from(t.start) * i128::from(SECOND) / i128::from(self.rate)) as i64
+            }
+            _ => time,
+        }
     }
 
     /// The next samples come from `time` (100 ns) on.
     pub fn seek(&mut self, time: i64) -> Result<()> {
-        let time = time.max(0);
+        let time = self.reader_time(time.max(0));
         let position = PROPVARIANT::from(time);
         unsafe { self.reader.SetCurrentPosition(&GUID::zeroed(), &position)? };
         self.skip_to = Some(time);
@@ -112,7 +146,28 @@ impl Decoder {
                 }
                 floats.drain(..skip);
                 self.skip_to = None;
+                self.at = (i128::from(to) * i128::from(self.rate) / i128::from(SECOND)) as u64;
             }
+            let Some(trim) = self.trim else {
+                return Ok(Some(floats));
+            };
+            // Only the music: the encoder's delay before it and its
+            // padding after it are cut.
+            let channels = usize::from(self.channels.max(1));
+            let frames = (floats.len() / channels) as u64;
+            let (from, to) = (self.at, self.at + frames);
+            self.at = to;
+            let end = trim.start + trim.length;
+            if from >= end {
+                return Ok(None);
+            }
+            let keep_from = trim.start.saturating_sub(from).min(frames) as usize;
+            let keep_to = (end.min(to) - from) as usize;
+            if keep_from >= keep_to {
+                continue;
+            }
+            floats.truncate(keep_to * channels);
+            floats.drain(..keep_from * channels);
             return Ok(Some(floats));
         }
     }

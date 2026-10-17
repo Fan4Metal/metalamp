@@ -4,6 +4,7 @@
 //!
 //! - `--bench scan <folder>…`: a full scan without the index: the walk,
 //!   the tags (on the scan's threads), the grouping, the index's size.
+//! - `--bench gapless <file>…`: an MP3 decoded whole against its LAME tag.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -21,8 +22,16 @@ pub fn run(args: &[String]) -> i32 {
             bench_scan(&folders, &mut out);
             0
         }
+        Some("gapless") if args.len() > 1 => {
+            let files: Vec<PathBuf> = args[1..].iter().map(PathBuf::from).collect();
+            bench_gapless(&files, &mut out);
+            0
+        }
         _ => {
-            let _ = writeln!(out, "usage: metalamp --bench scan <folder>...");
+            let _ = writeln!(
+                out,
+                "usage: metalamp --bench scan <folder>... | gapless <file>..."
+            );
             2
         }
     }
@@ -116,5 +125,81 @@ fn bench_scan(folders: &[PathBuf], out: &mut impl Write) {
             })
             .collect();
         let _ = writeln!(out, "  {}: {}", folder.display(), names.join(" | "));
+    }
+}
+
+/// `--bench gapless <file>…`: what Media Foundation's decoder gives for an
+/// MP3 against what its LAME tag says: the silent samples at the start
+/// (exactly zero), the samples decoded and the frames counted.
+fn bench_gapless(files: &[PathBuf], out: &mut impl Write) {
+    use crate::audio::{decoder::Decoder, mf, mp3gap};
+    let _com = mf::com_init_mta();
+    let _mf = match mf::Mf::start() {
+        Ok(m) => m,
+        Err(e) => {
+            let _ = writeln!(out, "Media Foundation: {}", mf::describe(&e));
+            return;
+        }
+    };
+    for file in files {
+        let head = mp3gap::read_head(file);
+        let info = mp3gap::parse(&head);
+        let mut decoder = match Decoder::open(file) {
+            Ok(d) => d,
+            Err(e) => {
+                let _ = writeln!(out, "{}: {}", file.display(), mf::describe(&e));
+                continue;
+            }
+        };
+        let channels = usize::from(decoder.channels.max(1));
+        let (mut total, mut leading, mut sound) = (0u64, 0u64, false);
+        let mut trailing = 0u64;
+        while let Ok(Some(block)) = decoder.next() {
+            for frame in block.chunks(channels) {
+                let silent = frame.iter().all(|&s| s == 0.0);
+                if !sound {
+                    if silent {
+                        leading += 1;
+                    } else {
+                        sound = true;
+                    }
+                }
+                trailing = if silent { trailing + 1 } else { 0 };
+                total += 1;
+            }
+        }
+        let _ = writeln!(out, "{}", file.display());
+        let _ = writeln!(
+            out,
+            "  decoded {total} samples, {leading} silent at the start, {trailing} at the end ({} Hz)",
+            decoder.rate
+        );
+        match info {
+            Some(i) => {
+                let frames_total = i
+                    .frames
+                    .map(|f| u64::from(f) * u64::from(i.samples_per_frame));
+                let _ = writeln!(
+                    out,
+                    "  tag: {:?} frames x {}, delay {}, padding {}; frames' samples {:?}, music {:?}",
+                    i.frames,
+                    i.samples_per_frame,
+                    i.delay,
+                    i.padding,
+                    frames_total,
+                    i.music_samples()
+                );
+                if let Some(f) = frames_total {
+                    let _ = writeln!(
+                        out,
+                        "  decoded - frames' samples = {}",
+                        total as i64 - f as i64
+                    );
+                }
+            }
+            None => {
+                let _ = writeln!(out, "  no Xing/Info header with a LAME tag");
+            }
+        }
     }
 }

@@ -17,6 +17,7 @@
 
 pub mod decoder;
 pub mod mf;
+pub mod mp3gap;
 pub mod output;
 
 use std::collections::VecDeque;
