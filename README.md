@@ -28,6 +28,7 @@ MetalAMP is an audio player for Windows built around a media library in the mann
 - **Gapless playback**: the next track is opened before the current one ends, and MP3 files are cut to their music by their LAME tags (see [Playback](#playback)).
 - **Formats of Windows**: MP3, AAC (M4A), FLAC, WMA and WAV, decoded by Media Foundation; M3U and M3U8 playlists.
 - **A playlist** beside the library, kept between runs.
+- **Track info**: every field of the selected track's tag, its pictures and its audio properties, beside the artists (see [Track info](#track-info)).
 - **One window**: files opened from Explorer go to the window already open.
 - **File associations** with an icon for each type, offered by the installer.
 - **English or Russian interface**: it follows the language of Windows and can be changed in the About window (`F1`).
@@ -58,9 +59,13 @@ The panes:
 - **Albums**: covers with the title and the year (or the artist), or a table with the artist, title, year, number of tracks, genre, length and size; the bar's two buttons switch between them. A cover is the picture in the album's folder (`folder`, `cover`, `front`, `albumart`, JPEG or PNG), else the one in the first track's tag; thumbnails are kept in the `covers` folder.
 - **Tracks**: number, title, length, album, year, artist, genre and bit rate; the track playing is shown in amber.
 
-A click on a column's header sorts by that column, a second click reverses the order; a column's right edge is dragged to change its width, and the borders between the panes move. The search field (`Ctrl+F`) narrows all three panes as it is typed: every word must be found in the track's artist, album artist, album, title, genre or year; `Esc` clears it. The status line shows the number, the total length and the size of the tracks shown, and how long the search took.
+A click on a column's header sorts by that column, a second click reverses the order; a column's right edge is dragged to change its width, and the borders between the panes move. Columns that do not fit in a pane scroll sideways (the scroll bar, or `Shift` with the mouse wheel). The search field (`Ctrl+F`) narrows all three panes as it is typed: every word must be found in the track's artist, album artist, album, title, genre or year; `Esc` clears it. The status line shows the number, the total length and the size of the tracks shown, and how long the search took.
 
 A double click or `Enter` plays: an artist plays its tracks, an album its tracks, a track the whole table from it on (as Winamp does). The right button opens a menu with **Play**, **Add to the playlist** and **Show in folder**.
+
+### Track info
+
+The panel under the artists (`Alt+3`, as Winamp's File Info, or the bar's button shows or hides it) lists the tag of the track selected last, in the library or in the playlist, else of the track playing: every field the tag holds (track and disc numbers, title, artist, album, year, genre, comment, album artist, composer, publisher and the rest), with the tags the file has in its header (for example `ID3v2.3 · ID3v1`); then the format, length, bit rate, sample rate, channels, the encoder delay and padding of an MP3's LAME tag, the pictures in the tag with their size, the file's size and path. The file is read when it is chosen, without delaying the window; the text can be selected and copied.
 
 ### Playback
 
@@ -91,6 +96,7 @@ The playlist on the right (`Alt+E` shows or hides it) lists "Artist – Title" w
 | `Ctrl+Shift+O` | Add a music folder |
 | `F5` | Read the library's folders again |
 | `Alt+E` | Show or hide the playlist |
+| `Alt+3` | Show or hide the track info |
 | Arrows, `Page Up`, `Page Down`, `Home`, `End` | Move in the pane clicked last |
 | `Enter` | Play the selection |
 | `Delete` | Remove from the playlist |

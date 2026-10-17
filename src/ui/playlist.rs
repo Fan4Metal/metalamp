@@ -32,6 +32,15 @@ pub struct PlaylistView {
     revision: u64,
 }
 
+impl PlaylistView {
+    /// The entry selected last, if any.
+    pub fn selected_entry(&self) -> Option<usize> {
+        self.anchor
+            .filter(|a| self.selected.contains(a))
+            .or_else(|| self.selected.first().copied())
+    }
+}
+
 /// What the playlist asks the app for.
 pub enum PlaylistAction {
     Play(usize),

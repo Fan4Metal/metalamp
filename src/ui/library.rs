@@ -109,6 +109,8 @@ pub struct LibraryView {
     /// Play every track shown once the view is built (an artist double
     /// clicked).
     play_shown: bool,
+    /// The track info panel under the artists.
+    pub info: crate::ui::info::InfoView,
 }
 
 impl LibraryView {
@@ -127,7 +129,17 @@ impl LibraryView {
             scroll: [None; 3],
             reset_tracks: false,
             play_shown: false,
+            info: crate::ui::info::InfoView::default(),
         }
+    }
+
+    /// The track selected last in the tracks' table, if any.
+    pub fn selected_track(&self) -> Option<TrackId> {
+        let row = self
+            .anchor
+            .filter(|a| self.selected.contains(a))
+            .or_else(|| self.selected.first().copied())?;
+        self.view.as_ref()?.tracks.get(row).copied()
     }
 
     /// The view for `library` as the search, the choice and the sorts are
@@ -407,9 +419,30 @@ pub fn show(
     let width = settings
         .artists_width
         .clamp(160.0, (rest.width() * 0.5).max(160.0));
-    let left = Rect::from_min_size(rest.min, vec2(width, rest.height()));
+    let column = Rect::from_min_size(rest.min, vec2(width, rest.height()));
+    // The track info under the artists, with a strip between.
+    let (left, info) = if settings.info_visible {
+        let height = settings
+            .info_height
+            .clamp(120.0, (column.height() - 140.0).max(120.0));
+        let info = Rect::from_min_max(pos2(column.left(), column.bottom() - height), column.max);
+        let split = Rect::from_min_max(
+            pos2(column.left(), info.top() - SPLITTER),
+            pos2(column.right(), info.top()),
+        );
+        if let Some(d) = splitter(ui, split, "split_info", false) {
+            settings.info_height = (height - d).max(120.0);
+            changed = true;
+        }
+        (
+            Rect::from_min_max(column.min, pos2(column.right(), split.top())),
+            Some(info),
+        )
+    } else {
+        (column, None)
+    };
     let split_v = Rect::from_min_size(
-        pos2(left.right(), rest.top()),
+        pos2(column.right(), rest.top()),
         vec2(SPLITTER, rest.height()),
     );
     let right = Rect::from_min_max(pos2(split_v.right(), rest.top()), rest.max);
@@ -436,6 +469,10 @@ pub fn show(
     }
 
     let keys_free = keys && !ui.ctx().memory(|m| m.focused().is_some());
+    if let Some(info) = info {
+        let mut child = pane_ui(ui, info, "info");
+        lv.info.show(&mut child, info);
+    }
     artists_pane(
         ui,
         left,
@@ -593,6 +630,17 @@ fn top_bar(
         .clicked()
         {
             actions.push(LibraryAction::Rescan);
+        }
+        if crate::ui::icon_button(
+            ui,
+            Icon::File,
+            settings.info_visible,
+            tr!("Track info (Alt+3)", "Сведения о треке (Alt+3)"),
+        )
+        .clicked()
+        {
+            settings.info_visible = !settings.info_visible;
+            *changed = true;
         }
         if crate::ui::icon_button(
             ui,

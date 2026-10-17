@@ -48,6 +48,10 @@ pub struct Settings {
     /// points.
     pub artists_width: f32,
     pub tracks_height: f32,
+    /// The track info panel under the artists (Alt+3), and its height in
+    /// points.
+    pub info_visible: bool,
+    pub info_height: f32,
     /// Each table's column widths, by the table's name.
     pub columns: HashMap<String, Vec<f32>>,
     /// Each table's sort, by the table's name; none: the library's order.
@@ -83,6 +87,8 @@ impl Default for Settings {
             album_view: AlbumView::Grid,
             artists_width: 260.0,
             tracks_height: 300.0,
+            info_visible: true,
+            info_height: 300.0,
             columns: HashMap::new(),
             sorts: HashMap::new(),
             volume: 80,

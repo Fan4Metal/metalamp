@@ -294,6 +294,25 @@ impl App {
         }
     }
 
+    /// The file the track info panel shows: the one selected last, in
+    /// the playlist when it was clicked last, else in the library's
+    /// tracks; else the one playing (or the playlist's current one).
+    fn info_path(&self) -> Option<PathBuf> {
+        let entries = self.player.queue.entries();
+        if self.playlist_view.focused
+            && let Some(e) = self.playlist_view.selected_entry().and_then(|i| entries.get(i))
+        {
+            return Some(e.path.clone());
+        }
+        if let Some(t) = self.library_view.selected_track() {
+            return self.library.tracks.get(t as usize).map(|t| t.path.clone());
+        }
+        self.player
+            .playing_path()
+            .or_else(|| self.player.queue.current_entry().map(|e| &e.path))
+            .cloned()
+    }
+
     fn player_bar(&mut self, ui: &mut egui::Ui) {
         use crate::ui::player_bar::{self, BarCmd, NowPlaying};
         let ctx = ui.ctx().clone();
@@ -713,6 +732,10 @@ impl eframe::App for App {
                 self.settings.playlist_visible = !self.settings.playlist_visible;
                 self.place_changed = Some(Instant::now());
             }
+            if ctx.input_mut(|i| i.consume_key(Modifiers::ALT, Key::Num3)) {
+                self.settings.info_visible = !self.settings.info_visible;
+                self.place_changed = Some(Instant::now());
+            }
         }
         self.take_dropped(&ctx);
         if !self.about.open {
@@ -792,6 +815,10 @@ impl eframe::App for App {
             if !self.settings.library_folders.is_empty() {
                 let scanning = self.scanning();
                 let playing = self.playing_track();
+                if self.settings.info_visible {
+                    let path = self.info_path();
+                    self.library_view.info.want(&ctx, path.as_deref());
+                }
                 let (actions, changed) = crate::ui::library::show(
                     ui,
                     &mut self.library_view,

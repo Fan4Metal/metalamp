@@ -6,6 +6,7 @@
 //! index (`index.rs`) keeps the tracks between runs, so a start shows the
 //! library at once and a rescan reads only the files that changed.
 
+pub mod details;
 pub mod index;
 pub mod scan;
 pub mod tags;
