@@ -1,0 +1,6 @@
+/target
+/dist
+__pycache__/
+# The spec and the reference screenshots stay local.
+/SPEC.md
+/local/
