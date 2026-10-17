@@ -361,6 +361,7 @@ pub fn show(
     settings: &mut Settings,
     scanning: bool,
     playing: Option<TrackId>,
+    keys: bool,
 ) -> (Vec<LibraryAction>, bool) {
     let mut actions = Vec::new();
     let mut changed = false;
@@ -434,7 +435,7 @@ pub fn show(
         changed = true;
     }
 
-    let keys_free = !ui.ctx().memory(|m| m.focused().is_some());
+    let keys_free = keys && !ui.ctx().memory(|m| m.focused().is_some());
     artists_pane(
         ui,
         left,
@@ -592,6 +593,17 @@ fn top_bar(
         .clicked()
         {
             actions.push(LibraryAction::Rescan);
+        }
+        if crate::ui::icon_button(
+            ui,
+            Icon::Contents,
+            settings.playlist_visible,
+            tr!("The playlist (Alt+E)", "Плейлист (Alt+E)"),
+        )
+        .clicked()
+        {
+            settings.playlist_visible = !settings.playlist_visible;
+            *changed = true;
         }
         ui.add_space(8.0);
         let table = settings.album_view == AlbumView::Table;

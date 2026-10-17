@@ -142,6 +142,7 @@ impl Player {
         match self.status {
             Status::Paused => self.toggle_pause(),
             Status::Playing => {}
+            Status::Stopped if self.queue.is_empty() => {}
             Status::Stopped => {
                 if let Some(i) = self.queue.current().or_else(|| self.queue.after(None)) {
                     self.play_index(i);

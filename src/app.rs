@@ -52,6 +52,9 @@ pub struct App {
     /// The right button is down (its press held back, `raw_input_hook`).
     right_held: bool,
     pub(crate) player: crate::player::Player,
+    playlist_view: crate::ui::playlist::PlaylistView,
+    /// The playlist's revision and current entry last saved.
+    saved_playlist: (u64, Option<usize>),
 }
 
 impl App {
@@ -99,6 +102,8 @@ impl App {
             settings.repeat,
             settings.shuffle,
         );
+        let mut player = player;
+        let saved_playlist = load_playlist(&mut player, settings.playlist_current);
         let mut updates = Updates::new(settings.check_updates, settings.last_update_check);
         updates.start_if_due(ctx);
         let mut about = AboutDialog::default();
@@ -120,6 +125,8 @@ impl App {
             library_view: crate::ui::library::LibraryView::new(ctx),
             right_held: false,
             player,
+            playlist_view: crate::ui::playlist::PlaylistView::default(),
+            saved_playlist,
         }
     }
 
@@ -395,6 +402,20 @@ impl App {
         }
     }
 
+    /// Open files to play (Ctrl+O): they replace the playlist.
+    fn open_files(&mut self, frame: &eframe::Frame) {
+        let mut extensions: Vec<&str> = crate::filetypes::AUDIO_EXTENSIONS.to_vec();
+        extensions.extend(["m3u8", "m3u"]);
+        let dialog = rfd::FileDialog::new()
+            .set_title(tr!("Open files", "Открыть файлы"))
+            .add_filter(tr!("Audio and playlists", "Аудио и плейлисты"), &extensions)
+            .set_parent(frame);
+        if let Some(files) = dialog.pick_files() {
+            let files = expand_playlists(files);
+            self.player.play_paths(files, 0);
+        }
+    }
+
     /// Ask for a folder to add (Ctrl+Shift+O).
     fn pick_folder(&mut self, frame: &eframe::Frame) {
         let dialog = rfd::FileDialog::new()
@@ -414,10 +435,18 @@ impl App {
                 .map(|f| f.path().to_path_buf())
                 .collect()
         });
+        let mut files = Vec::new();
         for path in dropped {
             if path.is_dir() {
                 self.add_folder(path);
+            } else {
+                files.push(path);
             }
+        }
+        // Files dropped go to the playlist (played if nothing plays).
+        let files = expand_playlists(files);
+        if !files.is_empty() {
+            self.player.enqueue(files);
         }
     }
 
@@ -470,9 +499,50 @@ impl App {
         self.settings.mute = self.player.mute;
         self.settings.repeat = self.player.queue.repeat;
         self.settings.shuffle = self.player.queue.shuffle();
+        self.settings.playlist_current = self.player.queue.current();
+    }
+
+    /// Write the playlist when it or its current entry changed.
+    fn remember_playlist(&mut self, now: bool) {
+        let state = (self.player.queue.revision, self.player.queue.current());
+        if state == self.saved_playlist {
+            return;
+        }
+        let revision_changed = state.0 != self.saved_playlist.0;
+        self.saved_playlist = state;
+        if revision_changed {
+            let text = self.player.queue.m3u8(&|path| {
+                let &id = self.library.by_path.get(path)?;
+                let t = &self.library.tracks[id as usize];
+                let title = if t.artist.is_empty() {
+                    t.title.clone()
+                } else {
+                    format!("{} - {}", t.artist, t.title)
+                };
+                Some((u64::from(t.duration_ms) / 1000, title))
+            });
+            if let Some(path) = playlist_file() {
+                let write = move || {
+                    let tmp = path.with_extension("m3u8.tmp");
+                    if let Err(e) =
+                        std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, &path))
+                    {
+                        log::warn!("cannot write the playlist: {e}");
+                    }
+                };
+                if now {
+                    write();
+                } else {
+                    std::thread::spawn(write);
+                }
+            }
+        }
+        // The current entry is a setting.
+        self.place_changed.get_or_insert_with(Instant::now);
     }
 
     fn save_now(&mut self) {
+        self.remember_playlist(true);
         self.remember_place();
         self.sync_settings();
         self.settings.save();
@@ -570,6 +640,7 @@ impl eframe::App for App {
         self.poll_scan();
         self.library_view.covers.poll(ctx);
         self.take_hooked(ctx);
+        self.remember_playlist(false);
         if self.player.poll().track {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
         }
@@ -600,6 +671,13 @@ impl eframe::App for App {
             if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::F)) {
                 self.library_view.focus_search = true;
             }
+            if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::O)) {
+                self.open_files(frame);
+            }
+            if ctx.input_mut(|i| i.consume_key(Modifiers::ALT, Key::E)) {
+                self.settings.playlist_visible = !self.settings.playlist_visible;
+                self.place_changed = Some(Instant::now());
+            }
         }
         self.take_dropped(&ctx);
         if !self.about.open {
@@ -616,6 +694,43 @@ impl eframe::App for App {
             .exact_size(crate::ui::player_bar::HEIGHT)
             .frame(egui::Frame::NONE)
             .show(root_ui, |ui| self.player_bar(ui));
+        if self.settings.playlist_visible && !self.settings.library_folders.is_empty() {
+            let panel = egui::Panel::right("playlist")
+                .resizable(true)
+                .default_size(self.settings.playlist_width)
+                .size_range(220.0..=700.0)
+                .frame(egui::Frame::NONE)
+                .show(root_ui, |ui| {
+                    crate::ui::playlist::show(
+                        ui,
+                        &mut self.playlist_view,
+                        &mut self.player,
+                        &self.library,
+                    )
+                });
+            let width = panel.response.rect.width();
+            if (width - self.settings.playlist_width).abs() > 0.5 {
+                self.settings.playlist_width = width;
+                self.place_changed = Some(Instant::now());
+            }
+            // A press inside the playlist gives it the keys, elsewhere
+            // takes them back.
+            if ctx.input(|i| i.pointer.any_pressed())
+                && let Some(p) = ctx.input(|i| i.pointer.interact_pos())
+            {
+                self.playlist_view.focused = panel.response.rect.contains(p);
+            }
+            for action in panel.inner {
+                match action {
+                    crate::ui::playlist::PlaylistAction::Play(i) => self.player.play_index(i),
+                    crate::ui::playlist::PlaylistAction::ShowInFolder(i) => {
+                        if let Some(e) = self.player.queue.entries().get(i) {
+                            win::show_in_folder(&e.path);
+                        }
+                    }
+                }
+            }
+        }
         egui::Panel::bottom("status")
             .exact_size(crate::ui::status::HEIGHT)
             .frame(egui::Frame::NONE.fill(palette::TITLE_BG))
@@ -631,6 +746,7 @@ impl eframe::App for App {
                     &mut self.settings,
                     scanning,
                     playing,
+                    !self.playlist_view.focused,
                 );
                 if changed {
                     self.place_changed = Some(Instant::now());
@@ -652,4 +768,49 @@ impl eframe::App for App {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.save_now();
     }
+}
+
+/// `playlist.m3u8` next to the settings.
+fn playlist_file() -> Option<PathBuf> {
+    crate::settings::data_dir().map(|d| d.join("playlist.m3u8"))
+}
+
+/// The playlist of the last run, its current entry as it was; the state
+/// to compare later saves with.
+fn load_playlist(
+    player: &mut crate::player::Player,
+    current: Option<usize>,
+) -> (u64, Option<usize>) {
+    if let Some(path) = playlist_file()
+        && let Ok(text) = std::fs::read_to_string(&path)
+    {
+        let folder = path.parent().map(PathBuf::from).unwrap_or_default();
+        player
+            .queue
+            .replace(crate::queue::m3u_paths(&text, &folder));
+        player.queue.set_current(current);
+    }
+    (player.queue.revision, player.queue.current())
+}
+
+/// Playlists among `files` replaced by their entries; only audio files
+/// stay.
+fn expand_playlists(files: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for f in files {
+        let ext = f
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        if ext == "m3u8" || ext == "m3u" {
+            if let Ok(bytes) = std::fs::read(&f) {
+                let text = String::from_utf8_lossy(&bytes);
+                let folder = f.parent().map(PathBuf::from).unwrap_or_default();
+                out.extend(crate::queue::m3u_paths(&text, &folder));
+            }
+        } else if crate::filetypes::is_audio(&f) {
+            out.push(f);
+        }
+    }
+    out
 }

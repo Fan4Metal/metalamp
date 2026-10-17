@@ -57,6 +57,11 @@ pub struct Settings {
     pub mute: bool,
     pub repeat: Repeat,
     pub shuffle: bool,
+    /// The playlist on the right, and its width in points.
+    pub playlist_visible: bool,
+    pub playlist_width: f32,
+    /// The playlist's current entry (`playlist.m3u8` holds the list).
+    pub playlist_current: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,6 +89,9 @@ impl Default for Settings {
             mute: false,
             repeat: Repeat::Off,
             shuffle: false,
+            playlist_visible: true,
+            playlist_width: 340.0,
+            playlist_current: None,
         }
     }
 }

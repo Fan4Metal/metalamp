@@ -8,6 +8,7 @@ pub mod about;
 pub mod icons;
 pub mod library;
 pub mod player_bar;
+pub mod playlist;
 pub mod start;
 pub mod status;
 pub mod table;

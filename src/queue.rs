@@ -59,7 +59,6 @@ impl Queue {
         self.entries.len()
     }
 
-    #[allow(dead_code)] // the playlist pane, next
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -115,7 +114,6 @@ impl Queue {
 
     /// Removes the entries at `indices`; the current one stays current if
     /// it is kept.
-    #[allow(dead_code)] // the playlist pane, next
     pub fn remove(&mut self, indices: &[usize]) {
         let mut keep = vec![true; self.entries.len()];
         for &i in indices {
@@ -131,7 +129,6 @@ impl Queue {
         self.revision += 1;
     }
 
-    #[allow(dead_code)] // the playlist pane, next
     pub fn clear(&mut self) {
         self.replace(Vec::new());
     }
@@ -139,7 +136,6 @@ impl Queue {
     /// Moves the entries at `indices` (in the list's order) to before
     /// `slot` (an index counted before the move; the length for the end).
     /// Returns where they now start.
-    #[allow(dead_code)] // the playlist pane, next
     pub fn move_to(&mut self, indices: &[usize], slot: usize) -> usize {
         let mut sorted: Vec<usize> = indices
             .iter()
@@ -257,7 +253,6 @@ impl Queue {
     /// The list as an M3U8 playlist: `#EXTM3U`, then for each entry its
     /// `#EXTINF` line (seconds and "Artist - Title", from `describe`) and
     /// its path. UTF-8 without a BOM, CRLF as Winamp writes it.
-    #[allow(dead_code)] // the playlist pane, next
     pub fn m3u8(&self, describe: &dyn Fn(&Path) -> Option<(u64, String)>) -> String {
         let mut out = String::from("#EXTM3U\r\n");
         for e in &self.entries {
@@ -272,7 +267,6 @@ impl Queue {
 
 /// The paths of an M3U or M3U8 playlist: comments skipped, relative paths
 /// from the list's folder; addresses (`scheme://`) are left out.
-#[allow(dead_code)] // the playlist pane, next
 pub fn m3u_paths(text: &str, folder: &Path) -> Vec<PathBuf> {
     text.trim_start_matches('\u{feff}')
         .lines()
