@@ -1,7 +1,8 @@
-//! The look: always dark, as Winamp's media library, with one amber accent
-//! (the selection's edge, the playing track, the seek bar, the Play
-//! button). Every colour of the interface is here, not scattered as
-//! literals.
+//! The look: always dark, as Winamp's media library: near-black lists, a
+//! slate band for the selection and a light blue for the track playing
+//! (Winamp's), the amber of the icon's bolt for the controls (the Play
+//! button, the seek bar, the toggles on). Every colour of the interface
+//! is here, not scattered as literals.
 
 // Some colours belong to panels still to come.
 #![allow(dead_code)]
@@ -32,7 +33,7 @@ pub const TEXT: Color32 = rgb(0xd6, 0xd8, 0xdc);
 pub const TEXT_WEAK: Color32 = rgb(0x8c, 0x91, 0x9a);
 pub const TEXT_BRIGHT: Color32 = rgb(0xff, 0xff, 0xff);
 /// A hovered flat button's or row's background.
-pub const HOVER: Color32 = rgb(0x2c, 0x2f, 0x36);
+pub const HOVER: Color32 = rgb(0x25, 0x29, 0x31);
 pub const PRESSED: Color32 = rgb(0x37, 0x3b, 0x43);
 /// The rest of the seek bar and of the volume slider.
 pub const TRACK: Color32 = rgb(0x3a, 0x3e, 0x46);
@@ -44,13 +45,14 @@ pub const SCROLL_HANDLE_DRAG: Color32 = rgb(0x80, 0x85, 0x90);
 pub const CLOSE_HOVER: Color32 = rgb(0xc4, 0x2b, 0x1c);
 pub const ERROR: Color32 = rgb(0xff, 0x8a, 0x80);
 
-/// The accent: the amber of the bolt in the app icon.
+/// The accent of the controls: the amber of the bolt in the app icon.
 pub const ACCENT: Color32 = rgb(0xf5, 0xa6, 0x23);
 pub const ACCENT_HOVER: Color32 = rgb(0xff, 0xbe, 0x4d);
-/// The text of the playing track.
-pub const PLAYING: Color32 = rgb(0xff, 0xc4, 0x5c);
-/// The background of selected rows.
-pub const SELECTED_BG: Color32 = rgb(0x4a, 0x3a, 0x1c);
+/// The text of the track playing in the lists: a light blue, which sits
+/// with the slate band and does not fight the covers as the amber did.
+pub const PLAYING: Color32 = rgb(0x8f, 0xc3, 0xff);
+/// The background of selected rows: Winamp's slate band.
+pub const SELECTED_BG: Color32 = rgb(0x2b, 0x34, 0x42);
 
 /// egui's visuals in these colours.
 pub fn apply(ctx: &egui::Context) {

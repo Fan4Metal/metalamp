@@ -17,7 +17,7 @@
 
 MetalAMP is an audio player for Windows built around a media library in the manner of Winamp's: the music folders are scanned once, and the artists, the albums with their covers and the tracks are then shown at once and filtered as a search is typed. Playback uses the decoders of Windows itself (Media Foundation) and the WASAPI audio output, so the program is a single executable without additional libraries, and albums meant to be heard without pauses play without gaps.
 
-![MetalAMP: the artists on the left with Amorphis chosen, the covers of its albums, the tracks of Eclipse with the one playing in amber, the player bar on top and the playlist on the right](images/screenshot.png)
+![MetalAMP: the artists on the left with Amorphis chosen, the covers of its albums, the tracks of Eclipse with the one playing in blue, the player bar on top and the playlist on the right](images/screenshot.png)
 
 *Screenshot of version 0.1.0.*
 
@@ -57,7 +57,7 @@ The panes:
 
 - **Artists**: the name, the number of albums and of tracks; **All** at the top shows the whole library.
 - **Albums**: covers with the title and the year (or the artist), or a table with the artist, title, year, number of tracks, genre, length and size; the bar's two buttons switch between them. A cover is the picture in the album's folder (`folder`, `cover`, `front`, `albumart`, JPEG or PNG), else the one in the first track's tag; thumbnails are kept in the `covers` folder.
-- **Tracks**: number, title, length, album, year, artist, genre and bit rate; the track playing is shown in amber.
+- **Tracks**: number, title, length, album, year, artist, genre and bit rate; the track playing is shown in blue.
 
 A click on a column's header sorts by that column, a second click reverses the order; a column's right edge is dragged to change its width, and the borders between the panes move. Columns that do not fit in a pane scroll sideways (the scroll bar, or `Shift` with the mouse wheel). The search field (`Ctrl+F`) narrows all three panes as it is typed: every word must be found in the track's artist, album artist, album, title, genre or year; `Esc` clears it. The status line shows the number, the total length and the size of the tracks shown, and how long the search took.
 
