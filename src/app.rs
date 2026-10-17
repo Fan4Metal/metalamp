@@ -81,6 +81,9 @@ impl App {
             // Ctrl+plus and Ctrl+minus are the app's, not egui's zoom.
             o.zoom_with_keyboard = false;
             o.input_options.max_double_click_delay = win::double_click_time();
+            // A wheel notch scrolls 100 points instead of egui's 40 (as
+            // qview and metalmd; Windows and Chromium scroll about that).
+            o.input_options.line_scroll_speed = 100.0;
         });
 
         let hwnd = crate::caption::hwnd(cc);
