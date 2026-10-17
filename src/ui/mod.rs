@@ -6,7 +6,9 @@
 
 pub mod about;
 pub mod icons;
+pub mod library;
 pub mod start;
+pub mod status;
 pub mod title;
 
 use egui::{Response, TextureHandle, TextureOptions, Ui};

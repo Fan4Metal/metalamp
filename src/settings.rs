@@ -37,6 +37,8 @@ pub struct Settings {
     /// Unix seconds of the last update check that got an answer.
     pub last_update_check: u64,
     pub window: Option<WindowPlace>,
+    /// The folders of the media library.
+    pub library_folders: Vec<PathBuf>,
 }
 
 impl Default for Settings {
@@ -46,6 +48,7 @@ impl Default for Settings {
             check_updates: false,
             last_update_check: 0,
             window: None,
+            library_folders: Vec::new(),
         }
     }
 }
@@ -103,7 +106,6 @@ pub fn location() -> &'static Location {
 
 /// The folder of the settings file, where the library index, the playlist
 /// and the covers are kept too.
-#[allow(dead_code)] // the library comes next
 pub fn data_dir() -> Option<PathBuf> {
     location()
         .file
@@ -203,6 +205,7 @@ mod tests {
                 normal: [10, 20, 1290, 820],
                 maximized: true,
             }),
+            library_folders: vec![PathBuf::from(r"D:\Music")],
         };
         let json = serde_json::to_string(&settings).unwrap();
         assert_eq!(serde_json::from_str::<Settings>(&json).unwrap(), settings);

@@ -9,9 +9,13 @@
 mod i18n;
 
 mod app;
+mod bench;
 mod caption;
+mod filetypes;
+mod format;
 mod frameless;
 mod icon;
+mod library;
 mod palette;
 mod settings;
 mod ui;
@@ -59,10 +63,17 @@ fn main() -> eframe::Result {
                 println!("{APP_NAME} {VERSION}");
                 return Ok(());
             }
+            Some("--bench") => {
+                win::attach_parent_console();
+                let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+                std::process::exit(bench::run(&rest));
+            }
             Some("-h" | "--help") => {
                 win::attach_parent_console();
                 println!("{APP_NAME} {VERSION}");
-                println!("metalamp [--version] [--help] [--export-icon FILE]");
+                println!(
+                    "metalamp [--version] [--help] [--export-icon FILE] [--bench scan FOLDER...]"
+                );
                 return Ok(());
             }
             _ => {}
@@ -70,6 +81,15 @@ fn main() -> eframe::Result {
     }
 
     let settings = settings::Settings::load();
+    // The index is read and the folders checked while eframe makes the
+    // window (~150 ms), so the first frame can show the library.
+    let wake = library::scan::Wake::default();
+    let scan = library::scan::Scan::start(
+        settings.library_folders.clone(),
+        None,
+        true,
+        std::sync::Arc::clone(&wake),
+    );
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(APP_NAME)
@@ -91,7 +111,7 @@ fn main() -> eframe::Result {
     eframe::run_native(
         APP_ID,
         options,
-        Box::new(|cc| Ok(Box::new(app::App::new(cc, settings)))),
+        Box::new(|cc| Ok(Box::new(app::App::new(cc, settings, scan, wake)))),
     )
 }
 
