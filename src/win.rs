@@ -190,3 +190,260 @@ fn winhttp_error() -> String {
         _ => format!("WinHTTP error {code}"),
     }
 }
+
+/// Set a DWM window attribute of 32-bit `value`; whether it was taken.
+fn dwm_set(hwnd: isize, attribute: u32, value: i32) -> bool {
+    // dwmapi is declared by hand, to spare another `windows-sys` feature.
+    #[link(name = "dwmapi")]
+    unsafe extern "system" {
+        fn DwmSetWindowAttribute(
+            hwnd: isize,
+            attribute: u32,
+            value: *const core::ffi::c_void,
+            size: u32,
+        ) -> i32;
+    }
+    unsafe { DwmSetWindowAttribute(hwnd, attribute, (&raw const value).cast(), 4) >= 0 }
+}
+
+/// Round the corners of the frameless window as Windows 11 does its own
+/// (`DWMWA_WINDOW_CORNER_PREFERENCE` = `DWMWCP_ROUND`); Windows 10 has no
+/// such attribute and keeps them square. Also the dark frame colours for
+/// the window's border on Windows 11.
+pub fn round_corners(hwnd: isize) {
+    const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
+    const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+    const DWMWCP_ROUND: i32 = 2;
+    dwm_set(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, 1);
+    dwm_set(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND);
+}
+
+/// Hide the window from the screen while it keeps working (`DWMWA_CLOAK`),
+/// or show it again.
+pub fn cloak(hwnd: isize, on: bool) {
+    const DWMWA_CLOAK: u32 = 13;
+    dwm_set(hwnd, DWMWA_CLOAK, i32::from(on));
+}
+
+/// The window's restored rectangle in pixels (left, top, right, bottom, in
+/// work-area coordinates), also while it is maximized, and whether it is
+/// maximized.
+pub fn placement(hwnd: isize) -> Option<([i32; 4], bool)> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowPlacement, SW_SHOWMAXIMIZED, WINDOWPLACEMENT,
+    };
+    let mut placement: WINDOWPLACEMENT = unsafe { std::mem::zeroed() };
+    placement.length = size_of::<WINDOWPLACEMENT>() as u32;
+    if unsafe { GetWindowPlacement(hwnd as _, &mut placement) } == 0 {
+        return None;
+    }
+    let r = placement.rcNormalPosition;
+    (r.right > r.left && r.bottom > r.top).then_some((
+        [r.left, r.top, r.right, r.bottom],
+        placement.showCmd == SW_SHOWMAXIMIZED as u32,
+    ))
+}
+
+/// Put the window, still hidden, at its restored rectangle `normal`
+/// (pixels, work-area coordinates; or `default` points centred where it
+/// is), maximized or not. Windows moves a rectangle that is on no monitor
+/// any more onto one. A hidden window stays hidden (eframe shows it after
+/// its first frame); a maximized one is shown maximized in one step, as
+/// winit shows a window created maximized before it is painted (a white
+/// flash) and maximizing after eframe shows it would take two steps: the
+/// caller cloaks it until its first maximized frame (qview's way).
+pub fn place(hwnd: isize, normal: Option<[i32; 4]>, default: [f32; 2], maximized: bool) {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowPlacement, SW_HIDE, SW_SHOWMAXIMIZED, SetWindowPlacement, WINDOWPLACEMENT,
+    };
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetDpiForWindow(hwnd: isize) -> u32;
+    }
+    let mut placement: WINDOWPLACEMENT = unsafe { std::mem::zeroed() };
+    placement.length = size_of::<WINDOWPLACEMENT>() as u32;
+    unsafe { GetWindowPlacement(hwnd as _, &mut placement) };
+    let [left, top, right, bottom] = normal.unwrap_or_else(|| {
+        let r = placement.rcNormalPosition;
+        let scale = match unsafe { GetDpiForWindow(hwnd) } {
+            0 => 1.0,
+            dpi => dpi as f32 / 96.0,
+        };
+        let (w, h) = ((default[0] * scale) as i32, (default[1] * scale) as i32);
+        let (x, y) = ((r.left + r.right - w) / 2, (r.top + r.bottom - h) / 2);
+        [x, y, x + w, y + h]
+    });
+    placement.rcNormalPosition = RECT {
+        left,
+        top,
+        right,
+        bottom,
+    };
+    placement.showCmd = if maximized { SW_SHOWMAXIMIZED } else { SW_HIDE } as u32;
+    placement.flags = 0;
+    unsafe { SetWindowPlacement(hwnd as _, &placement) };
+}
+
+/// The double-click time of Windows in seconds (egui assumes 0.3).
+pub fn double_click_time() -> f64 {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetDoubleClickTime() -> u32;
+    }
+    unsafe { GetDoubleClickTime() as f64 / 1000.0 }
+}
+
+/// What the window's messages asked for, for the app to take each frame
+/// ([`take_hooked`]).
+static HOOKED: std::sync::Mutex<Vec<Hooked>> = std::sync::Mutex::new(Vec::new());
+
+/// Wakes the app when something is hooked ([`hook_window`]).
+static WAKE: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> = std::sync::OnceLock::new();
+
+/// A key of a keyboard, a headset or a remote that egui does not see.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaKey {
+    PlayPause,
+    Play,
+    Pause,
+    Stop,
+    Next,
+    Previous,
+}
+
+/// What the window's messages asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hooked {
+    /// A media key (`WM_KEYDOWN` with a `VK_MEDIA_*` key, or
+    /// `WM_APPCOMMAND`). With the window in front one press may come both
+    /// ways: `WM_APPCOMMAND` first, then the key; `from_command` tells them
+    /// apart.
+    Media { key: MediaKey, from_command: bool },
+    /// Windows is ending the session (`WM_QUERYENDSESSION`): winit closes
+    /// nothing, so the settings are saved now.
+    EndSession,
+    /// The Restart Manager asks the app to close (`WM_QUERYENDSESSION`
+    /// with `ENDSESSION_CLOSEAPP`): an installer is to replace its files.
+    Close,
+    /// The computer is going to sleep (`WM_POWERBROADCAST` with
+    /// `PBT_APMSUSPEND`): saved now too, as it may not wake.
+    Suspend,
+}
+
+/// Subclass the window once: media keys (`WM_KEYDOWN` with a `VK_MEDIA_*`
+/// key, which egui drops, and `WM_APPCOMMAND`, which headsets and remotes
+/// send), the end of the session and sleep are queued for [`take_hooked`]
+/// and `wake` is called (metalmpv's `hook_window`, without its snapping,
+/// fullscreen and taskbar parts).
+pub fn hook_window(hwnd: isize, wake: impl Fn() + Send + Sync + 'static) {
+    use std::sync::Once;
+    use windows_sys::Win32::UI::Shell::SetWindowSubclass;
+    static SUBCLASSED: Once = Once::new();
+    SUBCLASSED.call_once(|| {
+        let _ = WAKE.set(Box::new(wake));
+        unsafe { SetWindowSubclass(hwnd as _, Some(window_proc), 1, 0) };
+    });
+}
+
+/// What the window's messages asked for since the last call.
+pub fn take_hooked() -> Vec<Hooked> {
+    HOOKED
+        .lock()
+        .map(|mut q| std::mem::take(&mut *q))
+        .unwrap_or_default()
+}
+
+fn hook(what: Hooked) {
+    if let Ok(mut q) = HOOKED.lock() {
+        q.push(what);
+    }
+    if let Some(wake) = WAKE.get() {
+        wake();
+    }
+}
+
+/// The media key of a virtual key code.
+fn media_vk(vk: u32) -> Option<MediaKey> {
+    match vk {
+        0xB0 => Some(MediaKey::Next),      // VK_MEDIA_NEXT_TRACK
+        0xB1 => Some(MediaKey::Previous),  // VK_MEDIA_PREV_TRACK
+        0xB2 => Some(MediaKey::Stop),      // VK_MEDIA_STOP
+        0xB3 => Some(MediaKey::PlayPause), // VK_MEDIA_PLAY_PAUSE
+        _ => None,
+    }
+}
+
+/// The media key of a `WM_APPCOMMAND` command.
+fn media_command(command: u32) -> Option<MediaKey> {
+    match command {
+        11 => Some(MediaKey::Next),      // APPCOMMAND_MEDIA_NEXTTRACK
+        12 => Some(MediaKey::Previous),  // APPCOMMAND_MEDIA_PREVIOUSTRACK
+        13 => Some(MediaKey::Stop),      // APPCOMMAND_MEDIA_STOP
+        14 => Some(MediaKey::PlayPause), // APPCOMMAND_MEDIA_PLAY_PAUSE
+        46 => Some(MediaKey::Play),      // APPCOMMAND_MEDIA_PLAY
+        47 => Some(MediaKey::Pause),     // APPCOMMAND_MEDIA_PAUSE
+        _ => None,
+    }
+}
+
+unsafe extern "system" fn window_proc(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+    msg: u32,
+    wparam: windows_sys::Win32::Foundation::WPARAM,
+    lparam: windows_sys::Win32::Foundation::LPARAM,
+    _id: usize,
+    _data: usize,
+) -> windows_sys::Win32::Foundation::LRESULT {
+    use windows_sys::Win32::UI::Shell::DefSubclassProc;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        ENDSESSION_CLOSEAPP, PBT_APMSUSPEND, WM_APPCOMMAND, WM_KEYDOWN, WM_POWERBROADCAST,
+        WM_QUERYENDSESSION,
+    };
+    match msg {
+        // Answered as DefWindowProc does (yes); the app saves before the
+        // process is ended. The Restart Manager (an installer replacing
+        // the exe) asks the app to close and waits for it.
+        WM_QUERYENDSESSION if lparam as u32 & ENDSESSION_CLOSEAPP != 0 => hook(Hooked::Close),
+        WM_QUERYENDSESSION => hook(Hooked::EndSession),
+        WM_POWERBROADCAST if wparam == PBT_APMSUSPEND as usize => hook(Hooked::Suspend),
+        WM_KEYDOWN => {
+            if let Some(key) = media_vk(wparam as u32) {
+                // Held keys repeat; one press is one command.
+                if lparam & (1 << 30) == 0 {
+                    hook(Hooked::Media {
+                        key,
+                        from_command: false,
+                    });
+                }
+                return 0;
+            }
+        }
+        WM_APPCOMMAND => {
+            // GET_APPCOMMAND_LPARAM: the high word without the device bits.
+            let command = ((lparam as u32) >> 16) & !0xF000;
+            if let Some(key) = media_command(command) {
+                hook(Hooked::Media {
+                    key,
+                    from_command: true,
+                });
+                return 1;
+            }
+        }
+        _ => {}
+    }
+    unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn media_keys() {
+        use super::{MediaKey, media_command, media_vk};
+        assert_eq!(media_vk(0xB3), Some(MediaKey::PlayPause));
+        assert_eq!(media_vk(0xB0), Some(MediaKey::Next));
+        assert_eq!(media_vk(0x41), None);
+        assert_eq!(media_command(46), Some(MediaKey::Play));
+        assert_eq!(media_command(8), None);
+    }
+}

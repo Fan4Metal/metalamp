@@ -1,31 +1,75 @@
-//! Settings kept between runs in eframe's storage
-//! (`%APPDATA%\MetalAMP\data\app.ron`, or [`PORTABLE_FILE`] next to the exe,
-//! see [`location`]). Window size and position and egui's own state (panel
-//! widths) are saved by eframe itself (`persist_window`).
-//!
-//! Plain strings through `eframe::Storage`: no serde derives needed, and an
-//! unknown or malformed value falls back to its default, so settings of an
-//! older or newer version never make the file unreadable.
-//!
-//! metalmd keeps structured settings as JSON instead (serde + `directories`,
-//! `%APPDATA%\MetalMD\config\settings.json`, `#[serde(default)]`, a `.tmp`
-//! + rename write): take that variant when the settings are nested.
-
-use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+//! User settings, stored as JSON (`%APPDATA%\MetalAMP\config\settings.json`,
+//! or [`PORTABLE_FILE`] next to the exe for a portable copy). Fields missing
+//! from the file (written by an earlier version) take their defaults, and
+//! unknown ones (a later version's) are ignored. The library index, the
+//! playlist and the cover cache live in the same folder ([`data_dir`]), in
+//! files of their own.
 
 use crate::i18n::LangChoice;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
-const THEME: &str = "theme";
-const LANGUAGE: &str = "language";
-const CHECK_UPDATES: &str = "check_updates";
-const LAST_UPDATE_CHECK: &str = "last_update_check";
+/// The number of the last save asked for, and of the last one written.
+static SAVES: AtomicU64 = AtomicU64::new(0);
+static WRITTEN: Mutex<u64> = Mutex::new(0);
+
+/// Where the window was: its restored rectangle in pixels as Windows keeps
+/// it (`GetWindowPlacement().rcNormalPosition`: left, top, right, bottom in
+/// work-area coordinates, also while maximized), and whether it was
+/// maximized.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowPlace {
+    pub normal: [i32; 4],
+    pub maximized: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Settings {
+    /// Interface language, chosen in About.
+    #[serde(with = "lang_name")]
+    pub language: LangChoice,
+    /// Check for a newer release at start-up, at most once a day; off
+    /// until turned on in About.
+    pub check_updates: bool,
+    /// Unix seconds of the last update check that got an answer.
+    pub last_update_check: u64,
+    pub window: Option<WindowPlace>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            language: LangChoice::System,
+            check_updates: false,
+            last_update_check: 0,
+            window: None,
+        }
+    }
+}
+
+/// The language as its name in the settings (`system`, `en`, `ru`); an
+/// unknown name reads as `system`.
+mod lang_name {
+    use crate::i18n::LangChoice;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(lang: &LangChoice, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(lang.name())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<LangChoice, D::Error> {
+        let name = String::deserialize(d).unwrap_or_default();
+        Ok(LangChoice::from_name(&name))
+    }
+}
 
 /// Settings file that makes a copy portable: when it lies next to the exe
 /// (even empty) and can be written, the settings are kept in it instead of
-/// the user profile. The portable zip ships an empty one
-/// (`PORTABLE_SETTINGS` in tools/make_release.py).
-pub const PORTABLE_FILE: &str = "app.ron";
+/// the user profile. The portable zip ships an empty one.
+pub const PORTABLE_FILE: &str = "metalamp.json";
 
 /// Where the settings of this run are kept.
 #[derive(Debug)]
@@ -34,17 +78,6 @@ pub struct Location {
     pub file: Option<PathBuf>,
     /// `file` is [`PORTABLE_FILE`] next to the exe.
     pub portable: bool,
-}
-
-impl Location {
-    /// Whether settings of an earlier run are there (a portable file starts
-    /// empty). `NativeOptions::centered` is set only when there are none:
-    /// eframe would otherwise re-centre a restored window.
-    pub fn has_saved(&self) -> bool {
-        self.file
-            .as_ref()
-            .is_some_and(|f| f.metadata().is_ok_and(|m| m.len() > 0))
-    }
 }
 
 /// Where the settings are kept, decided once per run.
@@ -60,11 +93,22 @@ pub fn location() -> &'static Location {
                 portable: true,
             },
             None => Location {
-                file: eframe::storage_dir(crate::APP_ID).map(|d| d.join("app.ron")),
+                file: directories::ProjectDirs::from("", "", crate::APP_ID)
+                    .map(|dirs| dirs.config_dir().join("settings.json")),
                 portable: false,
             },
         }
     })
+}
+
+/// The folder of the settings file, where the library index, the playlist
+/// and the covers are kept too.
+#[allow(dead_code)] // the library comes next
+pub fn data_dir() -> Option<PathBuf> {
+    location()
+        .file
+        .as_ref()
+        .and_then(|f| f.parent().map(Path::to_path_buf))
 }
 
 /// [`PORTABLE_FILE`] in `dir` if it is there and can be written; a copy on
@@ -80,117 +124,60 @@ fn portable_file_in(dir: &Path) -> Option<PathBuf> {
         .map(|_| file)
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct Settings {
-    /// Light, dark or as in Windows.
-    pub theme: egui::ThemePreference,
-    /// Interface language, or the one of Windows.
-    pub language: LangChoice,
-    /// Ask GitHub for a newer release at start-up (off unless enabled).
-    pub check_updates: bool,
-    /// Unix seconds of the last update check that got an answer.
-    pub last_update_check: u64,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            theme: egui::ThemePreference::System,
-            language: LangChoice::System,
-            check_updates: false,
-            last_update_check: 0,
-        }
-    }
-}
-
 impl Settings {
-    /// Read settings; missing or unknown values keep their defaults.
-    pub fn load(storage: &dyn eframe::Storage) -> Self {
-        let d = Self::default();
-        let get = |key| storage.get_string(key);
-        Self {
-            theme: match get(THEME).as_deref() {
-                Some("system") => egui::ThemePreference::System,
-                Some("light") => egui::ThemePreference::Light,
-                Some("dark") => egui::ThemePreference::Dark,
-                _ => d.theme,
-            },
-            language: get(LANGUAGE)
-                .as_deref()
-                .map_or(d.language, LangChoice::from_name),
-            check_updates: match get(CHECK_UPDATES).as_deref() {
-                Some("true") => true,
-                Some("false") => false,
-                _ => d.check_updates,
-            },
-            last_update_check: get(LAST_UPDATE_CHECK)
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(d.last_update_check),
-        }
+    /// Reads the settings file; missing, empty or malformed files give
+    /// defaults.
+    pub fn load() -> Settings {
+        location()
+            .file
+            .as_ref()
+            .and_then(|path| std::fs::read(path).ok())
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
     }
 
-    pub fn save(&self, storage: &mut dyn eframe::Storage) {
-        let theme = match self.theme {
-            egui::ThemePreference::System => "system",
-            egui::ThemePreference::Light => "light",
-            egui::ThemePreference::Dark => "dark",
+    pub fn save(&self) {
+        self.save_numbered(SAVES.fetch_add(1, Ordering::SeqCst) + 1);
+    }
+
+    /// Saves a copy on a background thread. Saves are numbered when asked
+    /// for, so one asked for later, here or in [`Settings::save`], wins even
+    /// if this one finishes after it.
+    pub fn save_in_background(&self) {
+        let number = SAVES.fetch_add(1, Ordering::SeqCst) + 1;
+        let settings = self.clone();
+        std::thread::spawn(move || settings.save_numbered(number));
+    }
+
+    /// Writes the file unless a later save was written already. One writer
+    /// at a time: they share the temporary file.
+    fn save_numbered(&self, number: u64) {
+        let Some(path) = &location().file else {
+            return;
         };
-        storage.set_string(THEME, theme.into());
-        storage.set_string(LANGUAGE, self.language.name().into());
-        storage.set_string(CHECK_UPDATES, self.check_updates.to_string());
-        storage.set_string(LAST_UPDATE_CHECK, self.last_update_check.to_string());
+        let mut written = WRITTEN.lock().unwrap_or_else(|e| e.into_inner());
+        if *written > number {
+            return;
+        }
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Ok(bytes) = serde_json::to_vec_pretty(self) {
+            let tmp = path.with_extension("json.tmp");
+            if std::fs::write(&tmp, bytes).is_ok() && std::fs::rename(&tmp, path).is_ok() {
+                *written = number;
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eframe::Storage;
-    use std::collections::HashMap;
-
-    #[derive(Default)]
-    struct MemStorage(HashMap<String, String>);
-
-    impl Storage for MemStorage {
-        fn get_string(&self, key: &str) -> Option<String> {
-            self.0.get(key).cloned()
-        }
-        fn set_string(&mut self, key: &str, value: String) {
-            self.0.insert(key.into(), value);
-        }
-        fn remove_string(&mut self, key: &str) {
-            self.0.remove(key);
-        }
-        fn flush(&mut self) {}
-    }
-
-    #[test]
-    fn round_trip() {
-        let s = Settings {
-            theme: egui::ThemePreference::Dark,
-            language: LangChoice::Ru,
-            check_updates: true,
-            last_update_check: 1_790_000_000,
-        };
-        let mut storage = MemStorage::default();
-        s.save(&mut storage);
-        assert_eq!(Settings::load(&storage), s);
-    }
-
-    #[test]
-    fn missing_or_unknown_values_use_defaults() {
-        assert_eq!(Settings::load(&MemStorage::default()), Settings::default());
-        let mut storage = MemStorage::default();
-        storage.set_string(THEME, "bogus".into());
-        storage.set_string(LANGUAGE, "de".into());
-        storage.set_string(CHECK_UPDATES, "yes".into());
-        storage.set_string(LAST_UPDATE_CHECK, "soon".into());
-        assert_eq!(Settings::load(&storage), Settings::default());
-    }
 
     #[test]
     fn portable_file_only_when_present_and_writable() {
-        let dir = std::env::temp_dir().join(format!("portable_test_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("metalamp_portable_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join(PORTABLE_FILE);
         assert_eq!(portable_file_in(&dir), None);
@@ -204,5 +191,32 @@ mod tests {
         perm.set_readonly(false);
         std::fs::set_permissions(&file, perm).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn round_trip_and_unknown_fields() {
+        let settings = Settings {
+            language: LangChoice::Ru,
+            check_updates: true,
+            last_update_check: 42,
+            window: Some(WindowPlace {
+                normal: [10, 20, 1290, 820],
+                maximized: true,
+            }),
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        assert_eq!(serde_json::from_str::<Settings>(&json).unwrap(), settings);
+        let partial: Settings = serde_json::from_str(r#"{"language":"en","future":1}"#).unwrap();
+        assert_eq!(partial.language, LangChoice::En);
+        assert!(!partial.check_updates);
+        assert_eq!(partial.window, None);
+    }
+
+    #[test]
+    fn unknown_language_reads_as_system() {
+        let s: Settings = serde_json::from_str(r#"{"language":"de"}"#).unwrap();
+        assert_eq!(s.language, LangChoice::System);
+        let s: Settings = serde_json::from_str(r#"{"language":5}"#).unwrap_or_default();
+        assert_eq!(s.language, LangChoice::System);
     }
 }

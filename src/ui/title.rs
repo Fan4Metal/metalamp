@@ -1,0 +1,144 @@
+//! The title row of the frameless window (metalmpv's `ui/title.rs`): the
+//! icon and the title on the left, About and a newer release's button,
+//! then minimise, maximise and close on the right. Its free area drags the
+//! window; a double click maximises it or brings it back.
+
+use egui::{Align2, FontId, Rect, Sense, TextureHandle, Ui, pos2, vec2};
+
+use super::icons::{self, Icon};
+use crate::palette;
+
+/// The width of the window's own buttons, as Windows draws them.
+const BUTTON: f32 = 46.0;
+/// The row's height.
+pub const HEIGHT: f32 = 30.0;
+
+/// What a click in the title row asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TitleCmd {
+    Minimize,
+    ToggleMaximize,
+    Close,
+    About,
+}
+
+/// `update` is the tag of a newer release, shown as a button left of
+/// About.
+pub fn row(
+    ui: &mut Ui,
+    title: &str,
+    maximized: bool,
+    icon: &TextureHandle,
+    update: Option<&str>,
+) -> Option<TitleCmd> {
+    let rect = ui.max_rect();
+    ui.painter().rect_filled(rect, 0.0, palette::TITLE_BG);
+    // First, under the buttons: what they leave drags the window.
+    let drag = crate::frameless::drag_area(ui, rect, ui.id().with("title_drag"), Sense::CLICK);
+    let mut cmd = None;
+    if super::double_clicked(&drag) {
+        cmd = Some(TitleCmd::ToggleMaximize);
+    }
+    let icon_rect =
+        Rect::from_center_size(pos2(rect.left() + 18.0, rect.center().y), vec2(18.0, 18.0));
+    ui.painter().image(
+        icon.id(),
+        icon_rect,
+        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+        egui::Color32::WHITE,
+    );
+
+    let buttons = [
+        (TitleCmd::Close, Icon::Close, tr!("Close", "Закрыть")),
+        (
+            TitleCmd::ToggleMaximize,
+            if maximized {
+                Icon::Restore
+            } else {
+                Icon::Maximize
+            },
+            if maximized {
+                tr!("Restore down", "Свернуть в окно")
+            } else {
+                tr!("Maximize", "Развернуть")
+            },
+        ),
+        (
+            TitleCmd::Minimize,
+            Icon::Minimize,
+            tr!("Minimize", "Свернуть"),
+        ),
+    ];
+    let mut right = rect.right();
+    for (kind, icon, tip) in buttons {
+        let r = Rect::from_min_max(pos2(right - BUTTON, rect.top()), pos2(right, rect.bottom()));
+        right = r.left();
+        let response = ui.interact(r, ui.id().with(("title_button", tip)), Sense::CLICK);
+        let hovered = response.hovered();
+        if hovered {
+            let fill = if kind == TitleCmd::Close {
+                palette::CLOSE_HOVER
+            } else {
+                palette::HOVER
+            };
+            ui.painter().rect_filled(r, 0.0, fill);
+        }
+        let color = if hovered {
+            palette::TEXT_BRIGHT
+        } else {
+            palette::TEXT
+        };
+        icons::paint(
+            ui.painter(),
+            icon,
+            r.center(),
+            12.0,
+            color,
+            palette::TITLE_BG,
+        );
+        if response.on_hover_text(tip).clicked() {
+            cmd = Some(kind);
+        }
+    }
+
+    // About and the update button, right to left before the window's own.
+    let r = Rect::from_min_max(
+        pos2(right - 200.0, rect.top()),
+        pos2(right - 6.0, rect.bottom()),
+    );
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(r)
+            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+    );
+    if super::about_button(&mut child).clicked() {
+        cmd = Some(TitleCmd::About);
+    }
+    if let Some(tag) = update
+        && super::update_button(&mut child, tag).clicked()
+    {
+        crate::win::shell_open(crate::update::release_url(tag));
+    }
+    right = child.min_rect().left() - 8.0;
+
+    // The title, left after the icon and cut to the room before the
+    // buttons.
+    let left = rect.left() + 34.0;
+    let room = right - left;
+    if room > 40.0 {
+        let galley = ui.fonts_mut(|f| {
+            let mut job = egui::text::LayoutJob::simple_singleline(
+                title.to_owned(),
+                FontId::proportional(12.5),
+                palette::TEXT,
+            );
+            job.wrap = egui::text::TextWrapping::truncate_at_width(room);
+            f.layout_job(job)
+        });
+        let pos = Align2::LEFT_CENTER
+            .anchor_size(pos2(left, rect.center().y), galley.size())
+            .min;
+        ui.painter().galley(pos, galley, palette::TEXT);
+    }
+    cmd
+}

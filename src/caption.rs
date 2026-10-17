@@ -1,10 +1,10 @@
-//! The window caption in the app's theme. egui passes the theme to the
-//! window at the end of a frame, and Windows 10 shows a changed caption
-//! colour only at the next repaint of the frame (a resize, a change of
-//! focus). So the caption is set while the window is still hidden
-//! (`App::new`), and repainted after each change of theme
-//! (`App::follow_theme`). Shared by metalmd (`caption.rs`), qview
-//! (`win::dark_caption`) and disk_flashlight (`scan::win::refresh_caption`).
+//! The window's dark frame. The window is frameless with an always dark
+//! title row of the app's own, so the frame's colour is set once, while
+//! the window is still hidden (`App::new`): set after egui's first frame,
+//! Windows 10 would keep the border of the Windows theme. The family's
+//! `refresh` (repainting the caption after a theme change) and
+//! `thread_windows` (child viewports) are left out: the theme never
+//! changes and there are no child viewports.
 
 /// The window's handle, if it is a Win32 window. `eframe::CreationContext`
 /// and `eframe::Frame` both implement `HasWindowHandle`.
@@ -42,68 +42,5 @@ pub fn set_dark(hwnd: isize, dark: bool) {
     }
 }
 
-/// Repaint the caption and frame of window `hwnd` after their colours
-/// changed: flipping the caption to the other activation state and back
-/// forces the repaint without changing the focus. Not at start-up: there it
-/// visibly flickers (qview, always dark, sets the caption once and never
-/// refreshes it).
-#[cfg(windows)]
-pub fn refresh(hwnd: isize) {
-    #[link(name = "user32")]
-    unsafe extern "system" {
-        fn SendMessageW(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> isize;
-        fn GetActiveWindow() -> isize;
-    }
-    const WM_NCACTIVATE: u32 = 0x0086;
-    unsafe {
-        let active = GetActiveWindow() == hwnd;
-        SendMessageW(hwnd, WM_NCACTIVATE, usize::from(!active), 0);
-        SendMessageW(hwnd, WM_NCACTIVATE, usize::from(active), 0);
-    }
-}
-
-/// The visible top-level windows of this thread, for the windows egui
-/// makes for child viewports: eframe gives no handle for those. winit's
-/// hidden message window is left out.
-#[cfg(windows)]
-#[allow(dead_code)]
-pub fn thread_windows() -> Vec<isize> {
-    #[link(name = "user32")]
-    unsafe extern "system" {
-        fn EnumThreadWindows(
-            thread: u32,
-            callback: unsafe extern "system" fn(isize, isize) -> i32,
-            lparam: isize,
-        ) -> i32;
-        fn IsWindowVisible(hwnd: isize) -> i32;
-    }
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn GetCurrentThreadId() -> u32;
-    }
-    unsafe extern "system" fn collect(hwnd: isize, lparam: isize) -> i32 {
-        // SAFETY: `lparam` is the pointer to `out` passed below, and the
-        // callback runs only during the call.
-        let out = unsafe { &mut *(lparam as *mut Vec<isize>) };
-        if unsafe { IsWindowVisible(hwnd) } != 0 {
-            out.push(hwnd);
-        }
-        1
-    }
-    let mut out: Vec<isize> = Vec::new();
-    unsafe {
-        EnumThreadWindows(GetCurrentThreadId(), collect, (&raw mut out) as isize);
-    }
-    out
-}
-
 #[cfg(not(windows))]
 pub fn set_dark(_hwnd: isize, _dark: bool) {}
-
-#[cfg(not(windows))]
-pub fn thread_windows() -> Vec<isize> {
-    Vec::new()
-}
-
-#[cfg(not(windows))]
-pub fn refresh(_hwnd: isize) {}

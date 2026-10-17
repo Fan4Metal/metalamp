@@ -1,134 +1,209 @@
-//! The egui window: the eframe `App` with the pieces every app of the
-//! family has (theme switch, About, update check, dark caption, settings).
-//! The app's own state and panels go in here too, or in modules of their
-//! own with `impl App` blocks (`ui/toolbar.rs`, `ui/status.rs`, …).
+//! The egui window: the eframe `App`. The frameless window with its own
+//! title row (`ui/title.rs`), About, the update check and the settings;
+//! the library, the player and the playlist come in their own modules.
 
-use egui::{Key, Modifiers, ThemePreference};
+use std::time::{Duration, Instant};
 
-use crate::settings::Settings;
+use egui::{Key, Modifiers};
+
+use crate::settings::{Settings, WindowPlace};
 use crate::ui::about::AboutDialog;
+use crate::ui::title::{self, TitleCmd};
 use crate::update::Updates;
+use crate::{frameless, palette, win};
+
+/// How long the window stays cloaked at most while it is being maximized.
+const UNCLOAK_TIMEOUT: Duration = Duration::from_secs(1);
+/// How long the window must rest after a move or resize before its place
+/// is saved: not at every frame of a drag, and not only at exit, which a
+/// crash or a logoff may skip.
+const PLACE_SAVE_DELAY: Duration = Duration::from_secs(1);
 
 pub struct App {
-    theme: ThemePreference,
+    settings: Settings,
     about: AboutDialog,
     updates: Updates,
-    /// The window's handle, for the caption; `None` off Windows.
+    /// The window's handle; `None` off Windows.
     hwnd: Option<isize>,
-    /// The theme the caption was last painted in.
-    shown_theme: Option<egui::Theme>,
-    /// The caption must be repainted in the next frame (the theme changed).
-    refresh_caption: bool,
-    /// The app icon of the start screen, as a texture.
+    /// The window is cloaked until its first maximized frame (the time it
+    /// is shown anyway and the frame it was cloaked in).
+    cloak: Option<(Instant, u64)>,
+    /// When the window last moved or changed size, until its place is
+    /// saved.
+    place_changed: Option<Instant>,
+    /// The app icon of the start screen and of the title row.
     start_icon: Option<egui::TextureHandle>,
+    title_icon: Option<egui::TextureHandle>,
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let settings = cc.storage.map(Settings::load).unwrap_or_default();
+    pub fn new(cc: &eframe::CreationContext<'_>, settings: Settings) -> Self {
+        let ctx = &cc.egui_ctx;
         // Before any text is made.
         crate::i18n::set_lang(settings.language.resolve());
-        cc.egui_ctx.set_theme(settings.theme);
-        // The window is still hidden (eframe shows it after the first
-        // frame), so a caption set now is shown from the start; set after
-        // egui's first frame, Windows 10 would keep the caption of the
-        // Windows theme. Following Windows, winit has already done it.
+        palette::apply(ctx);
+        ctx.options_mut(|o| {
+            // Ctrl+plus and Ctrl+minus are the app's, not egui's zoom.
+            o.zoom_with_keyboard = false;
+            o.input_options.max_double_click_delay = win::double_click_time();
+        });
+
         let hwnd = crate::caption::hwnd(cc);
+        let mut cloak = None;
         if let Some(hwnd) = hwnd {
-            match settings.theme {
-                ThemePreference::Dark => crate::caption::set_dark(hwnd, true),
-                ThemePreference::Light => crate::caption::set_dark(hwnd, false),
-                ThemePreference::System => {}
+            // The window is still hidden (eframe shows it after the first
+            // frame): the dark border and the place are set before it is
+            // seen.
+            crate::caption::set_dark(hwnd, true);
+            win::round_corners(hwnd);
+            let maximized = settings.window.is_some_and(|w| w.maximized);
+            if maximized {
+                win::cloak(hwnd, true);
+                cloak = Some((Instant::now() + UNCLOAK_TIMEOUT, ctx.cumulative_frame_nr()));
             }
+            if let Some(place) = settings.window {
+                win::place(hwnd, Some(place.normal), crate::DEFAULT_SIZE, maximized);
+            }
+            let wake = ctx.clone();
+            win::hook_window(hwnd, move || wake.request_repaint());
         }
+
         let mut updates = Updates::new(settings.check_updates, settings.last_update_check);
-        updates.start_if_due(&cc.egui_ctx);
+        updates.start_if_due(ctx);
         let mut about = AboutDialog::default();
         about.lang = settings.language;
         Self {
-            theme: settings.theme,
+            settings,
             about,
             updates,
             hwnd,
-            shown_theme: None,
-            refresh_caption: false,
+            cloak,
+            place_changed: None,
             start_icon: None,
+            title_icon: None,
         }
     }
 
-    /// Bring the window caption in line with the theme. egui passes a new
-    /// theme to the window at the end of the frame it changed in, and
-    /// Windows applies it to the caption only on the next repaint of the
-    /// frame, so the frame after the change asks for one.
-    fn follow_theme(&mut self, ctx: &egui::Context) {
-        let theme = ctx.theme();
-        if std::mem::take(&mut self.refresh_caption)
-            && let Some(hwnd) = self.hwnd
-        {
-            crate::caption::set_dark(hwnd, theme == egui::Theme::Dark);
-            crate::caption::refresh(hwnd);
-        }
-        if self.shown_theme.is_some_and(|t| t != theme) {
-            self.refresh_caption = true;
+    /// Show the window once it is maximized (see `win::place`).
+    fn uncloak(&mut self, ctx: &egui::Context) {
+        let Some((until, frame)) = self.cloak else {
+            return;
+        };
+        let ready = ctx.cumulative_frame_nr() > frame && frameless::is_maximized(ctx);
+        if ready || Instant::now() >= until {
+            if let Some(hwnd) = self.hwnd {
+                win::cloak(hwnd, false);
+            }
+            self.cloak = None;
+        } else {
             ctx.request_repaint();
         }
-        self.shown_theme = Some(theme);
     }
 
-    fn toolbar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            // The app's own controls go first; these three sit at the
-            // right end of the toolbar.
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if let Some(tag) = self.updates.newer().map(str::to_owned)
-                    && crate::ui::update_button(ui, &tag).clicked()
-                {
-                    crate::win::shell_open(crate::update::release_url(&tag));
-                }
-                if crate::ui::about_button(ui).clicked() {
-                    self.about.toggle();
-                }
-                if crate::ui::theme_button(ui, self.theme).clicked() {
-                    self.theme = crate::ui::next_theme(self.theme);
-                    ui.ctx().set_theme(self.theme);
-                }
-            });
-        });
+    /// Keep the window's place in the settings, saved once it has rested.
+    fn remember_place(&mut self) {
+        let Some(hwnd) = self.hwnd else { return };
+        // Not while it is being shown maximized: the placement is not final.
+        if self.cloak.is_none()
+            && let Some((normal, maximized)) = win::placement(hwnd)
+        {
+            let place = WindowPlace { normal, maximized };
+            if self.settings.window != Some(place) {
+                self.settings.window = Some(place);
+                self.place_changed = Some(Instant::now());
+            }
+        }
+        if self
+            .place_changed
+            .is_some_and(|at| at.elapsed() >= PLACE_SAVE_DELAY)
+        {
+            self.place_changed = None;
+            self.sync_settings();
+            self.settings.save_in_background();
+        }
+    }
+
+    /// Copy what lives elsewhere (About, the update check) into the
+    /// settings.
+    fn sync_settings(&mut self) {
+        self.settings.language = self.about.lang;
+        self.settings.check_updates = self.updates.enabled;
+        self.settings.last_update_check = self.updates.last_check;
+    }
+
+    fn save_now(&mut self) {
+        self.remember_place();
+        self.sync_settings();
+        self.settings.save();
+    }
+
+    /// What the window's messages asked for: media keys, the end of the
+    /// session, sleep.
+    fn take_hooked(&mut self, ctx: &egui::Context) {
+        for hooked in win::take_hooked() {
+            match hooked {
+                win::Hooked::EndSession | win::Hooked::Suspend => self.save_now(),
+                win::Hooked::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                win::Hooked::Media { key, .. } => log::debug!("media key {key:?}"),
+            }
+        }
+    }
+
+    fn title_row(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let icon = crate::ui::app_icon(&ctx, 18.0, &mut self.title_icon);
+        let update = self.updates.newer().map(str::to_owned);
+        let maximized = frameless::is_maximized(&ctx);
+        match title::row(ui, crate::APP_NAME, maximized, &icon, update.as_deref()) {
+            Some(TitleCmd::Close) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Some(TitleCmd::Minimize) => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true))
+            }
+            Some(TitleCmd::ToggleMaximize) => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized))
+            }
+            Some(TitleCmd::About) => self.about.toggle(),
+            None => {}
+        }
     }
 }
 
 impl eframe::App for App {
+    /// Every frame, also while the window is minimised.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.updates.poll();
+        self.take_hooked(ctx);
+        self.remember_place();
+    }
+
     // egui 0.36: `ui` with the root `Ui`, not `update(ctx)`; panels are
     // `egui::Panel::top/left/right/bottom(id).show(ui, …)` and
     // `CentralPanel::default()` / `CentralPanel::no_frame()`.
     fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = root_ui.ctx().clone();
-        self.updates.poll();
-        self.follow_theme(&ctx);
+        self.uncloak(&ctx);
         // A modal takes the keys while it is open.
         if !self.about.open && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F1)) {
             self.about.toggle();
         }
-        egui::Panel::top("toolbar").show(root_ui, |ui| self.toolbar(ui));
+        if !frameless::is_maximized(&ctx) {
+            frameless::resize_edges(root_ui);
+        }
+        egui::Panel::top("title")
+            .exact_size(title::HEIGHT)
+            .frame(egui::Frame::NONE)
+            .show(root_ui, |ui| self.title_row(ui));
         egui::CentralPanel::default().show(root_ui, |ui| {
-            // While nothing is open; the app's own view takes its place.
             let hint = tr!(
-                "Open a file with Ctrl+O or drop it here",
-                "Откройте файл: Ctrl+O или перетащите его сюда"
+                "Add a music folder with Ctrl+Shift+O or drop it here",
+                "Добавьте папку с музыкой: Ctrl+Shift+O или перетащите её сюда"
             );
             crate::ui::start::show(ui, &mut self.start_icon, hint);
         });
         self.about.show(&ctx, &mut self.updates);
     }
 
-    /// Called by eframe every `auto_save_interval` and on exit.
-    fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        Settings {
-            theme: self.theme,
-            language: self.about.lang,
-            check_updates: self.updates.enabled,
-            last_update_check: self.updates.last_check,
-        }
-        .save(storage);
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.save_now();
     }
 }

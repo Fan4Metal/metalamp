@@ -10,7 +10,9 @@ mod i18n;
 
 mod app;
 mod caption;
+mod frameless;
 mod icon;
+mod palette;
 mod settings;
 mod ui;
 mod update;
@@ -28,6 +30,10 @@ pub const APP_ID: &str = "MetalAMP";
 /// Version from Cargo.toml, shown in About; a development version
 /// ("0.1.0-dev") carries the commit it was built from (`build.rs`).
 pub const VERSION: &str = env!("APP_VERSION");
+/// The window's size in points on the first run (and the restored size of
+/// a window first shown maximized).
+pub const DEFAULT_SIZE: [f32; 2] = [1280.0, 800.0];
+const MIN_SIZE: [f32; 2] = [900.0, 560.0];
 
 fn main() -> eframe::Result {
     env_logger::init();
@@ -63,30 +69,29 @@ fn main() -> eframe::Result {
         }
     }
 
-    let stored = settings::location();
+    let settings = settings::Settings::load();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(APP_NAME)
-            .with_inner_size([1000.0, 700.0])
-            .with_min_inner_size([480.0, 320.0])
+            // The title row is the app's own (`frameless`, `ui/title.rs`).
+            .with_decorations(false)
+            .with_resizable(true)
+            .with_drag_and_drop(true)
+            .with_inner_size(DEFAULT_SIZE)
+            .with_min_inner_size(MIN_SIZE)
             .with_icon(window_icon()),
+        // OpenGL starts fastest: a context in ~130 ms against ~240 ms for
+        // wgpu on DX12 (measured in metalmd).
         renderer: eframe::Renderer::Glow,
-        // Centre only on the first run; later runs restore the saved window.
-        centered: !stored.has_saved(),
-        // A portable copy keeps its settings next to the exe; otherwise
-        // eframe's own place in %APPDATA%. A file path, despite eframe's
-        // doc calling it a folder.
-        persistence_path: if stored.portable {
-            stored.file.clone()
-        } else {
-            None
-        },
+        // Centre only on the first run; later runs put the window where it
+        // was (`App::new`, `win::place`).
+        centered: settings.window.is_none(),
         ..Default::default()
     };
     eframe::run_native(
         APP_ID,
         options,
-        Box::new(|cc| Ok(Box::new(app::App::new(cc)))),
+        Box::new(|cc| Ok(Box::new(app::App::new(cc, settings)))),
     )
 }
 

@@ -1,13 +1,15 @@
-//! User interface pieces shared by the apps of this family: the app icon
-//! as a texture, the toolbar button with a painted icon (`icons`), the
-//! theme switch, the About and update buttons, the close cross of a
-//! dialog; the start screen (`start`).
+//! User interface pieces: the app icon as a texture, the toolbar button
+//! with a painted icon (`icons`), the About and update buttons, the close
+//! cross of a dialog; the start screen (`start`), the title row of the
+//! frameless window (`title`). The theme is always dark (`palette`), so the
+//! family's theme switch is left out.
 
 pub mod about;
 pub mod icons;
 pub mod start;
+pub mod title;
 
-use egui::{Response, TextureHandle, TextureOptions, ThemePreference, Ui};
+use egui::{Response, TextureHandle, TextureOptions, Ui};
 use icons::Icon;
 
 /// The app icon as a texture for `points` wide, from the smallest embedded
@@ -63,45 +65,6 @@ pub fn about_button(ui: &mut Ui) -> Response {
     icon_button(ui, Icon::Info, false, &tip)
 }
 
-/// The theme after `theme` in the switch's cycle: as in Windows, light, dark.
-pub fn next_theme(theme: ThemePreference) -> ThemePreference {
-    match theme {
-        ThemePreference::System => ThemePreference::Light,
-        ThemePreference::Light => ThemePreference::Dark,
-        ThemePreference::Dark => ThemePreference::System,
-    }
-}
-
-/// The theme switch: a half-filled circle while following Windows, a sun
-/// for the light theme, a moon for the dark one; a click moves on to the
-/// next of the three (`next_theme`).
-pub fn theme_button(ui: &mut Ui, theme: ThemePreference) -> Response {
-    let tip = match theme {
-        ThemePreference::System => {
-            tr!(
-                "Theme: as in Windows (click: light)",
-                "Тема: как в Windows (щелчок: светлая)"
-            )
-        }
-        ThemePreference::Light => tr!(
-            "Theme: light (click: dark)",
-            "Тема: светлая (щелчок: тёмная)"
-        ),
-        ThemePreference::Dark => {
-            tr!(
-                "Theme: dark (click: as in Windows)",
-                "Тема: тёмная (щелчок: как в Windows)"
-            )
-        }
-    };
-    let icon = match theme {
-        ThemePreference::System => Icon::ThemeSystem,
-        ThemePreference::Light => Icon::ThemeLight,
-        ThemePreference::Dark => Icon::ThemeDark,
-    };
-    icon_button(ui, icon, false, tip)
-}
-
 /// A newer release: its version with a download arrow in the link colour;
 /// a click opens its release page. Shown right of About (or at the
 /// toolbar's right end) only while `Updates::newer` is `Some`.
@@ -150,4 +113,10 @@ pub fn close_cross(ui: &mut Ui) -> bool {
         visuals.bg_fill,
     );
     response.on_hover_text(tr!("Close", "Закрыть")).clicked()
+}
+
+/// A double click, also when it is the start of a triple one (egui reports
+/// the third click as a triple click instead of a second double click).
+pub fn double_clicked(response: &Response) -> bool {
+    response.double_clicked() || response.triple_clicked()
 }

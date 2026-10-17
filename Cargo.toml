@@ -18,14 +18,20 @@ repository = "https://github.com/Fan4Metal/metalamp"
 # glow, not the default wgpu: a smaller binary and a faster start (an OpenGL
 # context is created in ~130 ms against ~240 ms for wgpu on DX12). eframe's
 # default features are off: no accesskit, no wgpu and no `links` (URLs are
-# opened through win::shell_open instead of ui.hyperlink_to).
-eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "persistence"] }
+# opened through win::shell_open instead of ui.hyperlink_to). No
+# `persistence` either: the settings, the window's place among them, are
+# the app's own JSON (settings.rs).
+eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts"] }
 egui = "0.36"
 # File and folder dialogs without default features: only windows-sys,
 # raw-window-handle and log are pulled in.
 rfd = { version = "0.17.2", default-features = false }
 raw-window-handle = "0.6"
 log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The settings folder in %APPDATA%.
+directories = "6"
 env_logger = "0.11"
 
 [target.'cfg(windows)'.dependencies]
