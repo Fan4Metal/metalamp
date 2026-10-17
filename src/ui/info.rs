@@ -173,10 +173,17 @@ impl InfoView {
                         close |= hero(ui, Some(d), &wanted, cover.as_ref());
                         // A long tag (lyrics, many fields) scrolls within
                         // the screen instead of pushing the window off it.
-                        let room = ctx.content_rect().height() - 2.0 * 20.0 - COVER - 60.0;
+                        // The height is forced (`min_scrolled_height`), not
+                        // left to the room below: a centred modal is placed
+                        // by its size of the frame before, so an area that
+                        // only took the room left froze at the height the
+                        // window had while the file was read.
+                        let room = (ctx.content_rect().height() - 2.0 * 20.0 - COVER - 60.0)
+                            .max(120.0);
                         egui::ScrollArea::vertical()
                             .id_salt("file_info_body")
-                            .max_height(room.max(120.0))
+                            .min_scrolled_height(room)
+                            .max_height(room)
                             .auto_shrink([false, true])
                             .show(ui, |ui| {
                                 // Room for the scroll bar at the right edge
