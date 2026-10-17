@@ -442,8 +442,9 @@ pub fn show(
         }
     }
 
-    // The total.
-    let footer = Rect::from_min_max(pos2(full.left(), body.bottom()), full.max);
+    // The total, in the last FOOTER points (the cover may sit between
+    // the list and it).
+    let footer = Rect::from_min_max(pos2(full.left(), full.bottom() - FOOTER), full.max);
     let total: u64 = lines.iter().filter_map(|l| l.1).map(u64::from).sum();
     let text = format!(
         "{} [{}]",
