@@ -58,7 +58,7 @@ pub struct App {
     playlist_view: crate::ui::playlist::PlaylistView,
     /// The playlist's revision and current entry last saved.
     saved_playlist: (u64, Option<usize>),
-    /// The file info window (Alt+3), and a file to open it for at the
+    /// The file info window (I, Alt+3), and a file to open it for at the
     /// end of the frame.
     file_info: crate::ui::info::InfoView,
     info_request: Option<PathBuf>,
@@ -308,7 +308,7 @@ impl App {
         }
     }
 
-    /// The file Alt+3 shows: the one selected last, in the playlist when
+    /// The file I or Alt+3 shows: the one selected last, in the playlist when
     /// it was clicked last, else in the library's tracks; else the one
     /// playing (or the playlist's current one).
     fn info_path(&self) -> Option<PathBuf> {
@@ -742,7 +742,14 @@ impl eframe::App for App {
         self.uncloak(&ctx);
         // A modal takes the keys while it is open.
         let modal = self.about.open || self.file_info.open;
-        if !modal && ctx.input_mut(|i| i.consume_key(Modifiers::ALT, Key::Num3)) {
+        // The file info: Alt+3 as Winamp's, or I (not while typing).
+        let typing = ctx.memory(|m| m.focused().is_some());
+        if !modal
+            && ctx.input_mut(|i| {
+                i.consume_key(Modifiers::ALT, Key::Num3)
+                    || (!typing && i.consume_key(Modifiers::NONE, Key::I))
+            })
+        {
             self.info_request = self.info_path();
         }
         if !modal {

@@ -242,7 +242,7 @@ pub fn show(ui: &mut Ui, now: &NowPlaying<'_>) -> Vec<BarCmd> {
             .interact(cover, ui.id().with("cover"), Sense::click())
             .on_hover_cursor(egui::CursorIcon::PointingHand);
         if resp
-            .on_hover_text(tr!("File info (Alt+3)", "Сведения о файле (Alt+3)"))
+            .on_hover_text(tr!("File info (I)", "Сведения о файле (I)"))
             .clicked()
         {
             cmds.push(BarCmd::Info);

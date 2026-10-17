@@ -206,7 +206,7 @@ pub fn show(
             let resp = resp
                 .clone()
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(tr!("File info (Alt+3)", "Сведения о файле (Alt+3)"));
+                .on_hover_text(tr!("File info (I)", "Сведения о файле (I)"));
             if resp.clicked() {
                 actions.push(PlaylistAction::InfoPlaying);
             }
@@ -400,7 +400,7 @@ pub fn show(
             if ui
                 .add_enabled(
                     first.is_some(),
-                    egui::Button::new(tr!("File info… (Alt+3)", "Сведения о файле… (Alt+3)")),
+                    egui::Button::new(tr!("File info… (I)", "Сведения о файле… (I)")),
                 )
                 .clicked()
                 && let Some(i) = pv.selected_entry()

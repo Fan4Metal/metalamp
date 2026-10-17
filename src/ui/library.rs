@@ -1384,7 +1384,7 @@ fn context_menu(
             }
             if info
                 && ui
-                    .button(tr!("File info… (Alt+3)", "Сведения о файле… (Alt+3)"))
+                    .button(tr!("File info… (I)", "Сведения о файле… (I)"))
                     .clicked()
             {
                 choice = Some(MenuChoice::Info);

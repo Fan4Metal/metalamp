@@ -1,5 +1,5 @@
-//! The file info window, as Winamp's File Info (Alt+3): a click on the
-//! player bar's cover opens it for the track heard, Alt+3 or the context
+//! The file info window, as Winamp's File Info (I, Alt+3): a click on the
+//! player bar's cover opens it for the track heard, I, Alt+3 or the context
 //! menus of the tracks and the playlist for the track selected. The path
 //! cover, the title, the artist and the album on top with the audio
 //! properties as chips; the tag's fields in Winamp's order in two columns

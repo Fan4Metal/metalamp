@@ -28,7 +28,7 @@ MetalAMP is an audio player for Windows built around a media library in the mann
 - **Gapless playback**: the next track is opened before the current one ends, and MP3 files are cut to their music by their LAME tags (see [Playback](#playback)).
 - **Formats of Windows**: MP3, AAC (M4A), FLAC, WMA and WAV, decoded by Media Foundation; M3U and M3U8 playlists.
 - **A playlist** beside the library, kept between runs.
-- **File info** as Winamp's: every field of a track's tag, its cover and its audio properties, in a window opened by a click on the player's cover or `Alt+3` (see [File info](#file-info)).
+- **File info** as Winamp's: every field of a track's tag, its cover and its audio properties, in a window opened by a click on the player's cover or `I` (see [File info](#file-info)).
 - **One window**: files opened from Explorer go to the window already open.
 - **File associations** with an icon for each type, offered by the installer.
 - **English or Russian interface**: it follows the language of Windows and can be changed in the About window (`F1`).
@@ -65,7 +65,7 @@ A double click or `Enter` plays: an artist plays its tracks, an album its tracks
 
 ### File info
 
-A click on the cover in the player bar opens the file info window of the track playing, as Winamp's File Info; `Alt+3` and **File info…** in the context menus of the tracks and of the playlist open it for the track selected. The window shows the cover (from the tag, else the album's folder) with the title, the artist, the album, its year and genre, and the format, length, bit rate, sample rate, channels and size; then the tag's fields in Winamp's order (track and disc numbers, title, artist, album, year, genre, album artist, composer, publisher, original artist, copyright, URL, encoded by, BPM, track and album gain, comment), empty ones as a dash, the tag's other fields under them and the tags the file holds (for example `ID3v2.3 · ID3v1`); the lyrics in a section of their own; then the file's path, the encoder delay and padding of an MP3's LAME tag and the pictures in the tag with their sizes. The fields are shown, not edited; their text can be selected and copied. The cross, `Esc`, `Enter` or a click outside closes the window; **Show in folder** in the file section selects the file in Explorer.
+A click on the cover in the player bar opens the file info window of the track playing, as Winamp's File Info; `I` (or `Alt+3`, as in Winamp) and **File info…** in the context menus of the tracks and of the playlist open it for the track selected. The window shows the cover (from the tag, else the album's folder) with the title, the artist, the album, its year and genre, and the format, length, bit rate, sample rate, channels and size; then the tag's fields in Winamp's order (track and disc numbers, title, artist, album, year, genre, album artist, composer, publisher, original artist, copyright, URL, encoded by, BPM, track and album gain, comment), empty ones as a dash, the tag's other fields under them and the tags the file holds (for example `ID3v2.3 · ID3v1`); the lyrics in a section of their own; then the file's path, the encoder delay and padding of an MP3's LAME tag and the pictures in the tag with their sizes. The fields are shown, not edited; their text can be selected and copied. The cross, `Esc`, `Enter` or a click outside closes the window; **Show in folder** in the file section selects the file in Explorer.
 
 ### Playback
 
@@ -96,7 +96,7 @@ The playlist on the right (`Alt+E` shows or hides it) lists "Artist – Title" w
 | `Ctrl+Shift+O` | Add a music folder |
 | `F5` | Read the library's folders again |
 | `Alt+E` | Show or hide the playlist |
-| `Alt+3` | File info of the selected track (else of the one playing) |
+| `I`, `Alt+3` | File info of the selected track (else of the one playing) |
 | Arrows, `Page Up`, `Page Down`, `Home`, `End` | Move in the pane clicked last |
 | `Enter` | Play the selection |
 | `Delete` | Remove from the playlist |
