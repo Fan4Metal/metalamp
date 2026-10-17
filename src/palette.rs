@@ -36,6 +36,10 @@ pub const HOVER: Color32 = rgb(0x2c, 0x2f, 0x36);
 pub const PRESSED: Color32 = rgb(0x37, 0x3b, 0x43);
 /// The rest of the seek bar and of the volume slider.
 pub const TRACK: Color32 = rgb(0x3a, 0x3e, 0x46);
+/// A scroll bar's handle, under the pointer, dragged.
+pub const SCROLL_HANDLE: Color32 = rgb(0x4c, 0x50, 0x59);
+pub const SCROLL_HANDLE_HOVER: Color32 = rgb(0x66, 0x6b, 0x76);
+pub const SCROLL_HANDLE_DRAG: Color32 = rgb(0x80, 0x85, 0x90);
 /// The close button of the title row under the pointer.
 pub const CLOSE_HOVER: Color32 = rgb(0xc4, 0x2b, 0x1c);
 pub const ERROR: Color32 = rgb(0xff, 0x8a, 0x80);
@@ -67,8 +71,15 @@ pub fn apply(ctx: &egui::Context) {
         v.selection.stroke.color = TEXT_BRIGHT;
         v.hyperlink_color = ACCENT;
         s.spacing.item_spacing = egui::vec2(6.0, 4.0);
-        // Scroll bars always seen (egui's float in only under the pointer),
-        // thin until the pointer comes near.
-        s.spacing.scroll = egui::style::ScrollStyle::thin();
+        // Scroll bars always seen (egui's float in only under the pointer):
+        // 6 points wide, as much as is kept for them, 10 under the pointer.
+        s.spacing.scroll = egui::style::ScrollStyle {
+            floating_width: 6.0,
+            ..egui::style::ScrollStyle::thin()
+        };
+        // The handle's colours (egui's are hardly seen on the lists).
+        v.widgets.inactive.bg_fill = SCROLL_HANDLE;
+        v.widgets.hovered.bg_fill = SCROLL_HANDLE_HOVER;
+        v.widgets.active.bg_fill = SCROLL_HANDLE_DRAG;
     });
 }
