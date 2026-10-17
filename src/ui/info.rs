@@ -1,10 +1,11 @@
 //! The file info window, as Winamp's File Info (Alt+3): a click on the
 //! player bar's cover opens it for the track heard, Alt+3 or the context
 //! menus of the tracks and the playlist for the track selected. The path
-//! on top; the cover with the audio properties on the left; the tag's
-//! fields in Winamp's places on the right (shown read-only, empty ones
-//! too), the tag's other fields under them. The file is read on a thread
-//! of its own (`library::details`).
+//! cover, the title, the artist and the album on top with the audio
+//! properties as chips; the tag's fields in Winamp's order in two columns
+//! (empty ones as a dash), the tag's other fields under them; the file's
+//! path and the rest. Shown, not edited; the text can be selected and
+//! copied. The file is read on a thread of its own (`library::details`).
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -19,9 +20,9 @@ use crate::palette;
 
 type Read = (PathBuf, Result<Details, String>);
 
+const WIDTH: f32 = 720.0;
 /// The cover's side in the window, in points.
-const COVER: f32 = 220.0;
-const LABEL: f32 = 92.0;
+const COVER: f32 = 150.0;
 
 /// The fields of Winamp's ID3v2 page, left column, then right column; a
 /// field shown for the first of its keys the tag has.
@@ -137,55 +138,62 @@ impl InfoView {
             .filter(|(p, _)| *p == wanted)
             .map(|(_, t)| t.clone());
         let mut close = false;
-        let modal = egui::Modal::new(egui::Id::new("file_info")).show(ctx, |ui| {
-            ui.set_width(800.0);
-            ui.horizontal(|ui| {
-                ui.heading(tr!("File info", "Сведения о файле"));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    close |= super::close_cross(ui);
-                });
-            });
-            ui.add_space(4.0);
-            let path = wanted.display().to_string();
-            ui.add(field(egui::TextEdit::singleline(&mut path.as_str())).desired_width(f32::INFINITY));
-            ui.add_space(8.0);
-            match shown {
-                None => {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.weak(tr!("Reading…", "Чтение…"));
-                    });
+        let modal = egui::Modal::new(egui::Id::new("file_info"))
+            .frame(
+                egui::Frame::window(&ctx.style_of(egui::Theme::Dark))
+                    .fill(palette::PANEL_BG)
+                    .inner_margin(egui::Margin::same(20))
+                    .corner_radius(10.0),
+            )
+            .show(ctx, |ui| {
+                ui.set_width(WIDTH);
+                ui.spacing_mut().item_spacing = vec2(8.0, 4.0);
+                match shown {
+                    None => {
+                        close |= hero(ui, None, &wanted, None);
+                        ui.add_space(16.0);
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.weak(tr!("Reading…", "Чтение…"));
+                        });
+                    }
+                    Some(Err(e)) => {
+                        close |= hero(ui, None, &wanted, None);
+                        ui.add_space(16.0);
+                        ui.colored_label(
+                            palette::ERROR,
+                            tr!(
+                                format!("Cannot read the file: {e}"),
+                                format!("Не удалось прочитать файл: {e}")
+                            ),
+                        );
+                    }
+                    Some(Ok(d)) => {
+                        close |= hero(ui, Some(d), &wanted, cover.as_ref());
+                        body(ui, d);
+                    }
                 }
-                Some(Err(e)) => {
-                    ui.colored_label(
-                        palette::ERROR,
-                        tr!(
-                            format!("Cannot read the file: {e}"),
-                            format!("Не удалось прочитать файл: {e}")
-                        ),
-                    );
-                }
-                Some(Ok(d)) => body(ui, d, cover.as_ref()),
-            }
-            ui.add_space(8.0);
-            ui.separator();
-            ui.horizontal(|ui| {
-                if ui
-                    .button(tr!("Show in folder", "Показать в папке"))
-                    .clicked()
-                {
-                    crate::win::show_in_folder(&wanted);
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(16.0);
+                ui.horizontal(|ui| {
                     if ui
-                        .add(egui::Button::new(tr!("Close", "Закрыть")).min_size(vec2(90.0, 0.0)))
+                        .button(tr!("Show in folder", "Показать в папке"))
                         .clicked()
                     {
-                        close = true;
+                        crate::win::show_in_folder(&wanted);
                     }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add(
+                                egui::Button::new(tr!("Close", "Закрыть"))
+                                    .min_size(vec2(96.0, 28.0)),
+                            )
+                            .clicked()
+                        {
+                            close = true;
+                        }
+                    });
                 });
             });
-        });
         let keys = !fresh && ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Enter));
         if close || keys || (!fresh && modal.should_close()) {
             self.open = false;
@@ -193,132 +201,270 @@ impl InfoView {
     }
 }
 
-/// The cover and the properties on the left, the fields on the right.
-fn body(ui: &mut Ui, d: &Details, cover: Option<&TextureHandle>) {
+/// The top of the window: the cover, the title, the artist, the album
+/// with its year and genre, and the audio properties as chips; the cross
+/// in the corner (true when clicked). Without details (while the file is
+/// read, or when it cannot be), the file's name alone.
+fn hero(ui: &mut Ui, d: Option<&Details>, path: &Path, cover: Option<&TextureHandle>) -> bool {
+    let mut close = false;
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
     ui.horizontal_top(|ui| {
+        cover_box(ui, cover, COVER);
+        ui.add_space(8.0);
         ui.vertical(|ui| {
-            ui.set_width(COVER);
-            let (rect, _) = ui.allocate_exact_size(vec2(COVER, COVER), egui::Sense::hover());
-            match cover {
-                Some(t) => {
-                    let [w, h] = t.size();
-                    let scale = COVER / w.max(h) as f32;
-                    let r = egui::Rect::from_center_size(
-                        rect.center(),
-                        vec2(w as f32 * scale, h as f32 * scale),
-                    );
-                    ui.painter().image(
-                        t.id(),
-                        r,
-                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                        egui::Color32::WHITE,
-                    );
-                }
-                None => {
-                    ui.painter().rect_filled(rect, 4.0, palette::CARD_BG);
-                    ui.painter().text(
-                        rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        tr!("No cover", "Нет обложки"),
-                        egui::FontId::proportional(13.0),
-                        palette::TEXT_WEAK,
-                    );
-                }
-            }
-            ui.add_space(6.0);
-            for line in properties(d) {
-                ui.add(egui::Label::new(RichText::new(line).color(palette::TEXT_WEAK)).wrap());
-            }
-        });
-        ui.add_space(12.0);
-        ui.vertical(|ui| {
-            ui.horizontal_top(|ui| {
-                fields_grid(ui, "info_left", &LEFT, d, 230.0);
-                ui.add_space(8.0);
-                fields_grid(ui, "info_right", &RIGHT, d, 150.0);
+            let title = d
+                .map(|d| value(d, &[ItemKey::TrackTitle]))
+                .filter(|t| !t.is_empty())
+                .unwrap_or(&stem);
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    close = super::close_cross(ui);
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(title)
+                                    .size(22.0)
+                                    .strong()
+                                    .color(palette::TEXT_BRIGHT),
+                            )
+                            .truncate(),
+                        );
+                    });
+                });
             });
-            ui.add_space(4.0);
-            ui.horizontal_top(|ui| {
-                label(ui, &field_name(ItemKey::Comment));
-                let mut comment = value(d, &[ItemKey::Comment]);
+            let Some(d) = d else { return };
+            let artist = value(d, &[ItemKey::TrackArtist, ItemKey::AlbumArtist]);
+            if !artist.is_empty() {
                 ui.add(
-                    field(egui::TextEdit::multiline(&mut comment))
-                        .desired_rows(3)
-                        .desired_width(f32::INFINITY),
+                    egui::Label::new(RichText::new(artist).size(16.0).color(palette::TEXT))
+                        .truncate(),
                 );
+            }
+            let album: Vec<&str> = [
+                value(d, &[ItemKey::AlbumTitle]),
+                value(d, &[ItemKey::Year, ItemKey::RecordingDate]),
+                value(d, &[ItemKey::Genre]),
+            ]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect();
+            if !album.is_empty() {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(album.join("  ·  "))
+                            .size(13.5)
+                            .color(palette::TEXT_WEAK),
+                    )
+                    .truncate(),
+                );
+            }
+            ui.add_space(10.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+                for text in chips(d) {
+                    chip(ui, &text);
+                }
             });
+        });
+    });
+    close
+}
+
+/// The cover at `side` points with rounded corners, or a placeholder.
+fn cover_box(ui: &mut Ui, cover: Option<&TextureHandle>, side: f32) {
+    let (rect, _) = ui.allocate_exact_size(vec2(side, side), egui::Sense::hover());
+    let painter = ui.painter();
+    match cover {
+        Some(t) => {
+            let [w, h] = t.size();
+            let scale = side / w.max(h) as f32;
+            let r = egui::Rect::from_center_size(
+                rect.center(),
+                vec2(w as f32 * scale, h as f32 * scale),
+            );
+            painter.rect_filled(rect, 8.0, palette::LIST_BG);
+            egui::Image::new(egui::load::SizedTexture::new(t.id(), r.size()))
+                .corner_radius(8.0)
+                .paint_at(ui, r);
+        }
+        None => {
+            painter.rect_filled(rect, 8.0, palette::CARD_BG);
+            crate::ui::icons::paint(
+                painter,
+                crate::ui::icons::Icon::File,
+                rect.center(),
+                side * 0.3,
+                palette::TEXT_WEAK,
+                palette::CARD_BG,
+            );
+        }
+    }
+}
+
+/// A small rounded label with a fact (`320 kbps`).
+fn chip(ui: &mut Ui, text: &str) {
+    let galley = ui.painter().layout_no_wrap(
+        text.to_owned(),
+        egui::FontId::proportional(12.0),
+        palette::TEXT,
+    );
+    let size = galley.size() + vec2(18.0, 8.0);
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    ui.painter()
+        .rect_filled(rect, size.y / 2.0, palette::CARD_BG);
+    ui.painter()
+        .galley(rect.min + vec2(9.0, 4.0), galley, palette::TEXT);
+}
+
+/// The chips of the hero: the format, the length, the bit rate, the
+/// sample rate and depth, the channels, the size.
+fn chips(d: &Details) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(ext) = d.path.extension() {
+        out.push(ext.to_string_lossy().to_uppercase());
+    }
+    out.push(format::time(d.duration_ms));
+    if d.bitrate > 0 {
+        out.push(format::bitrate(d.bitrate));
+    }
+    if d.sample_rate > 0 {
+        let khz = d.sample_rate as f32 / 1000.0;
+        let khz = if khz.fract() == 0.0 {
+            format!("{khz:.0}")
+        } else {
+            format!("{khz:.1}")
+        };
+        out.push(tr!(
+            format!("{khz} kHz"),
+            format!("{} кГц", khz.replace('.', ","))
+        ));
+    }
+    if let Some(bits) = d.bit_depth {
+        out.push(tr!(format!("{bits} bit"), format!("{bits} бит")));
+    }
+    match d.channels {
+        0 => {}
+        1 => out.push(tr!("Mono", "Моно").to_owned()),
+        2 => out.push(tr!("Stereo", "Стерео").to_owned()),
+        n => out.push(tr!(format!("{n} channels"), format!("{n} кан."))),
+    }
+    out.push(format::size(d.size));
+    out
+}
+
+/// The sections under the hero: the tag's fields, then the file.
+fn body(ui: &mut Ui, d: &Details) {
+    ui.add_space(18.0);
+    section(ui, tr!("Tag", "Тег"), Some(&d.tags.join(" · ")));
+    ui.columns(2, |cols| {
+        fields_grid(&mut cols[0], "info_left", &LEFT, d);
+        fields_grid(&mut cols[1], "info_right", &RIGHT, d);
+    });
+    ui.add_space(4.0);
+    egui::Grid::new("info_comment")
+        .num_columns(2)
+        .spacing(vec2(12.0, 6.0))
+        .show(ui, |ui| {
+            field(ui, &field_name(ItemKey::Comment), value(d, &[ItemKey::Comment]), true);
+            ui.end_row();
             let shown: Vec<ItemKey> = LEFT
                 .iter()
                 .chain(RIGHT.iter())
                 .flat_map(|keys| keys.iter().copied())
                 .chain([ItemKey::Comment])
                 .collect();
-            let rest: Vec<&(ItemKey, String)> =
-                d.fields.iter().filter(|(k, _)| !shown.contains(k)).collect();
-            if !rest.is_empty() {
-                ui.add_space(8.0);
-                ui.weak(tr!("Other fields", "Другие поля"));
-                egui::ScrollArea::vertical()
-                    .id_salt("info_rest")
-                    .max_height(140.0)
-                    .show(ui, |ui| {
-                        egui::Grid::new("info_rest_grid")
-                            .num_columns(2)
-                            .spacing(vec2(8.0, 4.0))
-                            .show(ui, |ui| {
-                                for (key, text) in rest {
-                                    label(ui, &field_name(*key));
-                                    let mut text = text.as_str();
-                                    ui.add(
-                                        field(egui::TextEdit::singleline(&mut text))
-                                            .desired_width(f32::INFINITY),
-                                    );
-                                    ui.end_row();
-                                }
-                            });
-                    });
+            for (key, text) in d.fields.iter().filter(|(k, _)| !shown.contains(k)) {
+                field(ui, &field_name(*key), text, true);
+                ui.end_row();
             }
         });
-    });
-}
 
-/// A column of fields: a label and a read-only field each.
-fn fields_grid(ui: &mut Ui, id: &str, keys: &[&[ItemKey]], d: &Details, width: f32) {
-    egui::Grid::new(id)
+    ui.add_space(14.0);
+    section(ui, tr!("File", "Файл"), None);
+    egui::Grid::new("info_file")
         .num_columns(2)
-        .spacing(vec2(8.0, 4.0))
+        .spacing(vec2(12.0, 6.0))
         .show(ui, |ui| {
-            for keys in keys {
-                label(ui, &field_name(keys[0]));
-                let mut text = value(d, keys);
-                ui.add(field(egui::TextEdit::singleline(&mut text)).desired_width(width));
+            field(ui, tr!("Path", "Путь"), &d.path.display().to_string(), true);
+            ui.end_row();
+            if let Some((delay, padding)) = d.gapless {
+                field(
+                    ui,
+                    tr!("LAME tag", "Тег LAME"),
+                    &tr!(
+                        format!("encoder delay {delay}, padding {padding} samples"),
+                        format!("задержка кодировщика {delay}, добивка {padding} сэмплов")
+                    ),
+                    true,
+                );
+                ui.end_row();
+            }
+            for p in &d.pictures {
+                let mut text = p.format.clone();
+                if let Some((w, h)) = p.pixels {
+                    text += &format!(" {w}×{h}");
+                }
+                text += &format!(", {}", format::size(p.bytes as u64));
+                field(ui, &picture_name(p.kind), &text, true);
                 ui.end_row();
             }
         });
 }
 
-/// A read-only field in a box, as an editable one (egui draws read-only
-/// ones without, and an empty one would not be seen).
-fn field(edit: egui::TextEdit<'_>) -> egui::TextEdit<'_> {
-    edit.frame(
-        egui::Frame::new()
-            .fill(palette::LIST_BG)
-            .stroke(egui::Stroke::new(1.0, palette::LINE))
-            .corner_radius(3.0)
-            .inner_margin(egui::Margin::symmetric(5, 3)),
-    )
+/// A section's heading: small capitals, a note on the right, a line
+/// under them.
+fn section(ui: &mut Ui, title: &str, right: Option<&str>) {
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(title.to_uppercase())
+                .size(11.0)
+                .strong()
+                .color(palette::TEXT_WEAK),
+        );
+        if let Some(right) = right.filter(|r| !r.is_empty()) {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(RichText::new(right).size(11.0).color(palette::TEXT_WEAK));
+            });
+        }
+    });
+    let r = ui.available_rect_before_wrap();
+    ui.painter().hline(
+        r.left()..=r.right(),
+        r.top() + 2.0,
+        egui::Stroke::new(1.0, palette::LINE),
+    );
+    ui.add_space(10.0);
 }
 
-/// A field's label, right-aligned in its column as Winamp's.
-fn label(ui: &mut Ui, text: &str) {
-    ui.allocate_ui_with_layout(
-        vec2(LABEL, 20.0),
-        egui::Layout::right_to_left(egui::Align::Center),
-        |ui| {
-            ui.set_min_width(LABEL);
-            ui.add(egui::Label::new(RichText::new(text).color(palette::TEXT_WEAK)).truncate());
-        },
-    );
+/// A column of fields: a label and a value each, in a grid that sizes
+/// the labels' column to the widest.
+fn fields_grid(ui: &mut Ui, id: &str, keys: &[&[ItemKey]], d: &Details) {
+    egui::Grid::new(id)
+        .num_columns(2)
+        .spacing(vec2(12.0, 6.0))
+        .show(ui, |ui| {
+            for keys in keys {
+                field(ui, &field_name(keys[0]), value(d, keys), false);
+                ui.end_row();
+            }
+        });
+}
+
+/// A label in the weak colour and its value (a dash when empty), as two
+/// cells of a grid; `wrap`: a long value takes more lines, else it is cut.
+fn field(ui: &mut Ui, label: &str, text: &str, wrap: bool) {
+    // Not truncated: a grid sizes its columns by the frame before, so a
+    // truncated label would never get its room.
+    ui.add(egui::Label::new(RichText::new(label).color(palette::TEXT_WEAK)).extend());
+    if text.is_empty() {
+        ui.label(RichText::new("—").color(palette::LINE));
+    } else {
+        let label = egui::Label::new(RichText::new(text).color(palette::TEXT));
+        ui.add(if wrap { label.wrap() } else { label.truncate() });
+    }
 }
 
 /// The value of the first of `keys` the tag has, else empty.
@@ -327,64 +473,6 @@ fn value<'a>(d: &'a Details, keys: &[ItemKey]) -> &'a str {
         .find_map(|k| d.fields.iter().find(|(f, _)| f == k))
         .map(|(_, v)| v.as_str())
         .unwrap_or("")
-}
-
-/// The lines under the cover: the format and the audio properties, the
-/// size, the tags, the LAME tag, the pictures.
-fn properties(d: &Details) -> Vec<String> {
-    let ext = d
-        .path
-        .extension()
-        .map(|e| e.to_string_lossy().to_uppercase())
-        .unwrap_or_default();
-    let mut lines = vec![format!("{ext} · {}", format::time(d.duration_ms))];
-    let mut audio = Vec::new();
-    if d.bitrate > 0 {
-        audio.push(format::bitrate(d.bitrate));
-    }
-    if d.sample_rate > 0 {
-        audio.push(tr!(
-            format!("{} Hz", d.sample_rate),
-            format!("{} Гц", d.sample_rate)
-        ));
-    }
-    if let Some(bits) = d.bit_depth {
-        audio.push(tr!(format!("{bits} bits"), format!("{bits} бит")));
-    }
-    match d.channels {
-        0 => {}
-        1 => audio.push(tr!("mono", "моно").to_owned()),
-        2 => audio.push(tr!("stereo", "стерео").to_owned()),
-        n => audio.push(tr!(format!("{n} channels"), format!("каналов: {n}"))),
-    }
-    if !audio.is_empty() {
-        lines.push(audio.join(", "));
-    }
-    lines.push(tr!(
-        format!("Size: {}", format::size(d.size)),
-        format!("Размер: {}", format::size(d.size))
-    ));
-    if !d.tags.is_empty() {
-        lines.push(tr!(
-            format!("Tags: {}", d.tags.join(", ")),
-            format!("Теги: {}", d.tags.join(", "))
-        ));
-    }
-    if let Some((delay, padding)) = d.gapless {
-        lines.push(tr!(
-            format!("LAME: delay {delay}, padding {padding}"),
-            format!("LAME: задержка {delay}, добивка {padding}")
-        ));
-    }
-    for p in &d.pictures {
-        let mut text = format!("{}: {}", picture_name(p.kind), p.format);
-        if let Some((w, h)) = p.pixels {
-            text += &format!(" {w}×{h}");
-        }
-        text += &format!(", {}", format::size(p.bytes as u64));
-        lines.push(text);
-    }
-    lines
 }
 
 /// A field's name as Winamp's File Info window has it; fields it lacks by
