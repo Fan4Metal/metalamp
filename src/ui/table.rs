@@ -1,9 +1,10 @@
 //! A table as Winamp's media library has them: a header whose columns sort
 //! when clicked (again: the other way) and change width when their right
 //! edge is dragged, rows of one height painted only where they are seen
-//! (`ScrollArea::show_rows`: thousands of rows cost what a screenful does),
-//! stripes, the selection, the row playing. The caller keeps the rows and
-//! the selection; the table says what was clicked.
+//! (`ScrollArea::show_viewport`: thousands of rows cost what a screenful
+//! does), stripes, the selection, the row playing. Columns wider together
+//! than the table scroll sideways, the header with them. The caller keeps
+//! the rows and the selection; the table says what was clicked.
 
 use egui::{FontId, Rect, Sense, Ui, pos2, vec2};
 
@@ -94,16 +95,14 @@ impl Table<'_> {
         painter.rect_filled(full, 0.0, palette::LIST_BG);
 
         let header = Rect::from_min_size(full.min, vec2(full.width(), HEADER_HEIGHT));
-        let (sorted, resized) =
-            header_row(ui, self.id, header, self.columns, self.widths, self.sort);
-        out.sorted = sorted;
-        out.resized = resized;
-        let edges = column_edges(full.left(), full.width(), self.widths);
+        // The columns at their own widths; when they are wider than the
+        // table, it scrolls sideways.
+        let needed: f32 = self.widths.iter().sum();
 
         // The rows.
         let body = Rect::from_min_max(pos2(full.left(), header.bottom()), full.max);
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body));
-        let mut scroll = egui::ScrollArea::vertical()
+        let mut scroll = egui::ScrollArea::both()
             .id_salt(self.id.with("rows"))
             .auto_shrink([false, false]);
         if let Some(row) = self.scroll_to {
@@ -113,7 +112,13 @@ impl Table<'_> {
                 .data(|d| d.get_temp::<f32>(self.id.with("offset")))
                 .unwrap_or(0.0);
             let top = row as f32 * ROW_HEIGHT;
-            let seen = body.height() - ROW_HEIGHT;
+            // Less the sideways scroll bar, when there is one.
+            let bar = if needed > body.width() {
+                child.spacing().scroll.allocated_width()
+            } else {
+                0.0
+            };
+            let seen = body.height() - bar - ROW_HEIGHT;
             if top < offset {
                 scroll = scroll.vertical_scroll_offset(top);
             } else if top > offset + seen {
@@ -121,22 +126,22 @@ impl Table<'_> {
             }
         }
         let rows = self.rows;
+        let widths = self.widths.clone();
         let out_area = scroll.show_viewport(&mut child, |ui, viewport| {
             let height = rows as f32 * ROW_HEIGHT;
+            let width = needed.max(viewport.width());
             let (area_rect, area) = ui.allocate_exact_size(
-                vec2(body.width(), height.max(viewport.height())),
+                vec2(width, height.max(viewport.height())),
                 Sense::click(),
             );
+            let edges = column_edges(area_rect.left(), width, &widths);
             let first = (viewport.top() / ROW_HEIGHT).floor().max(0.0) as usize;
             let last = ((viewport.bottom() / ROW_HEIGHT).ceil() as usize).min(rows);
             let painter = ui.painter();
             let font = FontId::proportional(FONT_SIZE);
             for row in first..last {
                 let top = area_rect.top() + row as f32 * ROW_HEIGHT;
-                let r = Rect::from_min_size(
-                    pos2(area_rect.left(), top),
-                    vec2(body.width(), ROW_HEIGHT),
-                );
+                let r = Rect::from_min_size(pos2(area_rect.left(), top), vec2(width, ROW_HEIGHT));
                 let resp = ui.interact(r, self.id.with(("row", row)), Sense::click());
                 let (selected, playing) = style(row);
                 let fill = if selected {
@@ -196,12 +201,28 @@ impl Table<'_> {
             if area.clicked() || area.secondary_clicked() {
                 out.focused = true;
             }
-            area
+            (area, width)
         });
         child
             .ctx()
             .data_mut(|d| d.insert_temp(self.id.with("offset"), out_area.state.offset.y));
-        out.area = Some(out_area.inner);
+        let (area, width) = out_area.inner;
+        out.area = Some(area);
+
+        // The header after the rows: it moves with this frame's sideways
+        // scroll.
+        let left = full.left() - out_area.state.offset.x;
+        let (sorted, resized) = header_row(
+            ui,
+            self.id,
+            header,
+            (left, width),
+            self.columns,
+            self.widths,
+            self.sort,
+        );
+        out.sorted = sorted;
+        out.resized = resized;
         ui.advance_cursor_after_rect(full);
         out
     }
@@ -209,22 +230,28 @@ impl Table<'_> {
 
 /// The header of a table in `header`: the columns' titles, a click sorts
 /// by one (again: the other way), a column's right edge dragged changes
-/// its width. Whether the sort and whether a width changed. Also over the
-/// album grid, which sorts by the same columns.
+/// its width. The columns start at `span.0` and take `span.1` (wider than
+/// `header` when the table scrolls sideways; what is outside is cut).
+/// Whether the sort and whether a width changed. Also over the album grid,
+/// which sorts by the same columns.
 pub fn header_row(
     ui: &mut Ui,
     id: egui::Id,
     header: Rect,
+    span: (f32, f32),
     columns: &[Column],
     widths: &mut Vec<f32>,
     sort: &mut Option<Sort>,
 ) -> (bool, bool) {
+    let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(header));
+    ui.set_clip_rect(header.intersect(ui.clip_rect()));
+    let ui = &mut ui;
     let painter = ui.painter().clone();
     painter.rect_filled(header, 0.0, palette::HEADER_BG);
     let n = columns.len();
     widths.resize(n, 100.0);
     let (mut sorted, mut resized) = (false, false);
-    let edges = column_edges(header.left(), header.width(), widths);
+    let edges = column_edges(span.0, span.1, widths);
     for (i, col) in columns.iter().enumerate() {
         let (left, right) = edges[i];
         let r = Rect::from_min_max(pos2(left, header.top()), pos2(right, header.bottom()));
@@ -268,7 +295,8 @@ pub fn header_row(
             ));
             text_right -= 12.0;
         }
-        let clip = Rect::from_min_max(clip.min, pos2(text_right.max(clip.left()), clip.bottom()));
+        let clip = Rect::from_min_max(clip.min, pos2(text_right.max(clip.left()), clip.bottom()))
+            .intersect(header);
         cell_text(&painter, clip, &col.title, col.align, palette::TEXT_WEAK);
         painter.line_segment(
             [

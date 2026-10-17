@@ -944,6 +944,7 @@ fn albums_grid(
         ui,
         egui::Id::new("albums"),
         header,
+        (header.left(), header.width()),
         &columns,
         &mut w,
         &mut sort,
@@ -959,7 +960,9 @@ fn albums_grid(
 
     let body = Rect::from_min_max(pos2(rect.left(), header.bottom()), rect.max);
     ui.painter().rect_filled(body, 0.0, palette::LIST_BG);
-    let per_row = ((body.width() - 8.0) / CELL.x).floor().max(1.0) as usize;
+    // Room for the scroll bar, so that no cell goes under it.
+    let bar = ui.spacing().scroll.allocated_width();
+    let per_row = ((body.width() - 8.0 - bar) / CELL.x).floor().max(1.0) as usize;
     let n = view.albums.len();
     let rows = n.div_ceil(per_row);
     let current = view.album_row;
@@ -1011,7 +1014,8 @@ fn albums_grid(
     let mut secondary = false;
     let out = area.show_viewport(&mut child, |ui, viewport| {
         let height = (rows as f32 * CELL.y + 8.0).max(viewport.height());
-        let (space, area_resp) = ui.allocate_exact_size(vec2(body.width(), height), Sense::click());
+        let (space, area_resp) =
+            ui.allocate_exact_size(vec2(viewport.width(), height), Sense::click());
         if area_resp.clicked() {
             clicked = Some(None);
             focused = true;

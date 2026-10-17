@@ -162,7 +162,9 @@ pub fn show(
     let number_w = format!("{}.", count.max(1)).len() as f32 * 7.5 + 8.0;
     let out = scroll.show_viewport(&mut child, |ui, viewport| {
         let height = (shown.len() as f32 * ROW_HEIGHT).max(viewport.height());
-        let (area, area_resp) = ui.allocate_exact_size(vec2(body.width(), height), Sense::click());
+        // The viewport's width: less the scroll bar's.
+        let width = viewport.width();
+        let (area, area_resp) = ui.allocate_exact_size(vec2(width, height), Sense::click());
         let first = (viewport.top() / ROW_HEIGHT).floor().max(0.0) as usize;
         let last = ((viewport.bottom() / ROW_HEIGHT).ceil() as usize).min(shown.len());
         let painter = ui.painter();
@@ -170,7 +172,7 @@ pub fn show(
         for (row, &i) in shown.iter().enumerate().take(last).skip(first) {
             let r = Rect::from_min_size(
                 pos2(area.left(), area.top() + row as f32 * ROW_HEIGHT),
-                vec2(body.width(), ROW_HEIGHT),
+                vec2(width, ROW_HEIGHT),
             );
             let resp = ui.interact(
                 r,

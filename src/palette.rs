@@ -67,5 +67,8 @@ pub fn apply(ctx: &egui::Context) {
         v.selection.stroke.color = TEXT_BRIGHT;
         v.hyperlink_color = ACCENT;
         s.spacing.item_spacing = egui::vec2(6.0, 4.0);
+        // Scroll bars always seen (egui's float in only under the pointer),
+        // thin until the pointer comes near.
+        s.spacing.scroll = egui::style::ScrollStyle::thin();
     });
 }
