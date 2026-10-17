@@ -107,6 +107,13 @@ pub enum Icon {
     /// A loudspeaker with 0, 1 or 2 waves.
     Volume(u8),
     Mute,
+    /// Two crossing arrows (metalmpv).
+    Shuffle,
+    /// Two arrows round a loop (metalmpv); `RepeatOne` with a 1 inside.
+    Repeat,
+    RepeatOne,
+    /// A circular arrow: scan or load again.
+    Refresh,
 }
 
 impl Icon {
@@ -162,6 +169,10 @@ impl Icon {
         Icon::Volume(1),
         Icon::Volume(2),
         Icon::Mute,
+        Icon::Shuffle,
+        Icon::Repeat,
+        Icon::RepeatOne,
+        Icon::Refresh,
     ];
 }
 
@@ -186,6 +197,78 @@ pub fn paint(painter: &Painter, icon: Icon, c: Pos2, size: f32, color: Color32, 
     };
     let rect = |x: f32, y: f32, w: f32, h: f32| Rect::from_min_size(p(x, y), vec2(w, h) * k);
     match icon {
+        Icon::Shuffle => {
+            for y in [-3.6, 3.6] {
+                round_line(
+                    painter,
+                    rounded(
+                        &[p(-6.5, -y), p(-2.6, -y), p(2.4, y), p(5.8, y)],
+                        &[0.0, 1.6 * k, 1.6 * k, 0.0],
+                    ),
+                    line,
+                );
+                round_line(
+                    painter,
+                    vec![p(3.8, y - 2.0), p(5.9, y), p(3.8, y + 2.0)],
+                    line,
+                );
+            }
+        }
+        Icon::Repeat | Icon::RepeatOne => {
+            // The top arrow up the left side and to the right, the bottom
+            // one the same turned half round.
+            for t in [1.0, -1.0] {
+                let q = |x: f32, y: f32| p(x * t, y * t);
+                round_line(
+                    painter,
+                    rounded(
+                        &[q(-6.2, 1.2), q(-6.2, -3.8), q(5.6, -3.8)],
+                        &[0.0, 2.2 * k, 0.0],
+                    ),
+                    line,
+                );
+                round_line(
+                    painter,
+                    vec![q(3.7, -5.7), q(5.7, -3.8), q(3.7, -1.9)],
+                    line,
+                );
+            }
+            if icon == Icon::RepeatOne {
+                round_line(
+                    painter,
+                    vec![p(-1.3, -0.9), p(0.3, -2.0), p(0.3, 2.2)],
+                    pen(1.2),
+                );
+            }
+        }
+        Icon::Refresh => {
+            // Two arcs round the centre, each with its arrow head at its
+            // end: the upper one going right and down, the lower one left
+            // and up (Windows' sync), unlike the single arc of the turns.
+            let r = 5.2 * k;
+            for half in [0.0, PI] {
+                let (from, to) = (PI * 1.08 + half, PI * 1.92 + half);
+                let arc: Vec<Pos2> = (0..=14)
+                    .map(|i| {
+                        let a = from + (to - from) * i as f32 / 14.0;
+                        c + r * vec2(a.cos(), a.sin())
+                    })
+                    .collect();
+                round_line(painter, arc, pen(1.5));
+                let tip = c + r * vec2(to.cos(), to.sin());
+                let along = vec2(-to.sin(), to.cos());
+                let out = vec2(to.cos(), to.sin());
+                painter.add(Shape::convex_polygon(
+                    vec![
+                        tip + out * 2.3 * k,
+                        tip + along * 2.6 * k,
+                        tip - out * 2.3 * k,
+                    ],
+                    color,
+                    Stroke::NONE,
+                ));
+            }
+        }
         Icon::Info => {
             painter.circle_stroke(c, 6.0 * k, line);
             painter.circle_filled(p(0.0, -2.8), 0.95 * k, color);

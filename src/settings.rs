@@ -6,7 +6,9 @@
 //! files of their own.
 
 use crate::i18n::LangChoice;
+use crate::ui::table::Sort;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -39,6 +41,24 @@ pub struct Settings {
     pub window: Option<WindowPlace>,
     /// The folders of the media library.
     pub library_folders: Vec<PathBuf>,
+    /// Albums as a grid of covers or as a table.
+    pub album_view: AlbumView,
+    /// The artists' column's width and the tracks' table's height, in
+    /// points.
+    pub artists_width: f32,
+    pub tracks_height: f32,
+    /// Each table's column widths, by the table's name.
+    pub columns: HashMap<String, Vec<f32>>,
+    /// Each table's sort, by the table's name; none: the library's order.
+    pub sorts: HashMap<String, Sort>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AlbumView {
+    #[default]
+    Grid,
+    Table,
 }
 
 impl Default for Settings {
@@ -49,6 +69,11 @@ impl Default for Settings {
             last_update_check: 0,
             window: None,
             library_folders: Vec::new(),
+            album_view: AlbumView::Grid,
+            artists_width: 260.0,
+            tracks_height: 300.0,
+            columns: HashMap::new(),
+            sorts: HashMap::new(),
         }
     }
 }
@@ -206,6 +231,7 @@ mod tests {
                 maximized: true,
             }),
             library_folders: vec![PathBuf::from(r"D:\Music")],
+            ..Settings::default()
         };
         let json = serde_json::to_string(&settings).unwrap();
         assert_eq!(serde_json::from_str::<Settings>(&json).unwrap(), settings);

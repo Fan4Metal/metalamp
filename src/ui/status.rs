@@ -17,18 +17,26 @@ pub fn show(ui: &mut Ui, app: &App) {
     );
     ui.horizontal_centered(|ui| {
         ui.add_space(10.0);
-        let totals = app.library.totals;
+        // What the library view shows, as Winamp's status line does, with
+        // the time its query took; the whole library until a view exists.
+        let (tracks, length, bytes, took) = match &app.library_view.view {
+            Some(v) => (v.tracks.len() as u64, v.length_ms, v.bytes, Some(v.took)),
+            None => {
+                let t = app.library.totals;
+                (t.tracks, t.length_ms, t.bytes, None)
+            }
+        };
         if app.loaded {
-            let text = format!(
+            let mut text = format!(
                 "{} [{}] [{}]",
-                count(
-                    totals.tracks,
-                    ["track", "tracks"],
-                    ["трек", "трека", "треков"]
-                ),
-                format::long_duration(totals.length_ms),
-                format::size(totals.bytes),
+                count(tracks, ["track", "tracks"], ["трек", "трека", "треков"]),
+                format::long_duration(length),
+                format::size(bytes),
             );
+            if let Some(took) = took {
+                let ms = format::millis_in(crate::i18n::lang(), took.as_secs_f64());
+                text += &tr!(format!(" in {ms}"), format!(" за {ms}"));
+            }
             ui.label(RichText::new(text).color(palette::TEXT_WEAK).size(12.0));
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

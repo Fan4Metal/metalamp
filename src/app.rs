@@ -32,8 +32,8 @@ pub struct App {
     /// The window is cloaked until its first maximized frame (the time it
     /// is shown anyway and the frame it was cloaked in).
     cloak: Option<(Instant, u64)>,
-    /// When the window last moved or changed size, until its place is
-    /// saved.
+    /// When the window last moved or changed size, or a setting changed,
+    /// until the settings are saved.
     place_changed: Option<Instant>,
     /// The app icon of the start screen and of the title row.
     start_icon: Option<egui::TextureHandle>,
@@ -48,6 +48,9 @@ pub struct App {
     pub(crate) scan_progress: Option<(usize, usize)>,
     /// The index has been read (the library shown is not just empty).
     pub(crate) loaded: bool,
+    pub(crate) library_view: crate::ui::library::LibraryView,
+    /// The right button is down (its press held back, `raw_input_hook`).
+    right_held: bool,
 }
 
 impl App {
@@ -106,6 +109,8 @@ impl App {
             wake,
             scan_progress: None,
             loaded: false,
+            library_view: crate::ui::library::LibraryView::new(ctx),
+            right_held: false,
         }
     }
 
@@ -182,6 +187,26 @@ impl App {
         self.sync_settings();
         self.settings.save_in_background();
         self.rescan();
+    }
+
+    fn library_action(&mut self, action: crate::ui::library::LibraryAction, frame: &eframe::Frame) {
+        use crate::ui::library::LibraryAction;
+        match action {
+            LibraryAction::Rescan => self.rescan(),
+            LibraryAction::AddFolder => self.pick_folder(frame),
+            LibraryAction::RemoveFolder(i) => {
+                if i < self.settings.library_folders.len() {
+                    self.settings.library_folders.remove(i);
+                    self.sync_settings();
+                    self.settings.save_in_background();
+                    self.rescan();
+                }
+            }
+            LibraryAction::Play { tracks, start } => {
+                log::debug!("play {} tracks from {start}", tracks.len());
+            }
+            LibraryAction::Enqueue(tracks) => log::debug!("enqueue {} tracks", tracks.len()),
+        }
     }
 
     /// Ask for a folder to add (Ctrl+Shift+O).
@@ -295,10 +320,46 @@ impl App {
 }
 
 impl eframe::App for App {
+    /// The right button's press is held back until it is let go and then
+    /// given to egui with the release, where it was let go: egui counts a
+    /// press and release as a click only within 6 points and 0.8 s, and a
+    /// context menu opened by a click with the mouse on the move was lost
+    /// (Windows opens menus on the release, wherever it is; qview's way).
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+        let events = std::mem::take(&mut raw.events);
+        for event in events {
+            match event {
+                egui::Event::PointerButton {
+                    button: egui::PointerButton::Secondary,
+                    pressed: true,
+                    ..
+                } => self.right_held = true,
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Secondary,
+                    pressed: false,
+                    modifiers,
+                } => {
+                    if std::mem::take(&mut self.right_held) {
+                        raw.events.push(egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Secondary,
+                            pressed: true,
+                            modifiers,
+                        });
+                    }
+                    raw.events.push(event);
+                }
+                other => raw.events.push(other),
+            }
+        }
+    }
+
     /// Every frame, also while the window is minimised.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.updates.poll();
         self.poll_scan();
+        self.library_view.covers.poll(ctx);
         self.take_hooked(ctx);
         self.remember_place();
     }
@@ -320,6 +381,9 @@ impl eframe::App for App {
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F5)) {
                 self.rescan();
             }
+            if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::F)) {
+                self.library_view.focus_search = true;
+            }
         }
         self.take_dropped(&ctx);
         if !frameless::is_maximized(&ctx) {
@@ -333,9 +397,22 @@ impl eframe::App for App {
             .exact_size(crate::ui::status::HEIGHT)
             .frame(egui::Frame::NONE.fill(palette::TITLE_BG))
             .show(root_ui, |ui| crate::ui::status::show(ui, self));
-        egui::CentralPanel::default().show(root_ui, |ui| {
+        egui::CentralPanel::no_frame().show(root_ui, |ui| {
             if !self.settings.library_folders.is_empty() {
-                crate::ui::library::show(ui, self);
+                let scanning = self.scanning();
+                let (actions, changed) = crate::ui::library::show(
+                    ui,
+                    &mut self.library_view,
+                    &self.library,
+                    &mut self.settings,
+                    scanning,
+                );
+                if changed {
+                    self.place_changed = Some(Instant::now());
+                }
+                for action in actions {
+                    self.library_action(action, frame);
+                }
                 return;
             }
             let hint = tr!(

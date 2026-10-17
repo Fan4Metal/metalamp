@@ -2,9 +2,6 @@
 //! of the whole library, bit rates. The `_in` variants take the language,
 //! so that tests do not depend on the global one.
 
-// Parts for the library view, which comes next. TODO: remove.
-#![allow(dead_code)]
-
 use crate::i18n::{Lang, lang};
 use std::cmp::Ordering;
 
@@ -66,12 +63,12 @@ pub fn size(bytes: u64) -> String {
     size_in(lang(), bytes)
 }
 
-/// Seconds with three decimals: `0.036` / `0,036`.
-pub fn seconds_in(lang: Lang, secs: f64) -> String {
-    let text = format!("{secs:.3}");
+/// A short time in milliseconds with one decimal: `0.4 ms` / `0,4 мс`.
+pub fn millis_in(lang: Lang, secs: f64) -> String {
+    let text = format!("{:.1}", secs * 1000.0);
     match lang {
-        Lang::En => text,
-        Lang::Ru => text.replace('.', ","),
+        Lang::En => format!("{text} ms"),
+        Lang::Ru => format!("{} мс", text.replace('.', ",")),
     }
 }
 
@@ -157,7 +154,8 @@ mod tests {
         assert_eq!(size_in(Lang::Ru, bytes), "49,02 ГБ");
         assert_eq!(size_in(Lang::En, 512), "512 bytes");
         assert_eq!(size_in(Lang::En, 1536), "1.50 KB");
-        assert_eq!(seconds_in(Lang::Ru, 0.036), "0,036");
+        assert_eq!(millis_in(Lang::Ru, 0.00042), "0,4 мс");
+        assert_eq!(millis_in(Lang::En, 0.036), "36.0 ms");
     }
 
     #[test]

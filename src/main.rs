@@ -11,6 +11,7 @@ mod i18n;
 mod app;
 mod bench;
 mod caption;
+mod covers;
 mod filetypes;
 mod format;
 mod frameless;

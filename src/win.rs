@@ -435,6 +435,63 @@ unsafe extern "system" fn window_proc(
     unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
 }
 
+/// Open the folder of `file` in Explorer with the file selected
+/// (`SHOpenFolderAndSelectItems`: `explorer /select` leaves the window
+/// behind the app's). On a thread of its own with COM, as the shell may
+/// take a while; the functions are declared by hand to spare features.
+pub fn show_in_folder(file: &std::path::Path) {
+    #[link(name = "shell32")]
+    unsafe extern "system" {
+        fn SHParseDisplayName(
+            name: *const u16,
+            bind: *mut core::ffi::c_void,
+            pidl: *mut *mut core::ffi::c_void,
+            sfgao_in: u32,
+            sfgao_out: *mut u32,
+        ) -> i32;
+        fn SHOpenFolderAndSelectItems(
+            folder: *const core::ffi::c_void,
+            count: u32,
+            items: *const *const core::ffi::c_void,
+            flags: u32,
+        ) -> i32;
+        fn ILFree(pidl: *const core::ffi::c_void);
+    }
+    #[link(name = "ole32")]
+    unsafe extern "system" {
+        fn CoInitializeEx(reserved: *const core::ffi::c_void, coinit: u32) -> i32;
+        fn CoUninitialize();
+    }
+    const COINIT_APARTMENTTHREADED: u32 = 2;
+    let path = wide(file);
+    let spawned = std::thread::Builder::new()
+        .name("show in folder".into())
+        .spawn(move || unsafe {
+            let com = CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED) >= 0;
+            let mut pidl = std::ptr::null_mut();
+            let parsed = SHParseDisplayName(
+                path.as_ptr(),
+                std::ptr::null_mut(),
+                &mut pidl,
+                0,
+                std::ptr::null_mut(),
+            );
+            if parsed >= 0 && !pidl.is_null() {
+                let hr = SHOpenFolderAndSelectItems(pidl, 0, std::ptr::null(), 0);
+                if hr < 0 {
+                    log::warn!("cannot show the file in its folder: 0x{hr:08x}");
+                }
+                ILFree(pidl);
+            }
+            if com {
+                CoUninitialize();
+            }
+        });
+    if let Err(e) = spawned {
+        log::warn!("cannot show the file in its folder: {e}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
