@@ -114,7 +114,8 @@ impl Engine {
         self.shared.duration_ms.load(Relaxed)
     }
 
-    /// The gain for the samples, taken at once (the next write).
+    /// The gain of what is heard, taken at the audio thread's next turn
+    /// (within 10 ms while playing).
     pub fn set_gain(&self, gain: f32) {
         self.shared.gain.store(gain.to_bits(), Relaxed);
     }
@@ -418,12 +419,14 @@ impl Player<'_> {
                 }
             }
             let out = self.out.as_mut().expect("checked above");
+            // The device applies the gain to what it plays, so a change is
+            // heard at once, not after the buffer written ahead.
+            out.set_gain(f32::from_bits(self.shared.gain.load(Relaxed)))?;
             let room = out.room()? as usize;
             let frames = room.min(self.ring.len() / channels);
             if frames > 0 {
                 let samples = self.ring.make_contiguous();
-                let gain = f32::from_bits(self.shared.gain.load(Relaxed));
-                out.write(&samples[..frames * channels], gain)?;
+                out.write(&samples[..frames * channels])?;
                 self.ring.drain(..frames * channels);
                 self.written += frames as u64;
             }

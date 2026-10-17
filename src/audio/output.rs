@@ -6,7 +6,7 @@
 use windows::Win32::Media::Audio::{
     AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
     AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, IAudioClient, IAudioClock, IAudioRenderClient,
-    IMMDeviceEnumerator, MMDeviceEnumerator, WAVEFORMATEX, eConsole, eRender,
+    IAudioStreamVolume, IMMDeviceEnumerator, MMDeviceEnumerator, WAVEFORMATEX, eConsole, eRender,
 };
 use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, CoTaskMemFree};
 use windows::core::Result;
@@ -15,9 +15,12 @@ use windows::core::Result;
 pub trait Output {
     /// Frames that can be written now without waiting.
     fn room(&mut self) -> Result<u32>;
-    /// Writes `samples` (a whole number of frames, at most `room`),
-    /// multiplied by `gain`.
-    fn write(&mut self, samples: &[f32], gain: f32) -> Result<()>;
+    /// Writes `samples` (a whole number of frames, at most `room`).
+    fn write(&mut self, samples: &[f32]) -> Result<()>;
+    /// The gain (0 to 1) of what is heard from now on, not only of what is
+    /// written next: a change must not wait for the device buffer. Called
+    /// before every write; it is cheap when nothing changed.
+    fn set_gain(&mut self, gain: f32) -> Result<()>;
     fn start(&mut self) -> Result<()>;
     /// Stops playing; what was written stays (pause).
     fn stop(&mut self) -> Result<()>;
@@ -47,6 +50,12 @@ pub struct Wasapi {
     channels: usize,
     device: String,
     enumerator: IMMDeviceEnumerator,
+    /// The stream's own volume, applied by the audio engine where it
+    /// mixes, so within its 10 ms period; not the session's, which Windows
+    /// shows in its mixer and remembers.
+    volume: IAudioStreamVolume,
+    /// What `volume` was last set to.
+    gain: Option<f32>,
 }
 
 // The audio thread owns it; COM objects of the MTA may be used from it.
@@ -74,6 +83,7 @@ impl Wasapi {
         unsafe { client.Initialize(AUDCLNT_SHAREMODE_SHARED, flags, BUFFER, 0, &format, None)? };
         let render: IAudioRenderClient = unsafe { client.GetService()? };
         let clock: IAudioClock = unsafe { client.GetService()? };
+        let volume: IAudioStreamVolume = unsafe { client.GetService()? };
         let frequency = unsafe { clock.GetFrequency()? }.max(1);
         let size = unsafe { client.GetBufferSize()? };
         Ok(Wasapi {
@@ -86,6 +96,8 @@ impl Wasapi {
             channels: usize::from(channels),
             device: id,
             enumerator,
+            volume,
+            gain: None,
         })
     }
 }
@@ -109,7 +121,7 @@ impl Output for Wasapi {
         Ok(self.size.saturating_sub(padding))
     }
 
-    fn write(&mut self, samples: &[f32], gain: f32) -> Result<()> {
+    fn write(&mut self, samples: &[f32]) -> Result<()> {
         let frames = (samples.len() / self.channels) as u32;
         if frames == 0 {
             return Ok(());
@@ -120,11 +132,22 @@ impl Output for Wasapi {
                 buffer.cast::<f32>(),
                 frames as usize * self.channels,
             );
-            for (o, s) in out.iter_mut().zip(samples) {
-                *o = s * gain;
-            }
+            out.copy_from_slice(samples);
             self.render.ReleaseBuffer(frames, 0)?;
         }
+        Ok(())
+    }
+
+    fn set_gain(&mut self, gain: f32) -> Result<()> {
+        let gain = gain.clamp(0.0, 1.0);
+        if self.gain == Some(gain) {
+            return Ok(());
+        }
+        unsafe {
+            let channels = self.volume.GetChannelCount()? as usize;
+            self.volume.SetAllVolumes(&vec![gain; channels])?;
+        }
+        self.gain = Some(gain);
         Ok(())
     }
 
