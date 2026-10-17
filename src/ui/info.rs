@@ -5,7 +5,8 @@
 //! properties as chips; the tag's fields in Winamp's order in two columns
 //! (empty ones as a dash), the tag's other fields under them; the file's
 //! path and the rest. Shown, not edited; the text can be selected and
-//! copied. The file is read on a thread of its own (`library::details`).
+//! copied. The cross, Esc, Enter or a click outside closes it. The file is
+//! read on a thread of its own (`library::details`).
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -172,34 +173,24 @@ impl InfoView {
                         close |= hero(ui, Some(d), &wanted, cover.as_ref());
                         // A long tag (lyrics, many fields) scrolls within
                         // the screen instead of pushing the window off it.
-                        let room = ctx.content_rect().height() - 2.0 * 20.0 - COVER - 100.0;
+                        let room = ctx.content_rect().height() - 2.0 * 20.0 - COVER - 60.0;
                         egui::ScrollArea::vertical()
                             .id_salt("file_info_body")
                             .max_height(room.max(120.0))
                             .auto_shrink([false, true])
-                            .show(ui, |ui| body(ui, d));
+                            .show(ui, |ui| {
+                                // Room for the scroll bar at the right edge
+                                // (`set_max_width` here also shrank the
+                                // area's height to its minimum).
+                                egui::Frame::new()
+                                    .inner_margin(egui::Margin {
+                                        right: 14,
+                                        ..egui::Margin::ZERO
+                                    })
+                                    .show(ui, |ui| body(ui, d));
+                            });
                     }
                 }
-                ui.add_space(16.0);
-                ui.horizontal(|ui| {
-                    if ui
-                        .button(tr!("Show in folder", "Показать в папке"))
-                        .clicked()
-                    {
-                        crate::win::show_in_folder(&wanted);
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add(
-                                egui::Button::new(tr!("Close", "Закрыть"))
-                                    .min_size(vec2(96.0, 28.0)),
-                            )
-                            .clicked()
-                        {
-                            close = true;
-                        }
-                    });
-                });
             });
         let keys = !fresh && ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Enter));
         if close || keys || (!fresh && modal.should_close()) {
@@ -365,7 +356,10 @@ fn chips(d: &Details) -> Vec<String> {
 /// The sections under the hero: the tag's fields, then the file.
 fn body(ui: &mut Ui, d: &Details) {
     ui.add_space(18.0);
-    section(ui, tr!("Tag", "Тег"), Some(&d.tags.join(" · ")));
+    let tags = d.tags.join(" · ");
+    section(ui, tr!("Tag", "Тег"), |ui| {
+        ui.label(RichText::new(tags).size(11.0).color(palette::TEXT_WEAK));
+    });
     ui.columns(2, |cols| {
         fields_grid(&mut cols[0], "info_left", &LEFT, d);
         fields_grid(&mut cols[1], "info_right", &RIGHT, d);
@@ -396,18 +390,19 @@ fn body(ui: &mut Ui, d: &Details) {
     let lyrics = value(d, &[ItemKey::UnsyncLyrics, ItemKey::Lyrics]);
     if !lyrics.is_empty() {
         ui.add_space(14.0);
-        section(ui, tr!("Lyrics", "Текст"), None);
-        egui::ScrollArea::vertical()
-            .id_salt("info_lyrics")
-            .max_height(180.0)
-            .auto_shrink([false, true])
-            .show(ui, |ui| {
-                ui.add(egui::Label::new(RichText::new(lyrics).color(palette::TEXT)).wrap());
-            });
+        section(ui, tr!("Lyrics", "Текст"), |_| {});
+        ui.add(egui::Label::new(RichText::new(lyrics).color(palette::TEXT)).wrap());
     }
 
     ui.add_space(14.0);
-    section(ui, tr!("File", "Файл"), None);
+    section(ui, tr!("File", "Файл"), |ui| {
+        if ui
+            .small_button(tr!("Show in folder", "Показать в папке"))
+            .clicked()
+        {
+            crate::win::show_in_folder(&d.path);
+        }
+    });
     egui::Grid::new("info_file")
         .num_columns(2)
         .spacing(vec2(12.0, 6.0))
@@ -447,9 +442,9 @@ fn is_hidden(key: ItemKey) -> bool {
     )
 }
 
-/// A section's heading: small capitals, a note on the right, a line
-/// under them.
-fn section(ui: &mut Ui, title: &str, right: Option<&str>) {
+/// A section's heading: small capitals, `right` (a note or a button) at
+/// the right end, a line under them.
+fn section(ui: &mut Ui, title: &str, right: impl FnOnce(&mut Ui)) {
     ui.horizontal(|ui| {
         ui.label(
             RichText::new(title.to_uppercase())
@@ -457,11 +452,7 @@ fn section(ui: &mut Ui, title: &str, right: Option<&str>) {
                 .strong()
                 .color(palette::TEXT_WEAK),
         );
-        if let Some(right) = right.filter(|r| !r.is_empty()) {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(RichText::new(right).size(11.0).color(palette::TEXT_WEAK));
-            });
-        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), right);
     });
     let r = ui.available_rect_before_wrap();
     ui.painter().hline(
