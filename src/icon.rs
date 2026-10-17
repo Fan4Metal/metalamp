@@ -42,17 +42,6 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// Signed distance from `(x, y)` to a box from `min` to `max` with corners
-/// rounded by `r` (negative inside).
-fn rounded_box(x: f32, y: f32, min: (f32, f32), max: (f32, f32), r: f32) -> f32 {
-    let (cx, cy) = ((min.0 + max.0) / 2.0, (min.1 + max.1) / 2.0);
-    let (hx, hy) = ((max.0 - min.0) / 2.0 - r, (max.1 - min.1) / 2.0 - r);
-    let qx = (x - cx).abs() - hx;
-    let qy = (y - cy).abs() - hy;
-    let outside = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt();
-    outside + qx.max(qy).min(0.0) - r
-}
-
 /// Coverage of a shape with signed distance `d` (negative inside), the edge
 /// smoothed over about one pixel of the layer being drawn.
 fn cover(d: f32, px: f32) -> f32 {
@@ -67,17 +56,6 @@ fn mix(a: Rgba, b: Rgba, t: f32) -> Rgba {
         a[2] + (b[2] - a[2]) * t,
         a[3] + (b[3] - a[3]) * t,
     ]
-}
-
-/// Signed distance to a circle.
-fn circle(x: f32, y: f32, cx: f32, cy: f32, r: f32) -> f32 {
-    ((x - cx).powi(2) + (y - cy).powi(2)).sqrt() - r
-}
-
-/// Smooth union of two distances (`k`: the width of the blend).
-fn smin(a: f32, b: f32, k: f32) -> f32 {
-    let h = (0.5 + 0.5 * (b - a) / k).clamp(0.0, 1.0);
-    b + (a - b) * h - k * h * (1.0 - h)
 }
 
 /// Signed distance to a closed polygon (negative inside).
@@ -100,151 +78,48 @@ fn polygon(x: f32, y: f32, v: &[(f32, f32)]) -> f32 {
     if inside { -d } else { d }
 }
 
-/// The lightning bolt in screen units: a classic bolt with its top on the
-/// right, the guitar's neck crossing it in the middle.
+/// The lightning bolt in icon units: a classic bolt, its top on the right
+/// of the centre, its point at the bottom left, as wide as it is tall
+/// allows.
 const BOLT: [(f32, f32); 7] = [
-    (0.545, 0.035),
-    (0.835, 0.035),
-    (0.675, 0.385),
-    (0.865, 0.385),
-    (0.475, 0.965),
-    (0.580, 0.540),
-    (0.395, 0.540),
+    (0.400, 0.030),
+    (0.775, 0.030),
+    (0.600, 0.385),
+    (0.830, 0.385),
+    (0.300, 0.970),
+    (0.425, 0.555),
+    (0.190, 0.555),
 ];
 
 /// The colour of the icon at `(x, y)`, both in 0..1 of the icon's side;
 /// `px` is the size of a pixel of the layer in the same units (1/16 for the
-/// 16 px layer). An electric guitar (a single-cutaway body in cherry red, a
-/// dark rosewood neck, a black headstock) lying from the bottom left to the
-/// top right, over a yellow lightning bolt; lit from the top, with a soft
-/// shadow. Layers of 24 px and less drop the small parts (strings, frets,
-/// knobs, tuners, binding), which would only blur there, and get a wider
-/// neck.
+/// 16 px layer). A yellow lightning bolt, light at the top and amber at the
+/// bottom, with a darker edge (so it keeps its shape on a light taskbar), a
+/// light upper-left side and a soft shadow; layers of 24 px and less have a
+/// thinner edge and no light side.
 fn sample(x: f32, y: f32, px: f32) -> Rgba {
     let small = px > 1.0 / 40.0;
-    // The guitar's own axes: `u` from the body's centre to the headstock,
-    // `v` across it.
-    let (ox, oy) = (0.355, 0.645);
-    let s = std::f32::consts::FRAC_1_SQRT_2;
-    let (dx, dy) = (x - ox, y - oy);
-    let u = (dx - dy) * s;
-    let v = (dx + dy) * s;
-
     let mut c = [0.0; 4];
 
-    // The bolt, behind the guitar: amber below, yellow above, a darker edge.
+    // The shadow, a little lower and to the right.
+    let shadow = polygon(x - 0.015, y - 0.03, &BOLT);
+    c = over(
+        c,
+        with_alpha(hex(0x000000), 0.35 * smoothstep(0.035, -0.02, shadow)),
+    );
+
     let bolt = polygon(x, y, &BOLT);
-    let bolt_fill = mix(hex(0xffe45c), hex(0xffa000), (y - 0.03) / 0.94);
-    let edge = if small { px * 0.9 } else { 0.012 };
-    c = over(c, with_alpha(hex(0xb86800), cover(bolt, px)));
-    c = over(c, with_alpha(bolt_fill, cover(bolt + edge, px)));
-
-    // The guitar's distance fields.
-    let lower = circle(u, v, -0.075, 0.0, 0.205);
-    let upper = circle(u, v, 0.115, 0.0, 0.155);
-    let cutaway = circle(u, v, 0.215, -0.125, 0.085);
-    let body = smin(lower, upper, 0.06).max(-cutaway);
-    let half = if small {
-        0.04_f32.max(px * 0.75)
-    } else {
-        0.033
-    };
-    let neck = (u - 0.375).abs().max(v.abs() - half + (u - 0.14) * 0.02) - 0.215;
-    let neck = neck.max(v.abs() - half);
-    let head = rounded_box(u, v, (0.565, -0.06), (0.715, 0.06), 0.03);
-    let guitar = body.min(neck).min(head);
-
-    // Soft shadow under the whole guitar, a little lower.
-    let (sx, sy) = (x, y - 0.025);
-    let (sdx, sdy) = (sx - ox, sy - oy);
-    let (su, sv) = ((sdx - sdy) * s, (sdx + sdy) * s);
-    let shadow_body = smin(
-        circle(su, sv, -0.075, 0.0, 0.205),
-        circle(su, sv, 0.115, 0.0, 0.155),
-        0.06,
-    );
-    let shadow = shadow_body.min(rounded_box(su, sv, (0.15, -0.06), (0.715, 0.06), 0.03));
-    c = over(
-        c,
-        with_alpha(hex(0x000000), 0.32 * smoothstep(0.03, -0.02, shadow)),
-    );
-    let _ = guitar;
-
-    // The neck and the headstock.
-    let wood = mix(hex(0x5a3a26), hex(0x2e1c12), (v + half) / (2.0 * half));
-    c = over(c, with_alpha(wood, cover(neck, px)));
+    let edge = if small { px * 0.9 } else { 0.02 };
+    c = over(c, with_alpha(hex(0xa85400), cover(bolt, px)));
+    let fill = mix(hex(0xfff27a), hex(0xff9a00), (y - 0.03) / 0.94);
+    c = over(c, with_alpha(fill, cover(bolt + edge, px)));
     if !small {
-        // Frets: thin light bars across the neck.
-        let fret = ((u - 0.17) / 0.055).fract();
-        if (0.17..0.56).contains(&u) && fret < 0.09 {
-            c = over(c, with_alpha(hex(0xc9c2b8), 0.8 * cover(neck + 0.004, px)));
-        }
-    }
-    let head_fill = mix(hex(0x3a3b42), hex(0x16171b), (v + 0.06) / 0.12);
-    c = over(c, with_alpha(head_fill, cover(head, px)));
-    // A light edge on the headstock keeps it visible on a dark taskbar.
-    c = over(
-        c,
-        with_alpha(hex(0x8a8d96), 0.7 * cover(head.abs() - px * 0.45, px)),
-    );
-    if !small {
-        for (tu, tv) in [(0.60, -0.075), (0.65, -0.075), (0.60, 0.075), (0.65, 0.075)] {
-            c = over(
-                c,
-                with_alpha(hex(0xd8d8dc), cover(circle(u, v, tu, tv, 0.016), px)),
-            );
-        }
-    }
-
-    // The body: cherry red lit from the top, darker at its edge.
-    let red = mix(hex(0xe8423a), hex(0x8c1218), (y - 0.38) / 0.5);
-    let red = mix(red, hex(0x5a0a0e), smoothstep(-0.05, 0.0, body) * 0.7);
-    c = over(c, with_alpha(red, cover(body, px)));
-    if !small {
-        // Cream binding along the edge.
-        let binding = (body + 0.008).abs() - 0.004;
-        c = over(c, with_alpha(hex(0xf2e6c8), 0.9 * cover(binding, px)));
-        // A sheen on the upper part of the body.
-        let sheen = circle(u, v, 0.02, -0.07, 0.11);
+        // The upper-left side lit: lighter left of a line along the bolt.
+        let lit = smoothstep(0.02, -0.02, x - 0.53 + (y - 0.03) * 0.25);
         c = over(
             c,
-            with_alpha(
-                hex(0xffffff),
-                0.16 * smoothstep(0.05, -0.05, sheen) * cover(body + 0.02, px),
-            ),
+            with_alpha(hex(0xffffff), 0.28 * lit * cover(bolt + edge, px)),
         );
-    }
-
-    // Pickups: black with a cream frame.
-    for pu in [0.075_f32, -0.055] {
-        let pickup = rounded_box(u, v, (pu - 0.032, -0.085), (pu + 0.032, 0.085), 0.012);
-        if small {
-            c = over(c, with_alpha(hex(0x16171b), cover(pickup, px)));
-        } else {
-            c = over(c, with_alpha(hex(0xe9dfc6), cover(pickup, px)));
-            c = over(c, with_alpha(hex(0x16171b), cover(pickup + 0.008, px)));
-        }
-    }
-    if !small {
-        // Bridge and tailpiece.
-        for (bu, w) in [(-0.125_f32, 0.07_f32), (-0.175, 0.075)] {
-            let bar = rounded_box(u, v, (bu - 0.009, -w), (bu + 0.009, w), 0.006);
-            c = over(c, with_alpha(hex(0xc8cad0), cover(bar, px)));
-        }
-        // Knobs on the treble side of the lower bout.
-        for (ku, kv) in [(-0.10_f32, 0.135_f32), (-0.175, 0.095), (-0.02, 0.15)] {
-            c = over(
-                c,
-                with_alpha(hex(0xe0b54a), cover(circle(u, v, ku, kv, 0.02), px)),
-            );
-        }
-        // Strings from the tailpiece to the headstock.
-        if (-0.175..0.6).contains(&u) {
-            for sv in [-0.024_f32, -0.008, 0.008, 0.024] {
-                let string = (v - sv).abs() - 0.0018;
-                c = over(c, with_alpha(hex(0xeceef2), 0.85 * cover(string, px)));
-            }
-        }
     }
     c
 }

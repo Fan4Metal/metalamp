@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="images/icon.png" width="128" height="128" alt="Значок MetalAMP: электрогитара на фоне молнии">
+  <img src="images/icon.png" width="128" height="128" alt="Значок MetalAMP: жёлтая молния">
 </p>
 
 <h1 align="center">MetalAMP</h1>

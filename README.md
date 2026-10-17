@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="images/icon.png" width="128" height="128" alt="MetalAMP icon: an electric guitar over a lightning bolt">
+  <img src="images/icon.png" width="128" height="128" alt="MetalAMP icon: a yellow lightning bolt">
 </p>
 
 <h1 align="center">MetalAMP</h1>
