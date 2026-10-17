@@ -45,6 +45,8 @@ impl PlaylistView {
 pub enum PlaylistAction {
     Play(usize),
     ShowInFolder(usize),
+    /// Open the file info window for an entry.
+    Info(usize),
 }
 
 /// The line of an entry: "Artist – Title" from the library, else the
@@ -74,6 +76,7 @@ pub fn show(
     pv: &mut PlaylistView,
     player: &mut Player,
     library: &Library,
+    keys: bool,
 ) -> Vec<PlaylistAction> {
     let mut actions = Vec::new();
     if pv.revision != player.queue.revision {
@@ -315,6 +318,17 @@ pub fn show(
                 actions.push(PlaylistAction::ShowInFolder(i));
                 ui.close();
             }
+            if ui
+                .add_enabled(
+                    first.is_some(),
+                    egui::Button::new(tr!("File info… (Alt+3)", "Сведения о файле… (Alt+3)")),
+                )
+                .clicked()
+                && let Some(i) = pv.selected_entry()
+            {
+                actions.push(PlaylistAction::Info(i));
+                ui.close();
+            }
             ui.separator();
             if ui
                 .button(tr!("Clear the playlist", "Очистить плейлист"))
@@ -327,7 +341,7 @@ pub fn show(
         });
 
     // Keys, while the playlist has them.
-    let keys_free = !ui.ctx().memory(|m| m.focused().is_some());
+    let keys_free = keys && !ui.ctx().memory(|m| m.focused().is_some());
     if pv.focused && keys_free {
         let rows = shown.len();
         let at = pv.anchor.and_then(|a| shown.iter().position(|&s| s == a));

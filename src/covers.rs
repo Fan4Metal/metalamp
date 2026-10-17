@@ -252,7 +252,7 @@ fn cover(job: &Job, dir: Option<&Path>) -> Option<egui::ColorImage> {
     Some(color_image(&thumb))
 }
 
-fn color_image(picture: &image::DynamicImage) -> egui::ColorImage {
+pub(crate) fn color_image(picture: &image::DynamicImage) -> egui::ColorImage {
     let rgba = picture.to_rgba8();
     egui::ColorImage::from_rgba_unmultiplied(
         [rgba.width() as usize, rgba.height() as usize],
@@ -276,7 +276,7 @@ fn save_jpeg(picture: &image::DynamicImage, path: &Path) {
 }
 
 /// A picture in `folder` named as a cover ([`FOLDER_NAMES`]), in any case.
-fn in_folder(folder: &Path) -> Option<PathBuf> {
+pub(crate) fn in_folder(folder: &Path) -> Option<PathBuf> {
     let pictures: Vec<(String, PathBuf)> = std::fs::read_dir(folder)
         .ok()?
         .filter_map(Result::ok)
@@ -317,7 +317,7 @@ fn embedded(path: &Path) -> Option<Vec<u8>> {
 }
 
 /// A JPEG or PNG, decoded within limits.
-fn decode(bytes: &[u8]) -> Option<image::DynamicImage> {
+pub(crate) fn decode(bytes: &[u8]) -> Option<image::DynamicImage> {
     let format = image::guess_format(bytes).ok()?;
     if !matches!(format, image::ImageFormat::Jpeg | image::ImageFormat::Png) {
         return None;

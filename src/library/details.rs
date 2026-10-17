@@ -1,8 +1,8 @@
-//! Everything a file says about itself, for the track info panel: every
+//! Everything a file says about itself, for the file info window: every
 //! field of its main tag (not only those the library keeps), the tags it
-//! holds, its pictures and its audio properties. Read when the panel asks,
-//! on a thread of its own (`ui::info`): a few milliseconds a file, more on
-//! a disk that was asleep.
+//! holds, its pictures and its audio properties, and its cover. Read when
+//! the window asks, on a thread of its own (`ui::info`): a few milliseconds
+//! a file, more on a disk that was asleep.
 
 use std::path::{Path, PathBuf};
 
@@ -32,7 +32,13 @@ pub struct Details {
     pub channels: u8,
     /// An MP3's LAME tag: the encoder's delay and padding, in samples.
     pub gapless: Option<(u32, u32)>,
+    /// The front cover of the tag (else its first picture, else the
+    /// folder's), at most [`COVER_SIDE`] pixels a side.
+    pub cover: Option<egui::ColorImage>,
 }
+
+/// The largest side of [`Details::cover`].
+const COVER_SIDE: u32 = 400;
 
 pub struct Picture {
     pub kind: PictureType,
@@ -86,6 +92,27 @@ pub fn read(path: &Path) -> Result<Details, String> {
         Some(tag) => (fields_of(tag), tag.pictures().iter().map(picture).collect()),
         None => (Vec::new(), Vec::new()),
     };
+    let tagged = main.and_then(|tag| {
+        let pictures = tag.pictures();
+        pictures
+            .iter()
+            .find(|p| p.pic_type() == PictureType::CoverFront)
+            .or_else(|| pictures.first())
+            .and_then(|p| crate::covers::decode(p.data()))
+    });
+    let cover = tagged
+        .or_else(|| {
+            let found = crate::covers::in_folder(path.parent()?)?;
+            crate::covers::decode(&std::fs::read(found).ok()?)
+        })
+        .map(|picture| {
+            let picture = if picture.width().max(picture.height()) > COVER_SIDE {
+                picture.resize(COVER_SIDE, COVER_SIDE, image::imageops::FilterType::Triangle)
+            } else {
+                picture
+            };
+            crate::covers::color_image(&picture)
+        });
     let is_mp3 = path
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("mp3"));
@@ -107,6 +134,7 @@ pub fn read(path: &Path) -> Result<Details, String> {
             .then(|| crate::audio::mp3gap::parse(&head))
             .flatten()
             .map(|g| (g.delay, g.padding)),
+        cover,
     })
 }
 

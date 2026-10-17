@@ -42,6 +42,8 @@ pub enum LibraryAction {
     Rescan,
     AddFolder,
     RemoveFolder(usize),
+    /// Open the file info window for a track.
+    Info(TrackId),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -109,8 +111,6 @@ pub struct LibraryView {
     /// Play every track shown once the view is built (an artist double
     /// clicked).
     play_shown: bool,
-    /// The track info panel under the artists.
-    pub info: crate::ui::info::InfoView,
 }
 
 impl LibraryView {
@@ -129,7 +129,6 @@ impl LibraryView {
             scroll: [None; 3],
             reset_tracks: false,
             play_shown: false,
-            info: crate::ui::info::InfoView::default(),
         }
     }
 
@@ -419,30 +418,9 @@ pub fn show(
     let width = settings
         .artists_width
         .clamp(160.0, (rest.width() * 0.5).max(160.0));
-    let column = Rect::from_min_size(rest.min, vec2(width, rest.height()));
-    // The track info under the artists, with a strip between.
-    let (left, info) = if settings.info_visible {
-        let height = settings
-            .info_height
-            .clamp(120.0, (column.height() - 140.0).max(120.0));
-        let info = Rect::from_min_max(pos2(column.left(), column.bottom() - height), column.max);
-        let split = Rect::from_min_max(
-            pos2(column.left(), info.top() - SPLITTER),
-            pos2(column.right(), info.top()),
-        );
-        if let Some(d) = splitter(ui, split, "split_info", false) {
-            settings.info_height = (height - d).max(120.0);
-            changed = true;
-        }
-        (
-            Rect::from_min_max(column.min, pos2(column.right(), split.top())),
-            Some(info),
-        )
-    } else {
-        (column, None)
-    };
+    let left = Rect::from_min_size(rest.min, vec2(width, rest.height()));
     let split_v = Rect::from_min_size(
-        pos2(column.right(), rest.top()),
+        pos2(left.right(), rest.top()),
         vec2(SPLITTER, rest.height()),
     );
     let right = Rect::from_min_max(pos2(split_v.right(), rest.top()), rest.max);
@@ -469,10 +447,6 @@ pub fn show(
     }
 
     let keys_free = keys && !ui.ctx().memory(|m| m.focused().is_some());
-    if let Some(info) = info {
-        let mut child = pane_ui(ui, info, "info");
-        lv.info.show(&mut child, info);
-    }
     artists_pane(
         ui,
         left,
@@ -633,17 +607,6 @@ fn top_bar(
         }
         if crate::ui::icon_button(
             ui,
-            Icon::File,
-            settings.info_visible,
-            tr!("Track info (Alt+3)", "Сведения о треке (Alt+3)"),
-        )
-        .clicked()
-        {
-            settings.info_visible = !settings.info_visible;
-            *changed = true;
-        }
-        if crate::ui::icon_button(
-            ui,
             Icon::Contents,
             settings.playlist_visible,
             tr!("The playlist (Alt+E)", "Плейлист (Alt+E)"),
@@ -763,7 +726,7 @@ fn artists_pane(
         lv.focus = Pane::Artists;
     }
     let mut choose = resp.clicked.or(resp.double_clicked).or(resp.secondary);
-    match context_menu(resp.area.as_ref(), resp.secondary.is_some(), "artists") {
+    match context_menu(resp.area.as_ref(), resp.secondary.is_some(), "artists", false) {
         Some(MenuChoice::Play) => lv.play_shown = true,
         Some(MenuChoice::Enqueue) => actions.push(LibraryAction::Enqueue(view.tracks.clone())),
         Some(MenuChoice::ShowInFolder) => {
@@ -771,7 +734,7 @@ fn artists_pane(
                 show_folder_of(library, t);
             }
         }
-        None => {}
+        _ => {}
     }
     if keys_free
         && lv.focus == Pane::Artists
@@ -892,7 +855,7 @@ fn albums_table(
         library,
         view,
         menu_album,
-        context_menu(resp.area.as_ref(), resp.secondary.is_some(), "albums"),
+        context_menu(resp.area.as_ref(), resp.secondary.is_some(), "albums", false),
         actions,
     );
     if keys_free
@@ -949,7 +912,7 @@ fn album_menu(
                 show_folder_of(library, t);
             }
         }
-        None => {}
+        _ => {}
     }
 }
 
@@ -1206,7 +1169,7 @@ fn albums_grid(
         library,
         view,
         menu_album,
-        context_menu(Some(&out.inner), secondary, "albums_grid"),
+        context_menu(Some(&out.inner), secondary, "albums_grid", false),
         actions,
     );
     if focused {
@@ -1302,7 +1265,7 @@ fn tracks_pane(
     {
         table::click_select(&mut lv.selected, &mut lv.anchor, row, modifiers);
     }
-    match context_menu(resp.area.as_ref(), resp.secondary.is_some(), "tracks") {
+    match context_menu(resp.area.as_ref(), resp.secondary.is_some(), "tracks", true) {
         Some(MenuChoice::Play) if !lv.selected.is_empty() => {
             actions.push(play_selection(view, &lv.selected));
         }
@@ -1313,6 +1276,11 @@ fn tracks_pane(
         Some(MenuChoice::ShowInFolder) => {
             if let Some(&row) = lv.selected.first() {
                 show_folder_of(library, view.tracks[row]);
+            }
+        }
+        Some(MenuChoice::Info) => {
+            if let Some(t) = lv.selected_track() {
+                actions.push(LibraryAction::Info(t));
             }
         }
         _ => {}
@@ -1373,13 +1341,20 @@ enum MenuChoice {
     Play,
     Enqueue,
     ShowInFolder,
+    Info,
 }
 
 /// A pane's context menu, opened where the right button was let go on a
 /// row (`open`) or on the pane's free space (`area`); any click elsewhere
 /// closes it. The right button counts as clicked even if the mouse moved
-/// while it was held (`App::raw_input_hook`).
-fn context_menu(area: Option<&egui::Response>, open: bool, id: &str) -> Option<MenuChoice> {
+/// while it was held (`App::raw_input_hook`). `info`: with the file info
+/// item (a track's menu).
+fn context_menu(
+    area: Option<&egui::Response>,
+    open: bool,
+    id: &str,
+    info: bool,
+) -> Option<MenuChoice> {
     let area = area?;
     let open = (open || area.secondary_clicked()).then_some(egui::SetOpenCommand::Bool(true));
     let mut choice = None;
@@ -1406,6 +1381,14 @@ fn context_menu(area: Option<&egui::Response>, open: bool, id: &str) -> Option<M
                     choice = Some(item);
                     ui.close();
                 }
+            }
+            if info
+                && ui
+                    .button(tr!("File info… (Alt+3)", "Сведения о файле… (Alt+3)"))
+                    .clicked()
+            {
+                choice = Some(MenuChoice::Info);
+                ui.close();
             }
         });
     choice

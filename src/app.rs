@@ -58,6 +58,10 @@ pub struct App {
     playlist_view: crate::ui::playlist::PlaylistView,
     /// The playlist's revision and current entry last saved.
     saved_playlist: (u64, Option<usize>),
+    /// The file info window (Alt+3), and a file to open it for at the
+    /// end of the frame.
+    file_info: crate::ui::info::InfoView,
+    info_request: Option<PathBuf>,
 }
 
 impl App {
@@ -138,6 +142,8 @@ impl App {
             last_received: None,
             playlist_view: crate::ui::playlist::PlaylistView::default(),
             saved_playlist,
+            file_info: crate::ui::info::InfoView::default(),
+            info_request: None,
         }
     }
 
@@ -237,6 +243,11 @@ impl App {
                 let paths = self.paths_of(&tracks);
                 self.player.enqueue(paths);
             }
+            LibraryAction::Info(track) => {
+                if let Some(t) = self.library.tracks.get(track as usize) {
+                    self.info_request = Some(t.path.clone());
+                }
+            }
         }
     }
 
@@ -294,9 +305,9 @@ impl App {
         }
     }
 
-    /// The file the track info panel shows: the one selected last, in
-    /// the playlist when it was clicked last, else in the library's
-    /// tracks; else the one playing (or the playlist's current one).
+    /// The file Alt+3 shows: the one selected last, in the playlist when
+    /// it was clicked last, else in the library's tracks; else the one
+    /// playing (or the playlist's current one).
     fn info_path(&self) -> Option<PathBuf> {
         let entries = self.player.queue.entries();
         if self.playlist_view.focused
@@ -358,6 +369,13 @@ impl App {
                     self.place_changed = Some(Instant::now());
                 }
                 BarCmd::Seek(ms) => self.player.seek(ms),
+                BarCmd::Info => {
+                    self.info_request = self
+                        .player
+                        .playing_path()
+                        .or_else(|| self.player.queue.current_entry().map(|e| &e.path))
+                        .cloned();
+                }
             }
         }
     }
@@ -712,7 +730,11 @@ impl eframe::App for App {
         let ctx = root_ui.ctx().clone();
         self.uncloak(&ctx);
         // A modal takes the keys while it is open.
-        if !self.about.open {
+        let modal = self.about.open || self.file_info.open;
+        if !modal && ctx.input_mut(|i| i.consume_key(Modifiers::ALT, Key::Num3)) {
+            self.info_request = self.info_path();
+        }
+        if !modal {
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F1)) {
                 self.about.toggle();
             }
@@ -732,13 +754,9 @@ impl eframe::App for App {
                 self.settings.playlist_visible = !self.settings.playlist_visible;
                 self.place_changed = Some(Instant::now());
             }
-            if ctx.input_mut(|i| i.consume_key(Modifiers::ALT, Key::Num3)) {
-                self.settings.info_visible = !self.settings.info_visible;
-                self.place_changed = Some(Instant::now());
-            }
         }
         self.take_dropped(&ctx);
-        if !self.about.open {
+        if !modal {
             self.player_keys(&ctx);
         }
         if !frameless::is_maximized(&ctx) {
@@ -758,7 +776,7 @@ impl eframe::App for App {
             .rect;
         // The wheel anywhere over the title row and the player bar steps
         // the volume by 5, as over Winamp's main window.
-        if !self.about.open
+        if !modal
             && ctx
                 .pointer_hover_pos()
                 .is_some_and(|p| title_rect.union(bar_rect).contains(p))
@@ -782,6 +800,7 @@ impl eframe::App for App {
                         &mut self.playlist_view,
                         &mut self.player,
                         &self.library,
+                        !modal,
                     )
                 });
             let width = panel.response.rect.width();
@@ -804,6 +823,10 @@ impl eframe::App for App {
                             win::show_in_folder(&e.path);
                         }
                     }
+                    crate::ui::playlist::PlaylistAction::Info(i) => {
+                        self.info_request =
+                            self.player.queue.entries().get(i).map(|e| e.path.clone());
+                    }
                 }
             }
         }
@@ -815,10 +838,6 @@ impl eframe::App for App {
             if !self.settings.library_folders.is_empty() {
                 let scanning = self.scanning();
                 let playing = self.playing_track();
-                if self.settings.info_visible {
-                    let path = self.info_path();
-                    self.library_view.info.want(&ctx, path.as_deref());
-                }
                 let (actions, changed) = crate::ui::library::show(
                     ui,
                     &mut self.library_view,
@@ -826,7 +845,7 @@ impl eframe::App for App {
                     &mut self.settings,
                     scanning,
                     playing,
-                    !self.playlist_view.focused,
+                    !self.playlist_view.focused && !modal,
                 );
                 if changed {
                     self.place_changed = Some(Instant::now());
@@ -842,6 +861,10 @@ impl eframe::App for App {
             );
             crate::ui::start::show(ui, &mut self.start_icon, hint);
         });
+        if let Some(path) = self.info_request.take() {
+            self.file_info.open(&ctx, &path);
+        }
+        self.file_info.show(&ctx);
         self.about.show(&ctx, &mut self.updates);
     }
 

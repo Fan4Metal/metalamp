@@ -25,6 +25,8 @@ pub enum BarCmd {
     Mute,
     Volume(u8),
     Seek(u64),
+    /// The cover clicked: the file info window.
+    Info,
 }
 
 /// What the bar shows.
@@ -235,6 +237,17 @@ pub fn show(ui: &mut Ui, now: &NowPlaying<'_>) -> Vec<BarCmd> {
 
     // The cover and the names between.
     let cover = Rect::from_min_size(pos2(x + 14.0, cy - 21.0), vec2(42.0, 42.0));
+    if !now.title.is_empty() {
+        let resp = ui
+            .interact(cover, ui.id().with("cover"), Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        if resp
+            .on_hover_text(tr!("File info (Alt+3)", "Сведения о файле (Alt+3)"))
+            .clicked()
+        {
+            cmds.push(BarCmd::Info);
+        }
+    }
     match &now.cover {
         Some(t) => {
             painter.image(
