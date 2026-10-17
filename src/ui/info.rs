@@ -170,7 +170,14 @@ impl InfoView {
                     }
                     Some(Ok(d)) => {
                         close |= hero(ui, Some(d), &wanted, cover.as_ref());
-                        body(ui, d);
+                        // A long tag (lyrics, many fields) scrolls within
+                        // the screen instead of pushing the window off it.
+                        let room = ctx.content_rect().height() - 2.0 * 20.0 - COVER - 100.0;
+                        egui::ScrollArea::vertical()
+                            .id_salt("file_info_body")
+                            .max_height(room.max(120.0))
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| body(ui, d));
                     }
                 }
                 ui.add_space(16.0);
@@ -377,10 +384,27 @@ fn body(ui: &mut Ui, d: &Details) {
                 .chain([ItemKey::Comment])
                 .collect();
             for (key, text) in d.fields.iter().filter(|(k, _)| !shown.contains(k)) {
+                if is_hidden(*key) {
+                    continue;
+                }
                 field(ui, &field_name(*key), text, true);
                 ui.end_row();
             }
         });
+
+    // The lyrics apart: many lines, which the fields' grid would stretch.
+    let lyrics = value(d, &[ItemKey::UnsyncLyrics, ItemKey::Lyrics]);
+    if !lyrics.is_empty() {
+        ui.add_space(14.0);
+        section(ui, tr!("Lyrics", "Текст"), None);
+        egui::ScrollArea::vertical()
+            .id_salt("info_lyrics")
+            .max_height(180.0)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.add(egui::Label::new(RichText::new(lyrics).color(palette::TEXT)).wrap());
+            });
+    }
 
     ui.add_space(14.0);
     section(ui, tr!("File", "Файл"), None);
@@ -412,6 +436,15 @@ fn body(ui: &mut Ui, d: &Details) {
                 ui.end_row();
             }
         });
+}
+
+/// Fields not listed among the others: the lyrics have a section of
+/// their own, and TLEN (the length in milliseconds) is the chip already.
+fn is_hidden(key: ItemKey) -> bool {
+    matches!(
+        key,
+        ItemKey::UnsyncLyrics | ItemKey::Lyrics | ItemKey::Length
+    )
 }
 
 /// A section's heading: small capitals, a note on the right, a line
@@ -503,13 +536,31 @@ fn field_name(key: ItemKey) -> String {
         ItemKey::ReplayGainAlbumPeak => tr!("Album peak", "Пик альбома"),
         ItemKey::Lyricist => tr!("Lyricist", "Автор текста"),
         ItemKey::Conductor => tr!("Conductor", "Дирижёр"),
-        ItemKey::Lyrics => tr!("Lyrics", "Текст"),
+        ItemKey::Lyrics | ItemKey::UnsyncLyrics => tr!("Lyrics", "Текст"),
+        ItemKey::CommercialInformationUrl => tr!("Shop URL", "URL магазина"),
+        ItemKey::CopyrightUrl => tr!("Copyright URL", "URL копирайта"),
+        ItemKey::TrackArtistUrl => tr!("Artist URL", "URL исполнителя"),
+        ItemKey::PublisherUrl => tr!("Publisher URL", "URL издателя"),
+        ItemKey::AudioSourceUrl => tr!("Source URL", "URL источника"),
+        ItemKey::RadioStationUrl => tr!("Station URL", "URL станции"),
+        ItemKey::PaymentUrl => tr!("Payment URL", "URL оплаты"),
+        ItemKey::EncoderSettings => tr!("Encoder settings", "Настройки кодировщика"),
+        ItemKey::EncodingTime => tr!("Encoded on", "Дата кодирования"),
+        ItemKey::TaggingTime => tr!("Tagged on", "Дата тега"),
+        ItemKey::OriginalReleaseDate => tr!("Original release", "Первый выпуск"),
+        ItemKey::ReleaseDate => tr!("Released", "Выпущен"),
+        ItemKey::Isrc => "ISRC",
+        ItemKey::CatalogNumber => tr!("Catalogue number", "Номер в каталоге"),
+        ItemKey::InitialKey => tr!("Key", "Тональность"),
+        ItemKey::Mood => tr!("Mood", "Настроение"),
+        ItemKey::FlagCompilation => tr!("Compilation", "Сборник"),
         other => return words(&format!("{other:?}")),
     };
     name.to_owned()
 }
 
-/// `MusicBrainzTrackId` as `Music Brainz Track Id`.
+/// `MusicBrainzTrackId` as `MusicBrainz Track Id`: a word before each
+/// capital, except within the names of services.
 fn words(name: &str) -> String {
     let mut out = String::new();
     for (i, c) in name.chars().enumerate() {
@@ -518,7 +569,10 @@ fn words(name: &str) -> String {
         }
         out.push(c);
     }
-    out
+    out.replace("Music Brainz", "MusicBrainz")
+        .replace("Acoust Id", "AcoustID")
+        .replace(" Id", " ID")
+        .replace(" Url", " URL")
 }
 
 fn picture_name(kind: PictureType) -> String {
@@ -541,7 +595,8 @@ mod tests {
 
     #[test]
     fn names_in_words() {
-        assert_eq!(words("MusicBrainzTrackId"), "Music Brainz Track Id");
-        assert_eq!(words("Isrc"), "Isrc");
+        assert_eq!(words("MusicBrainzTrackId"), "MusicBrainz Track ID");
+        assert_eq!(words("AcoustIdFingerprint"), "AcoustID Fingerprint");
+        assert_eq!(words("Barcode"), "Barcode");
     }
 }
