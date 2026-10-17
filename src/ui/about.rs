@@ -65,7 +65,7 @@ impl AboutDialog {
                 // the README tagline; the Russian one is written by hand.
                 ui.label(tr!(
                     "A fast audio player with a media library for Windows.",
-                    "Краткое описание программы для Windows."
+                    "Быстрый аудиоплеер с медиабиблиотекой для Windows."
                 ));
                 ui.add_space(8.0);
                 if !AUTHORS.is_empty() {
