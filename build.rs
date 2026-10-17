@@ -1,11 +1,17 @@
 //! Generates the application icon and embeds it (plus version info) into the
 //! Windows executable, and passes the version shown in the UI to the program.
 
+#[path = "src/filetypes.rs"]
+mod filetypes;
 #[path = "src/icon.rs"]
 mod icon;
+#[path = "src/type_icon.rs"]
+mod type_icon;
 
 fn main() {
     println!("cargo:rerun-if-changed=src/icon.rs");
+    println!("cargo:rerun-if-changed=src/filetypes.rs");
+    println!("cargo:rerun-if-changed=src/type_icon.rs");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rustc-env=APP_VERSION={}", version());
 
@@ -24,10 +30,19 @@ fn main() {
         return;
     }
     let ico_path = out_dir.join("app.ico");
-    std::fs::write(&ico_path, icon::ico(&icon::ICO_SIZES)).expect("write app.ico");
+    std::fs::write(&ico_path, ico_with_png(&icon::rgba)).expect("write app.ico");
     #[cfg(windows)]
     {
         let mut res = winresource::WindowsResource::new();
+        // The icons of the registered file types, referenced by the
+        // registry as `"metalamp.exe",-<id>` (assoc.rs). The app icon keeps
+        // ID 1, the lowest, which Explorer shows for the executable.
+        for (i, t) in filetypes::FILE_TYPES.iter().enumerate() {
+            let path = out_dir.join(format!("type_{}.ico", t.id));
+            std::fs::write(&path, ico_with_png(&|s| type_icon::rgba(t, s)))
+                .expect("write a file type icon");
+            res.set_icon_with_id(path.to_str().unwrap(), &filetypes::icon_id(i).to_string());
+        }
         res.set_icon(ico_path.to_str().unwrap())
             .set(
                 "FileDescription",
@@ -95,4 +110,35 @@ fn git(args: &[&str]) -> Option<String> {
     let out = std::process::Command::new("git").args(args).output().ok()?;
     let text = String::from_utf8(out.stdout).ok()?.trim().to_owned();
     (out.status.success() && !text.is_empty()).then_some(text)
+}
+
+/// An `.ico` of every size in `icon::ICO_SIZES` drawn by `draw`, the 256 px
+/// layer as PNG (~50 KB instead of ~260 KB of BMP), as qview stores its.
+fn ico_with_png(draw: &dyn Fn(u32) -> Vec<u8>) -> Vec<u8> {
+    let layers: Vec<(u32, Vec<u8>)> = icon::ICO_SIZES
+        .iter()
+        .map(|&s| {
+            let px = draw(s);
+            let image = if s >= 256 {
+                png(&px, s)
+            } else {
+                icon::bmp(&px, s)
+            };
+            (s, image)
+        })
+        .collect();
+    icon::ico_of(&layers)
+}
+
+/// Straight RGBA pixels `px` of `size` x `size` as a PNG file.
+fn png(px: &[u8], size: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut encoder = png::Encoder::new(&mut out, size, size);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_compression(png::Compression::High);
+    let mut writer = encoder.write_header().expect("PNG header");
+    writer.write_image_data(px).expect("PNG data");
+    writer.finish().expect("PNG end");
+    out
 }

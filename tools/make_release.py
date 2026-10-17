@@ -33,8 +33,8 @@ BUNDLED_FILES = ["LICENSE", "README.md", "README.ru.md"]
 # Licences shipped with the portable archive (the documentation is on GitHub).
 PORTABLE_FILES = ["LICENSE"]
 # Must match the settings file the program looks for next to its exe
-# (settings::PORTABLE_FILE, or main::SETTINGS_FILE for eframe's app.ron).
-PORTABLE_SETTINGS = "app.ron"
+# (settings::PORTABLE_FILE).
+PORTABLE_SETTINGS = "metalamp.json"
 # -----------------------------------------------------------------------------
 
 ROOT = Path(__file__).resolve().parent.parent

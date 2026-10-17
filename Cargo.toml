@@ -47,6 +47,12 @@ windows-sys = { version = "0.61", features = [
     "Win32_Globalization",            # GetUserDefaultUILanguage (i18n)
     "Win32_Networking_WinHttp",       # the update check
     "Win32_System_Console",           # AttachConsole for the command line modes
+    "Win32_Graphics_Gdi",             # WNDCLASSW (one instance)
+    "Win32_Security",                 # CreateMutexW's attributes (one instance)
+    "Win32_System_DataExchange",      # WM_COPYDATA (one instance)
+    "Win32_System_LibraryLoader",     # GetModuleHandleW (one instance)
+    "Win32_System_Registry",          # file associations (assoc.rs)
+    "Win32_System_Threading",         # CreateMutexW (one instance)
     "Win32_UI_Shell",                 # ShellExecuteW
     "Win32_UI_WindowsAndMessaging",   # SW_SHOWNORMAL
 ] }
@@ -66,6 +72,10 @@ windows = { version = "0.62", features = [
 [target.'cfg(windows)'.build-dependencies]
 # Embeds the icon and the version information into the exe.
 winresource = "0.1"
+
+[build-dependencies]
+# The icons' 256 px layers as PNG.
+png = "0.18"
 
 [profile.release]
 opt-level = 3

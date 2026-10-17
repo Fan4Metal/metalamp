@@ -52,6 +52,9 @@ pub struct App {
     /// The right button is down (its press held back, `raw_input_hook`).
     right_held: bool,
     pub(crate) player: crate::player::Player,
+    /// When files last came from another start (Explorer starts one per
+    /// file of a selection: those within 300 ms make one playlist).
+    last_received: Option<Instant>,
     playlist_view: crate::ui::playlist::PlaylistView,
     /// The playlist's revision and current entry last saved.
     saved_playlist: (u64, Option<usize>),
@@ -63,6 +66,7 @@ impl App {
         settings: Settings,
         scan: Scan,
         wake: Wake,
+        files: Vec<PathBuf>,
     ) -> Self {
         let ctx = &cc.egui_ctx;
         let _ = wake.set(ctx.clone());
@@ -93,6 +97,7 @@ impl App {
             }
             let wake = ctx.clone();
             win::hook_window(hwnd, move || wake.request_repaint());
+            crate::instance::listen(ctx, hwnd);
         }
 
         let player = crate::player::Player::new(
@@ -104,6 +109,11 @@ impl App {
         );
         let mut player = player;
         let saved_playlist = load_playlist(&mut player, settings.playlist_current);
+        // Files on the command line (Explorer's Open) play at once.
+        let files = expand_playlists(files);
+        if !files.is_empty() {
+            player.play_paths(files, 0);
+        }
         let mut updates = Updates::new(settings.check_updates, settings.last_update_check);
         updates.start_if_due(ctx);
         let mut about = AboutDialog::default();
@@ -125,6 +135,7 @@ impl App {
             library_view: crate::ui::library::LibraryView::new(ctx),
             right_held: false,
             player,
+            last_received: None,
             playlist_view: crate::ui::playlist::PlaylistView::default(),
             saved_playlist,
         }
@@ -402,6 +413,29 @@ impl App {
         }
     }
 
+    /// Files a later start handed over: they replace the playlist and play,
+    /// except those coming within 300 ms of the last ones (the rest of an
+    /// Explorer selection), which are added.
+    fn take_handed_over(&mut self) {
+        let received = crate::instance::take();
+        let Some(&(_, first_at)) = received.first() else {
+            return;
+        };
+        let batch = self.last_received.is_some_and(|last| {
+            first_at.saturating_duration_since(last) < Duration::from_millis(300)
+        });
+        self.last_received = received.last().map(|&(_, at)| at);
+        let files = expand_playlists(received.into_iter().map(|(p, _)| p).collect());
+        if files.is_empty() {
+            return;
+        }
+        if batch {
+            self.player.enqueue(files);
+        } else {
+            self.player.play_paths(files, 0);
+        }
+    }
+
     /// Open files to play (Ctrl+O): they replace the playlist.
     fn open_files(&mut self, frame: &eframe::Frame) {
         let mut extensions: Vec<&str> = crate::filetypes::AUDIO_EXTENSIONS.to_vec();
@@ -640,6 +674,7 @@ impl eframe::App for App {
         self.poll_scan();
         self.library_view.covers.poll(ctx);
         self.take_hooked(ctx);
+        self.take_handed_over();
         self.remember_playlist(false);
         if self.player.poll().track {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
@@ -766,6 +801,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        crate::instance::closing();
         self.save_now();
     }
 }

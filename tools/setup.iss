@@ -38,16 +38,31 @@ LicenseFile=..\LICENSE
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+; Windows 10 1607 or later: Media Foundation's FLAC decoder came with it.
+MinVersion=10.0.14393
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 ; A running copy is closed (Restart Manager) before its exe is replaced.
 CloseApplications=yes
+; File associations change: Explorer is told to refresh its icons.
+ChangesAssociations=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 
+[CustomMessages]
+english.AssocGroup=File types:
+russian.AssocGroup=Типы файлов:
+english.AssocTask=Register MetalAMP for audio files and playlists (MP3, FLAC, M4A, AAC, WAV, WMA, M3U)
+russian.AssocTask=Зарегистрировать MetalAMP для аудиофайлов и плейлистов (MP3, FLAC, M4A, AAC, WAV, WMA, M3U)
+english.AssocStatus=Registering file types...
+russian.AssocStatus=Регистрация типов файлов...
+english.ChooseDefault=Choose MetalAMP as the default player (opens Windows Settings)
+russian.ChooseDefault=Выбрать MetalAMP проигрывателем по умолчанию (откроются параметры Windows)
+
 [Tasks]
+Name: "assoc"; Description: "{cm:AssocTask}"; GroupDescription: "{cm:AssocGroup}"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
@@ -61,17 +76,14 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
+; The file types are registered by the program itself (src\assoc.rs, under
+; HKCU): a ProgID with an icon for each format, "Open with" entries and
+; Default apps capabilities. Windows lets only the user choose the default
+; program, so the last page offers to open Settings for that.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--register"; StatusMsg: "{cm:AssocStatus}"; Flags: runhidden waituntilterminated; Tasks: assoc
+Filename: "ms-settings:defaultapps?registeredAppUser={#MyAppName}"; Description: "{cm:ChooseDefault}"; Flags: shellexec nowait postinstall skipifsilent unchecked; Tasks: assoc
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
 
-; Optional blocks, taken from the sibling projects when needed:
-; - Explorer context menu for folders and drives ([Registry] under
-;   HKCU\Software\Classes\{Directory,Drive}\shell\<Verb>, task "contextmenu"):
-;   disk_flashlight/tools/setup.iss.
-; - File associations through the registry (ProgID, OpenWithProgids,
-;   Capabilities, RegisteredApplications, a [Run] entry that opens
-;   ms-settings:defaultapps, ChangesAssociations=yes): metalmd/tools/setup.iss.
-;   qview registers them from the exe instead (qview --register).
-; - Asking a running copy to quit through its own --quit ([Code]
-;   PrepareToInstall and [UninstallRun]) and offering to delete the settings
-;   on uninstallation (CurUninstallStepChanged): qrec/tools/setup.iss.
-; - MinVersion=10.0.19041 when an API needs Windows 10 2004: qrec.
+[UninstallRun]
+; Removes everything --register wrote; nothing happens if it was not run.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--unregister"; RunOnceId: "UnregisterFileTypes"; Flags: runhidden waituntilterminated

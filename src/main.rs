@@ -9,6 +9,7 @@
 mod i18n;
 
 mod app;
+mod assoc;
 mod audio;
 mod bench;
 mod caption;
@@ -17,6 +18,7 @@ mod filetypes;
 mod format;
 mod frameless;
 mod icon;
+mod instance;
 mod library;
 mod palette;
 mod player;
@@ -26,6 +28,7 @@ mod ui;
 mod update;
 mod win;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// The display name, as people read it: the window title, About, the
@@ -49,6 +52,7 @@ fn main() -> eframe::Result {
 
     // The command line modes. `args_os`: `args` panics on an argument that
     // is not valid Unicode.
+    let mut files = Vec::new();
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
         match arg.to_str() {
@@ -67,6 +71,33 @@ fn main() -> eframe::Result {
                 println!("{APP_NAME} {VERSION}");
                 return Ok(());
             }
+            Some(flag @ ("--register" | "--unregister")) => {
+                // For the installer: register or unregister the file types,
+                // then exit; an error is shown (the installer runs it
+                // hidden). The types are named in the language of Windows.
+                i18n::set_lang(i18n::system_lang());
+                let result = if flag == "--register" {
+                    std::env::current_exe()
+                        .map_err(|e| e.to_string())
+                        .and_then(|exe| assoc::register(&exe))
+                } else {
+                    // Uninstalling this copy leaves another's registration
+                    // (a portable copy registered since) alone.
+                    match std::env::current_exe().map(|exe| assoc::status(&exe)) {
+                        Ok(assoc::Status::OtherCopy(other)) => {
+                            log::info!("the file types are another copy's ({other}): kept");
+                            Ok(())
+                        }
+                        _ => assoc::unregister(),
+                    }
+                };
+                if let Err(e) = &result {
+                    log::error!("{flag}: {e}");
+                    win::error_box(APP_NAME, e);
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
             Some("--bench") => {
                 win::attach_parent_console();
                 let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
@@ -75,13 +106,27 @@ fn main() -> eframe::Result {
             Some("-h" | "--help") => {
                 win::attach_parent_console();
                 println!("{APP_NAME} {VERSION}");
+                println!("metalamp [FILE...]");
+                println!("metalamp --version | --help | --export-icon FILE.ico");
                 println!(
-                    "metalamp [--version] [--help] [--export-icon FILE] [--bench scan FOLDER...]"
+                    "metalamp --register | --unregister   (the file types, for the installer)"
                 );
+                println!("metalamp --bench scan FOLDER... | --bench gapless FILE...");
                 return Ok(());
             }
-            _ => {}
+            _ => {
+                let path = normalize(&arg.to_string_lossy());
+                if !path.as_os_str().is_empty() {
+                    files.push(path);
+                }
+            }
         }
+    }
+
+    // A copy already running from this exe takes the files and comes
+    // forward; this one ends.
+    if instance::forward(&files) {
+        return Ok(());
     }
 
     let settings = settings::Settings::load();
@@ -115,8 +160,29 @@ fn main() -> eframe::Result {
     eframe::run_native(
         APP_ID,
         options,
-        Box::new(|cc| Ok(Box::new(app::App::new(cc, settings, scan, wake)))),
+        Box::new(|cc| Ok(Box::new(app::App::new(cc, settings, scan, wake, files)))),
     )
+}
+
+/// An argument as a path: Explorer passes a drive's root as `"C:\"`, which
+/// turns into `C:"`; the trailing quote is turned back into a backslash. A
+/// bare `C:` means the root, not the current directory of C. Relative paths
+/// become absolute (the running copy may have another current directory).
+/// metalmpv's.
+fn normalize(arg: &str) -> PathBuf {
+    let arg = match arg.strip_suffix('"') {
+        // A lone quote is not a drive's root (it became the current one).
+        Some(stripped) if stripped.trim_end_matches('\\').is_empty() => return PathBuf::new(),
+        Some(stripped) => format!("{}\\", stripped.trim_end_matches('\\')),
+        None => arg.to_string(),
+    };
+    let b = arg.as_bytes();
+    let path = if b.len() == 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+        PathBuf::from(format!("{arg}\\"))
+    } else {
+        PathBuf::from(arg)
+    };
+    std::path::absolute(&path).unwrap_or(path)
 }
 
 /// The icon of the window, from the embedded 64-pixel rendering.

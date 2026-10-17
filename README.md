@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="images/icon.png" width="128" height="128" alt="MetalAMP icon">
+  <img src="images/icon.png" width="128" height="128" alt="MetalAMP icon: an electric guitar over a lightning bolt">
 </p>
 
 <h1 align="center">MetalAMP</h1>
@@ -15,40 +15,88 @@
 
 <p align="center"><b>English</b> | <a href="README.ru.md">Русский</a></p>
 
-MetalAMP is an audio player for Windows built around a media library in the manner of Winamp's: the music folders are scanned once, and the artists, the albums with their covers and the tracks are then shown at once and filtered as a search is typed. Playback uses the decoders of Windows itself (Media Foundation) and the WASAPI audio output, so the program is a single executable without additional libraries.
+MetalAMP is an audio player for Windows built around a media library in the manner of Winamp's: the music folders are scanned once, and the artists, the albums with their covers and the tracks are then shown at once and filtered as a search is typed. Playback uses the decoders of Windows itself (Media Foundation) and the WASAPI audio output, so the program is a single executable without additional libraries, and albums meant to be heard without pauses play without gaps.
 
-![MetalAMP showing <what the screenshot shows>](images/screenshot.png)
+![MetalAMP: the artists on the left with Amorphis chosen, the covers of its albums, the tracks of Eclipse with the one playing in amber, the player bar on top and the playlist on the right](images/screenshot.png)
 
 *Screenshot of version 0.1.0.*
 
 ## Features
 
-- **Fast**: <a measured number>.
-- **<Feature>**: <one sentence> (see [Section](#section)).
-- **Light, dark or system theme.**
+- **A media library as Winamp's**: artists with their numbers of albums and tracks, a grid of album covers (or a table), the tracks; choosing an artist narrows the albums, an album the tracks (see [The library](#the-library)).
+- **Fast**: a library of 4942 tracks is shown from its index in about 12 ms at start-up, and a check of its folders that finds nothing changed takes about 26 ms; a search narrows every pane in under a millisecond.
+- **Gapless playback**: the next track is opened before the current one ends, and MP3 files are cut to their music by their LAME tags (see [Playback](#playback)).
+- **Formats of Windows**: MP3, AAC (M4A), FLAC, WMA and WAV, decoded by Media Foundation; M3U and M3U8 playlists.
+- **A playlist** beside the library, kept between runs.
+- **One window**: files opened from Explorer go to the window already open.
+- **File associations** with an icon for each type, offered by the installer.
 - **English or Russian interface**: it follows the language of Windows and can be changed in the About window (`F1`).
-- **Portable**: the [portable archive](#installation) keeps its settings next to the program.
+- **Portable**: the [portable archive](#installation) keeps its settings, the library index and the covers next to the program.
 - **Privacy**: no network access beyond the optional update check (see [Update check and privacy](#update-check-and-privacy)).
 
 ## Installation
 
 The installer and the portable archive are on the [Releases](https://github.com/Fan4Metal/metalamp/releases) page.
 
-The installer, `MetalAMP_<version>_Setup.exe`, needs no administrator rights: the program is placed in `%LOCALAPPDATA%\Programs\MetalAMP`. The installed program keeps its settings in `%APPDATA%\MetalAMP`.
+The installer, `MetalAMP_<version>_Setup.exe`, needs no administrator rights: the program is placed in `%LOCALAPPDATA%\Programs\MetalAMP`. It can register MetalAMP for audio files and playlists (MP3, FLAC, M4A, AAC, WAV, WMA, M3U), each type with its own icon; Windows lets only the user choose the default program, so the last page offers to open the Default apps settings. The installed program keeps its settings, the library index (`library.json`), the playlist (`playlist.m3u8`) and the cover thumbnails (`covers`) in `%APPDATA%\MetalAMP\config`.
 
-The portable archive, `MetalAMP_<version>_portable.zip`, holds the program in a `MetalAMP` folder and runs without installation. It also holds an empty `app.ron`. While that file is next to `metalamp.exe` and the folder is writable, the settings are kept in it, so the program can be carried on a removable drive. Without the file, the program keeps them in `%APPDATA%\MetalAMP`, as the installed program does. The About window shows where the settings are kept.
+The portable archive, `MetalAMP_<version>_portable.zip`, holds the program in a `MetalAMP` folder and runs without installation. It also holds an empty `metalamp.json`. While that file is next to `metalamp.exe` and the folder is writable, the settings are kept in it and the library index, the playlist and the covers beside it, so the program can be carried on a removable drive. Without the file, the program keeps them in `%APPDATA%\MetalAMP\config`, as the installed program does. The About window shows where the settings are kept.
 
-The executables are not code-signed, so Windows SmartScreen may warn about an unknown publisher on first launch.
+Windows 10 version 1607 or later is required (its FLAC decoder came with that version). The executables are not code-signed, so Windows SmartScreen may warn about an unknown publisher on first launch.
 
 ## Usage
 
-<The main sections of the program: tables of settings, lists of commands.>
+### The library
+
+On the first start the window offers to add a music folder: `Ctrl+Shift+O`, or a folder dropped on the window. The folders' button in the library bar lists the folders and removes one. The folders are read on a thread of their own: the tags of each file (title, artist, album artist, album, year, track and disc numbers, genre, length, bit rate) and, where a tag lacks something, what the folders say in the usual layout `Artist\(Year) Album\NN - Title.mp3`. The library fills as it is read; a first reading of 4942 MP3 files on a hard disk took about 50 seconds. The result is kept in an index, so later starts show the library at once and read again only the files whose size or time changed; `F5` or the bar's button reads the folders again.
+
+Albums are grouped as Winamp groups them: by album artist (else artist) and album title, whatever the years of their tracks; an album's year is the earliest of them. Artists are sorted by name with numbers in their order, each artist's albums by year.
+
+The panes:
+
+- **Artists**: the name, the number of albums and of tracks; **All** at the top shows the whole library.
+- **Albums**: covers with the title and the year (or the artist), or a table with the artist, title, year, number of tracks, genre, length and size; the bar's two buttons switch between them. A cover is the picture in the album's folder (`folder`, `cover`, `front`, `albumart`, JPEG or PNG), else the one in the first track's tag; thumbnails are kept in the `covers` folder.
+- **Tracks**: number, title, length, album, year, artist, genre and bit rate; the track playing is shown in amber.
+
+A click on a column's header sorts by that column, a second click reverses the order; a column's right edge is dragged to change its width, and the borders between the panes move. The search field (`Ctrl+F`) narrows all three panes as it is typed: every word must be found in the track's artist, album artist, album, title, genre or year; `Esc` clears it. The status line shows the number, the total length and the size of the tracks shown, and how long the search took.
+
+A double click or `Enter` plays: an artist plays its tracks, an album its tracks, a track the whole table from it on (as Winamp does). The right button opens a menu with **Play**, **Add to the playlist** and **Show in folder**.
+
+### Playback
+
+The player bar holds Previous, Play/Pause, Stop and Next, the cover and the names of the track playing, shuffle, repeat (off, the playlist, the track), the volume with a mute button, and the seek bar with the time played and the length. The mouse wheel over the volume changes it in steps of 5 %.
+
+Media Foundation, the media framework of Windows, decodes the files, and the WASAPI shared mode plays them on the default device; a change of the default device or a device unplugged is followed without stopping. The track after the current one is opened in advance, so tracks of one format follow each other without a pause. An MP3 encoder adds silence before the music and after it; MetalAMP reads how much from the file's LAME tag and leaves it out, so an album recorded without pauses plays as one piece.
+
+### The playlist
+
+The playlist on the right (`Alt+E` shows or hides it) lists "Artist – Title" with the length of each entry and the total at the bottom; its search field narrows the list. Entries are selected with `Ctrl` and `Shift`, dragged to another place, removed with `Delete`; a double click or `Enter` plays one. Files dropped on the window are added to the playlist; `Ctrl+O` opens files instead of it. M3U and M3U8 playlists open as their entries. The playlist is kept between runs as `playlist.m3u8`.
 
 ## Keyboard shortcuts
 
 | Key | Action |
 |---|---|
+| `Space`, `C` | Play / pause |
+| `X` | Play |
+| `V` | Stop |
+| `Ctrl+Right`, `B` | Next track |
+| `Ctrl+Left`, `Z` | Previous track (the start of the current one after its first 3 seconds) |
+| `Shift+Right` / `Shift+Left` | 5 seconds forward / back |
+| `Ctrl+Up` / `Ctrl+Down` | Volume up / down |
+| `M` | Mute |
+| `R` | Repeat: off, the playlist, the track |
+| `S` | Shuffle |
+| `Ctrl+F` | Search the library |
+| `Ctrl+O` | Open files |
+| `Ctrl+Shift+O` | Add a music folder |
+| `F5` | Read the library's folders again |
+| `Alt+E` | Show or hide the playlist |
+| Arrows, `Page Up`, `Page Down`, `Home`, `End` | Move in the pane clicked last |
+| `Enter` | Play the selection |
+| `Delete` | Remove from the playlist |
 | `F1` | About |
+
+The media keys of keyboards and headsets work while the window is in front.
 
 ## Update check and privacy
 
@@ -65,6 +113,8 @@ cargo test
 
 `build.py` first closes a `metalamp.exe` running from the project's `target` folder, because it would lock the file, then runs `cargo build --release`. When the program is not running, plain `cargo build --release` works as well. The executable links the C runtime statically (`.cargo/config.toml`), so it needs nothing beyond Windows itself.
 
+Two measurements are built in: `metalamp --bench scan <folder>` reads a folder as a first scan does and prints the times, and `metalamp --bench gapless <file.mp3>` compares what the decoder gives with the file's LAME tag.
+
 ## Installer and release
 
 The release script builds the executable, the installer and the portable archive. It needs [Inno Setup 6](https://jrsoftware.org/isinfo.php).
@@ -75,7 +125,7 @@ python tools/make_release.py --no-tests   # the same without cargo test
 python tools/make_release.py --install    # then a silent installation over the installed copy
 ```
 
-The script writes the files to `dist` and takes the version from `Cargo.toml`. The installer script is `tools/setup.iss`; `metalamp.exe --export-icon <file.ico>` writes the installer icon.
+The script writes the files to `dist` and takes the version from `Cargo.toml`. The installer script is `tools/setup.iss`; `metalamp.exe --export-icon <file.ico>` writes the installer icon, and `metalamp.exe --register` / `--unregister` register the file types for the current user (the installer runs them).
 
 Releases on GitHub are built by the **Release** workflow (`.github/workflows/release.yml`). After the version in `Cargo.toml` is updated and committed, pushing a matching tag publishes a release with the installer and the portable archive:
 
@@ -91,6 +141,12 @@ The workflow stops if the tag does not match the version in `Cargo.toml`. Runnin
 MetalAMP is built on the following open-source projects:
 
 - [egui / eframe](https://github.com/emilk/egui): the user interface and the window;
+- [lofty](https://github.com/Serial-ATA/lofty-rs): reading tags and audio properties;
+- [image](https://github.com/image-rs/image): decoding covers and writing their thumbnails;
+- [walkdir](https://github.com/BurntSushi/walkdir) and [rayon](https://github.com/rayon-rs/rayon): walking the folders and reading tags in parallel;
+- [serde](https://serde.rs) and [serde_json](https://github.com/serde-rs/json): the settings and the library index;
+- [windows-rs](https://github.com/microsoft/windows-rs): Media Foundation, WASAPI and the Win32 API;
+- [rfd](https://github.com/PolyMeilex/rfd): the file and folder dialogs;
 - [Inno Setup](https://jrsoftware.org/isinfo.php): the installer.
 
 ## License

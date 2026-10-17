@@ -1291,6 +1291,7 @@ dependencies = [
  "image",
  "lofty",
  "log",
+ "png",
  "raw-window-handle",
  "rayon",
  "rfd",
