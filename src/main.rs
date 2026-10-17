@@ -9,6 +9,7 @@
 mod i18n;
 
 mod app;
+mod audio;
 mod bench;
 mod caption;
 mod covers;
@@ -18,6 +19,8 @@ mod frameless;
 mod icon;
 mod library;
 mod palette;
+mod player;
+mod queue;
 mod settings;
 mod ui;
 mod update;

@@ -110,13 +110,11 @@ pub struct Library {
     pub artists: Vec<Artist>,
     pub totals: Totals,
     /// Each track's album.
-    #[allow(dead_code)] // the player bar's cover, next
     pub album_of: Vec<AlbumId>,
     /// Each track's words for the search: artist, album artist, album,
     /// title, genre and year in lower case.
     pub search: Vec<String>,
     /// Each track by its path.
-    #[allow(dead_code)] // the playlist, next
     pub by_path: HashMap<PathBuf, TrackId>,
 }
 

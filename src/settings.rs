@@ -6,6 +6,7 @@
 //! files of their own.
 
 use crate::i18n::LangChoice;
+use crate::queue::Repeat;
 use crate::ui::table::Sort;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -51,6 +52,11 @@ pub struct Settings {
     pub columns: HashMap<String, Vec<f32>>,
     /// Each table's sort, by the table's name; none: the library's order.
     pub sorts: HashMap<String, Sort>,
+    /// 0 to 100.
+    pub volume: u8,
+    pub mute: bool,
+    pub repeat: Repeat,
+    pub shuffle: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +80,10 @@ impl Default for Settings {
             tracks_height: 300.0,
             columns: HashMap::new(),
             sorts: HashMap::new(),
+            volume: 80,
+            mute: false,
+            repeat: Repeat::Off,
+            shuffle: false,
         }
     }
 }

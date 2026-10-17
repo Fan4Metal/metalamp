@@ -51,6 +51,7 @@ pub struct App {
     pub(crate) library_view: crate::ui::library::LibraryView,
     /// The right button is down (its press held back, `raw_input_hook`).
     right_held: bool,
+    pub(crate) player: crate::player::Player,
 }
 
 impl App {
@@ -91,6 +92,13 @@ impl App {
             win::hook_window(hwnd, move || wake.request_repaint());
         }
 
+        let player = crate::player::Player::new(
+            ctx,
+            settings.volume,
+            settings.mute,
+            settings.repeat,
+            settings.shuffle,
+        );
         let mut updates = Updates::new(settings.check_updates, settings.last_update_check);
         updates.start_if_due(ctx);
         let mut about = AboutDialog::default();
@@ -111,6 +119,7 @@ impl App {
             loaded: false,
             library_view: crate::ui::library::LibraryView::new(ctx),
             right_held: false,
+            player,
         }
     }
 
@@ -203,9 +212,186 @@ impl App {
                 }
             }
             LibraryAction::Play { tracks, start } => {
-                log::debug!("play {} tracks from {start}", tracks.len());
+                let paths = self.paths_of(&tracks);
+                self.player.play_paths(paths, start);
             }
-            LibraryAction::Enqueue(tracks) => log::debug!("enqueue {} tracks", tracks.len()),
+            LibraryAction::Enqueue(tracks) => {
+                let paths = self.paths_of(&tracks);
+                self.player.enqueue(paths);
+            }
+        }
+    }
+
+    fn paths_of(&self, tracks: &[crate::library::TrackId]) -> Vec<PathBuf> {
+        tracks
+            .iter()
+            .filter_map(|&t| self.library.tracks.get(t as usize))
+            .map(|t| t.path.clone())
+            .collect()
+    }
+
+    /// The library's track heard, if it is one.
+    fn playing_track(&self) -> Option<crate::library::TrackId> {
+        let path = self.player.playing_path()?;
+        self.library.by_path.get(path).copied()
+    }
+
+    /// The title and the second line of the player bar: the track heard,
+    /// else the playlist's current one; from the library, else the file's
+    /// name.
+    fn now_playing(&self) -> (String, String, Option<crate::library::TrackId>) {
+        let path = self
+            .player
+            .playing_path()
+            .or_else(|| self.player.queue.current_entry().map(|e| &e.path));
+        let Some(path) = path else {
+            return (String::new(), String::new(), None);
+        };
+        match self.library.by_path.get(path) {
+            Some(&id) => {
+                let t = &self.library.tracks[id as usize];
+                let artist = if t.artist.is_empty() {
+                    crate::library::unknown_artist().to_owned()
+                } else {
+                    t.artist.clone()
+                };
+                let mut second = artist;
+                if !t.album.is_empty() {
+                    second += &format!(" — {}", t.album);
+                    if t.year > 0 {
+                        second += &format!(" ({})", t.year);
+                    }
+                }
+                (t.title.clone(), second, Some(id))
+            }
+            None => (
+                path.file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                path.parent()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
+                None,
+            ),
+        }
+    }
+
+    fn player_bar(&mut self, ui: &mut egui::Ui) {
+        use crate::ui::player_bar::{self, BarCmd, NowPlaying};
+        let ctx = ui.ctx().clone();
+        let (title, artist, track) = self.now_playing();
+        let cover = track.and_then(|t| {
+            let album = &self.library.albums[self.library.album_of[t as usize] as usize];
+            self.library_view.covers.get(&ctx, &self.library, album)
+        });
+        let now = NowPlaying {
+            status: self.player.status,
+            title: &title,
+            artist: &artist,
+            position_ms: self.player.position_ms(),
+            duration_ms: self.player.duration_ms(),
+            volume: self.player.volume,
+            mute: self.player.mute,
+            shuffle: self.player.queue.shuffle(),
+            repeat: self.player.queue.repeat,
+            cover,
+        };
+        for cmd in player_bar::show(ui, &now) {
+            match cmd {
+                BarCmd::Previous => self.player.previous(),
+                BarCmd::PlayPause => self.player.toggle_pause(),
+                BarCmd::Stop => self.player.stop(),
+                BarCmd::Next => self.player.next(),
+                BarCmd::Shuffle => {
+                    let on = !self.player.queue.shuffle();
+                    self.player.set_shuffle(on);
+                    self.place_changed = Some(Instant::now());
+                }
+                BarCmd::Repeat => {
+                    let next = self.player.queue.repeat.next();
+                    self.player.set_repeat(next);
+                    self.place_changed = Some(Instant::now());
+                }
+                BarCmd::Mute => {
+                    self.player.toggle_mute();
+                    self.place_changed = Some(Instant::now());
+                }
+                BarCmd::Volume(v) => {
+                    self.player.set_volume(v);
+                    self.place_changed = Some(Instant::now());
+                }
+                BarCmd::Seek(ms) => self.player.seek(ms),
+            }
+        }
+    }
+
+    /// The player's keys, when no text field takes them: Space, Z X C V B
+    /// (Winamp's), Ctrl+arrows, Shift+arrows, M, R, S.
+    fn player_keys(&mut self, ctx: &egui::Context) {
+        if ctx.memory(|m| m.focused().is_some()) {
+            return;
+        }
+        let pressed = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_key(m, k));
+        if pressed(Modifiers::NONE, Key::Space) || pressed(Modifiers::NONE, Key::C) {
+            self.player.toggle_pause();
+        }
+        if pressed(Modifiers::NONE, Key::X) {
+            self.player.play();
+        }
+        if pressed(Modifiers::NONE, Key::V) {
+            self.player.stop();
+        }
+        if pressed(Modifiers::COMMAND, Key::ArrowRight) || pressed(Modifiers::NONE, Key::B) {
+            self.player.next();
+        }
+        if pressed(Modifiers::COMMAND, Key::ArrowLeft) || pressed(Modifiers::NONE, Key::Z) {
+            self.player.previous();
+        }
+        if pressed(Modifiers::SHIFT, Key::ArrowRight) {
+            self.player.seek_by(5);
+        }
+        if pressed(Modifiers::SHIFT, Key::ArrowLeft) {
+            self.player.seek_by(-5);
+        }
+        let mut volume = None;
+        if pressed(Modifiers::COMMAND, Key::ArrowUp) {
+            volume = Some(self.player.volume.saturating_add(5).min(100));
+        }
+        if pressed(Modifiers::COMMAND, Key::ArrowDown) {
+            volume = Some(self.player.volume.saturating_sub(5));
+        }
+        if let Some(v) = volume {
+            self.player.set_volume(v);
+            self.place_changed = Some(Instant::now());
+        }
+        if pressed(Modifiers::NONE, Key::M) {
+            self.player.toggle_mute();
+            self.place_changed = Some(Instant::now());
+        }
+        if pressed(Modifiers::NONE, Key::R) {
+            let next = self.player.queue.repeat.next();
+            self.player.set_repeat(next);
+            self.place_changed = Some(Instant::now());
+        }
+        if pressed(Modifiers::NONE, Key::S) {
+            let on = !self.player.queue.shuffle();
+            self.player.set_shuffle(on);
+            self.place_changed = Some(Instant::now());
+        }
+    }
+
+    /// The window's title: the track heard, as Winamp shows it.
+    fn window_title(&self) -> String {
+        let (title, _, track) = self.now_playing();
+        if self.player.status == crate::player::Status::Stopped || title.is_empty() {
+            return crate::APP_NAME.to_owned();
+        }
+        let artist = track
+            .map(|t| self.library.tracks[t as usize].artist.clone())
+            .filter(|a| !a.is_empty());
+        match artist {
+            Some(a) => format!("{a} – {title} — {}", crate::APP_NAME),
+            None => format!("{title} — {}", crate::APP_NAME),
         }
     }
 
@@ -280,6 +466,10 @@ impl App {
         self.settings.language = self.about.lang;
         self.settings.check_updates = self.updates.enabled;
         self.settings.last_update_check = self.updates.last_check;
+        self.settings.volume = self.player.volume;
+        self.settings.mute = self.player.mute;
+        self.settings.repeat = self.player.queue.repeat;
+        self.settings.shuffle = self.player.queue.shuffle();
     }
 
     fn save_now(&mut self) {
@@ -295,7 +485,25 @@ impl App {
             match hooked {
                 win::Hooked::EndSession | win::Hooked::Suspend => self.save_now(),
                 win::Hooked::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-                win::Hooked::Media { key, .. } => log::debug!("media key {key:?}"),
+                win::Hooked::Media { key, from_command } => {
+                    // With the window in front a press comes as the command
+                    // and then as the key: the key alone counts then.
+                    if from_command && ctx.input(|i| i.focused) {
+                        continue;
+                    }
+                    match key {
+                        win::MediaKey::PlayPause => self.player.toggle_pause(),
+                        win::MediaKey::Play => self.player.play(),
+                        win::MediaKey::Pause => {
+                            if self.player.status == crate::player::Status::Playing {
+                                self.player.toggle_pause();
+                            }
+                        }
+                        win::MediaKey::Stop => self.player.stop(),
+                        win::MediaKey::Next => self.player.next(),
+                        win::MediaKey::Previous => self.player.previous(),
+                    }
+                }
             }
         }
     }
@@ -305,7 +513,8 @@ impl App {
         let icon = crate::ui::app_icon(&ctx, 18.0, &mut self.title_icon);
         let update = self.updates.newer().map(str::to_owned);
         let maximized = frameless::is_maximized(&ctx);
-        match title::row(ui, crate::APP_NAME, maximized, &icon, update.as_deref()) {
+        let title = self.window_title();
+        match title::row(ui, &title, maximized, &icon, update.as_deref()) {
             Some(TitleCmd::Close) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Some(TitleCmd::Minimize) => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true))
@@ -361,6 +570,13 @@ impl eframe::App for App {
         self.poll_scan();
         self.library_view.covers.poll(ctx);
         self.take_hooked(ctx);
+        if self.player.poll().track {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
+        }
+        if self.player.status == crate::player::Status::Playing {
+            // The position moves on: a few repaints a second.
+            ctx.request_repaint_after(Duration::from_millis(250));
+        }
         self.remember_place();
     }
 
@@ -386,6 +602,9 @@ impl eframe::App for App {
             }
         }
         self.take_dropped(&ctx);
+        if !self.about.open {
+            self.player_keys(&ctx);
+        }
         if !frameless::is_maximized(&ctx) {
             frameless::resize_edges(root_ui);
         }
@@ -393,6 +612,10 @@ impl eframe::App for App {
             .exact_size(title::HEIGHT)
             .frame(egui::Frame::NONE)
             .show(root_ui, |ui| self.title_row(ui));
+        egui::Panel::top("player")
+            .exact_size(crate::ui::player_bar::HEIGHT)
+            .frame(egui::Frame::NONE)
+            .show(root_ui, |ui| self.player_bar(ui));
         egui::Panel::bottom("status")
             .exact_size(crate::ui::status::HEIGHT)
             .frame(egui::Frame::NONE.fill(palette::TITLE_BG))
@@ -400,12 +623,14 @@ impl eframe::App for App {
         egui::CentralPanel::no_frame().show(root_ui, |ui| {
             if !self.settings.library_folders.is_empty() {
                 let scanning = self.scanning();
+                let playing = self.playing_track();
                 let (actions, changed) = crate::ui::library::show(
                     ui,
                     &mut self.library_view,
                     &self.library,
                     &mut self.settings,
                     scanning,
+                    playing,
                 );
                 if changed {
                     self.place_changed = Some(Instant::now());

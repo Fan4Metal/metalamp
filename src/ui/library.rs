@@ -360,6 +360,7 @@ pub fn show(
     library: &Arc<Library>,
     settings: &mut Settings,
     scanning: bool,
+    playing: Option<TrackId>,
 ) -> (Vec<LibraryAction>, bool) {
     let mut actions = Vec::new();
     let mut changed = false;
@@ -473,6 +474,7 @@ pub fn show(
         library,
         settings,
         keys_free,
+        playing,
         &mut actions,
         &mut changed,
     );
@@ -1170,6 +1172,7 @@ fn tracks_pane(
     library: &Library,
     settings: &mut Settings,
     keys_free: bool,
+    playing: Option<TrackId>,
     actions: &mut Vec<LibraryAction>,
     changed: &mut bool,
 ) {
@@ -1223,7 +1226,7 @@ fn tracks_pane(
                 _ => format::bitrate(t.bitrate),
             }
         },
-        &|row| (selected.contains(&row), false),
+        &|row| (selected.contains(&row), Some(view.tracks[row]) == playing),
     );
     if resp.focused {
         lv.focus = Pane::Tracks;

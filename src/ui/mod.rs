@@ -7,6 +7,7 @@
 pub mod about;
 pub mod icons;
 pub mod library;
+pub mod player_bar;
 pub mod start;
 pub mod status;
 pub mod table;
@@ -122,4 +123,75 @@ pub fn close_cross(ui: &mut Ui) -> bool {
 /// the third click as a triple click instead of a second double click).
 pub fn double_clicked(response: &Response) -> bool {
     response.double_clicked() || response.triple_clicked()
+}
+
+/// How many whole wheel notches turned this frame, up or down (metalmpv's).
+/// A touchpad or a free-spinning wheel sends many small deltas: they add
+/// up, and the rest waits for the next frames (forgotten after a second of
+/// rest or when the direction changes), so one swipe is not dozens of
+/// notches.
+pub fn wheel_notches(ui: &Ui) -> i32 {
+    /// Points of a pixel-precise delta per notch.
+    const POINTS_PER_NOTCH: f32 = 50.0;
+    let (delta, time) = ui.input(|i| {
+        let delta: f32 = i
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                egui::Event::MouseWheel { unit, delta, .. } => Some(match unit {
+                    egui::MouseWheelUnit::Point => delta.y / POINTS_PER_NOTCH,
+                    egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page => delta.y,
+                }),
+                _ => None,
+            })
+            .sum();
+        (delta, i.time)
+    });
+    if delta == 0.0 || !delta.is_finite() {
+        return 0;
+    }
+    let id = egui::Id::new("wheel_notches");
+    ui.ctx()
+        .data_mut(|d| notches(d.get_temp_mut_or_default::<(f32, f64)>(id), delta, time))
+}
+
+/// `delta` notches (a fraction from a touchpad) at `time` added to `kept`
+/// (the rest and when it came); the whole notches taken out.
+fn notches(kept: &mut (f32, f64), delta: f32, time: f64) -> i32 {
+    let (rest, last) = kept;
+    if time - *last > 1.0 || (*rest != 0.0 && rest.signum() != delta.signum()) {
+        *rest = 0.0;
+    }
+    *last = time;
+    *rest += delta;
+    let whole = rest.trunc();
+    *rest -= whole;
+    whole as i32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::notches;
+
+    #[test]
+    fn small_wheel_deltas_add_up() {
+        let mut kept = (0.0, 0.0);
+        // A touchpad's swipe: a tenth of a notch at a time.
+        let turned: i32 = (0..25)
+            .map(|i| notches(&mut kept, 0.1, 1.0 + i as f64 * 0.01))
+            .sum();
+        assert_eq!(turned, 2);
+        // A whole notch of a wheel is one.
+        assert_eq!(notches(&mut (0.0, 0.0), 1.0, 0.0), 1);
+        assert_eq!(notches(&mut (0.0, 0.0), -3.0, 0.0), -3);
+    }
+
+    #[test]
+    fn the_rest_is_forgotten_after_a_pause_or_a_turn_back() {
+        let mut kept = (0.0, 0.0);
+        assert_eq!(notches(&mut kept, 0.8, 1.0), 0);
+        assert_eq!(notches(&mut kept, 0.8, 2.5), 0);
+        assert_eq!(notches(&mut kept, -0.5, 2.6), 0);
+        assert_eq!(notches(&mut kept, -0.6, 2.7), -1);
+    }
 }
