@@ -324,14 +324,28 @@ impl App {
             .cloned()
     }
 
+    /// The path of the track heard, else of the playlist's current one.
+    fn playing_or_current_path(&self) -> Option<PathBuf> {
+        self.player
+            .playing_path()
+            .or_else(|| self.player.queue.current_entry().map(|e| &e.path))
+            .cloned()
+    }
+
+    /// The cover of the track heard (else of the playlist's current one),
+    /// when it is in the library.
+    fn playing_cover(&mut self, ctx: &egui::Context) -> Option<egui::TextureHandle> {
+        let (_, _, track) = self.now_playing();
+        let t = track?;
+        let album = &self.library.albums[self.library.album_of[t as usize] as usize];
+        self.library_view.covers.get(ctx, &self.library, album)
+    }
+
     fn player_bar(&mut self, ui: &mut egui::Ui) {
         use crate::ui::player_bar::{self, BarCmd, NowPlaying};
         let ctx = ui.ctx().clone();
-        let (title, artist, track) = self.now_playing();
-        let cover = track.and_then(|t| {
-            let album = &self.library.albums[self.library.album_of[t as usize] as usize];
-            self.library_view.covers.get(&ctx, &self.library, album)
-        });
+        let (title, artist, _) = self.now_playing();
+        let cover = self.playing_cover(&ctx);
         let now = NowPlaying {
             status: self.player.status,
             title: &title,
@@ -369,13 +383,7 @@ impl App {
                     self.place_changed = Some(Instant::now());
                 }
                 BarCmd::Seek(ms) => self.player.seek(ms),
-                BarCmd::Info => {
-                    self.info_request = self
-                        .player
-                        .playing_path()
-                        .or_else(|| self.player.queue.current_entry().map(|e| &e.path))
-                        .cloned();
-                }
+                BarCmd::Info => self.info_request = self.playing_or_current_path(),
             }
         }
     }
@@ -789,6 +797,8 @@ impl eframe::App for App {
             }
         }
         if self.settings.playlist_visible && !self.settings.library_folders.is_empty() {
+            let cover = self.playing_cover(&ctx);
+            let shown_cover = self.settings.playlist_cover;
             let panel = egui::Panel::right("playlist")
                 .resizable(true)
                 .default_size(self.settings.playlist_width)
@@ -801,8 +811,13 @@ impl eframe::App for App {
                         &mut self.player,
                         &self.library,
                         !modal,
+                        cover.as_ref(),
+                        &mut self.settings.playlist_cover,
                     )
                 });
+            if self.settings.playlist_cover != shown_cover {
+                self.place_changed = Some(Instant::now());
+            }
             let width = panel.response.rect.width();
             if (width - self.settings.playlist_width).abs() > 0.5 {
                 self.settings.playlist_width = width;
@@ -826,6 +841,9 @@ impl eframe::App for App {
                     crate::ui::playlist::PlaylistAction::Info(i) => {
                         self.info_request =
                             self.player.queue.entries().get(i).map(|e| e.path.clone());
+                    }
+                    crate::ui::playlist::PlaylistAction::InfoPlaying => {
+                        self.info_request = self.playing_or_current_path();
                     }
                 }
             }

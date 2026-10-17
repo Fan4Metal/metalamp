@@ -2,11 +2,13 @@
 //! "N. Artist – Title" and the length of each, the entry playing in the
 //! accent, the total at the bottom. Rows are selected as in the tables
 //! (Ctrl, Shift), dragged to another place, removed with Delete; a double
-//! click or Enter plays one; the right button opens a menu.
+//! click or Enter plays one; the right button opens a menu. Under the
+//! list, the cover of the track playing (a button in the bar hides it; a
+//! click on it opens the file info).
 
 use std::collections::BTreeSet;
 
-use egui::{Align2, FontId, Key, Modifiers, Rect, Sense, Ui, pos2, vec2};
+use egui::{Align2, FontId, Key, Modifiers, Rect, Sense, TextureHandle, Ui, pos2, vec2};
 
 use crate::library::Library;
 use crate::player::Player;
@@ -16,6 +18,11 @@ use crate::{format, palette};
 
 const HEADER: f32 = 36.0;
 const FOOTER: f32 = 24.0;
+/// The cover under the list: its largest side, its margins, and the
+/// least the list keeps above it (else the cover is left out).
+const COVER_MAX: f32 = 360.0;
+const COVER_PAD: f32 = 10.0;
+const COVER_MIN_LIST: f32 = 4.0 * ROW_HEIGHT;
 
 #[derive(Default)]
 pub struct PlaylistView {
@@ -47,6 +54,8 @@ pub enum PlaylistAction {
     ShowInFolder(usize),
     /// Open the file info window for an entry.
     Info(usize),
+    /// The cover clicked: the file info window for the track playing.
+    InfoPlaying,
 }
 
 /// The line of an entry: "Artist – Title" from the library, else the
@@ -77,6 +86,8 @@ pub fn show(
     player: &mut Player,
     library: &Library,
     keys: bool,
+    cover: Option<&TextureHandle>,
+    show_cover: &mut bool,
 ) -> Vec<PlaylistAction> {
     let mut actions = Vec::new();
     if pv.revision != player.queue.revision {
@@ -110,6 +121,16 @@ pub fn show(
         player.stop();
         player.queue.clear();
     }
+    if crate::ui::icon_button(
+        &mut bar,
+        Icon::Image,
+        *show_cover,
+        tr!("The cover of the track playing", "Обложка играющего трека"),
+    )
+    .clicked()
+    {
+        *show_cover = !*show_cover;
+    }
     let edit = egui::TextEdit::singleline(&mut pv.query)
         .hint_text(tr!("Search in the playlist", "Поиск в плейлисте"))
         .desired_width(f32::INFINITY);
@@ -139,11 +160,69 @@ pub fn show(
         .and_then(|id| player.queue.index_of(id))
         .or(current);
 
+    // The cover under the list, when it is shown and the list keeps
+    // enough rows above it.
+    let side = (full.width() - 2.0 * COVER_PAD).min(COVER_MAX);
+    let cover_h = side + COVER_PAD;
+    let list_h = full.height() - HEADER - FOOTER;
+    let cover_rect = (*show_cover && side > 40.0 && list_h - cover_h >= COVER_MIN_LIST).then(|| {
+        Rect::from_center_size(
+            pos2(full.center().x, full.bottom() - FOOTER - cover_h / 2.0),
+            vec2(side, side),
+        )
+    });
     let body = Rect::from_min_max(
         pos2(full.left(), header.bottom()),
-        pos2(full.right(), full.bottom() - FOOTER),
+        pos2(
+            full.right(),
+            full.bottom() - FOOTER - cover_rect.map_or(0.0, |_| cover_h + COVER_PAD),
+        ),
     );
     painter.rect_filled(body, 0.0, palette::LIST_BG);
+    if let Some(r) = cover_rect {
+        match cover {
+            Some(t) => {
+                let [w, h] = t.size();
+                let scale = side / w.max(h) as f32;
+                let fit = Rect::from_center_size(r.center(), vec2(w as f32 * scale, h as f32 * scale));
+                egui::Image::new(egui::load::SizedTexture::new(t.id(), fit.size()))
+                    .corner_radius(6.0)
+                    .paint_at(ui, fit);
+            }
+            None => {
+                painter.rect_filled(r, 6.0, palette::CARD_BG);
+                icons::paint(
+                    &painter,
+                    Icon::File,
+                    r.center(),
+                    side * 0.25,
+                    palette::LINE,
+                    palette::CARD_BG,
+                );
+            }
+        }
+        let resp = ui.interact(r, egui::Id::new("playlist_cover"), Sense::click());
+        if cover.is_some() {
+            let resp = resp
+                .clone()
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(tr!("File info (Alt+3)", "Сведения о файле (Alt+3)"));
+            if resp.clicked() {
+                actions.push(PlaylistAction::InfoPlaying);
+            }
+        }
+        egui::Popup::context_menu(&resp)
+            .id(egui::Id::new("playlist_cover_menu"))
+            .show(|ui| {
+                if ui
+                    .button(tr!("Hide the cover", "Скрыть обложку"))
+                    .clicked()
+                {
+                    *show_cover = false;
+                    ui.close();
+                }
+            });
+    }
     let mut child = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(body)

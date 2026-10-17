@@ -75,7 +75,7 @@ Media Foundation, the media framework of Windows, decodes the files, and the WAS
 
 ### The playlist
 
-The playlist on the right (`Alt+E` shows or hides it) lists "Artist – Title" with the length of each entry and the total at the bottom; its search field narrows the list. Entries are selected with `Ctrl` and `Shift`, dragged to another place, removed with `Delete`; a double click or `Enter` plays one. Files dropped on the window are added to the playlist; `Ctrl+O` opens files instead of it. M3U and M3U8 playlists open as their entries. The playlist is kept between runs as `playlist.m3u8`.
+The playlist on the right (`Alt+E` shows or hides it) lists "Artist – Title" with the length of each entry and the total at the bottom; its search field narrows the list. Entries are selected with `Ctrl` and `Shift`, dragged to another place, removed with `Delete`; a double click or `Enter` plays one. Under the list the cover of the track playing is shown, as large as the panel allows; the picture button in the playlist's bar hides it, and a click on it opens the file info. Files dropped on the window are added to the playlist; `Ctrl+O` opens files instead of it. M3U and M3U8 playlists open as their entries. The playlist is kept between runs as `playlist.m3u8`.
 
 ## Keyboard shortcuts
 

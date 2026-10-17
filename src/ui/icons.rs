@@ -114,6 +114,8 @@ pub enum Icon {
     RepeatOne,
     /// A circular arrow: scan or load again.
     Refresh,
+    /// A picture: a frame with a sun and hills (the cover's toggle).
+    Image,
 }
 
 impl Icon {
@@ -173,6 +175,7 @@ impl Icon {
         Icon::Repeat,
         Icon::RepeatOne,
         Icon::Refresh,
+        Icon::Image,
     ];
 }
 
@@ -268,6 +271,17 @@ pub fn paint(painter: &Painter, icon: Icon, c: Pos2, size: f32, color: Color32, 
                     Stroke::NONE,
                 ));
             }
+        }
+        Icon::Image => {
+            painter.rect_stroke(rect(-6.0, -5.0, 12.0, 10.0), 1.5 * k, line, StrokeKind::Middle);
+            painter.circle_filled(p(-2.6, -2.0), 1.25 * k, color);
+            painter.add(polyline(&[
+                (-5.3, 4.3),
+                (-1.8, 0.6),
+                (0.4, 2.9),
+                (2.3, 0.9),
+                (5.3, 4.3),
+            ]));
         }
         Icon::Info => {
             painter.circle_stroke(c, 6.0 * k, line);
