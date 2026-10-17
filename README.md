@@ -31,7 +31,7 @@ MetalAMP is an audio player for Windows built around a media library in the mann
 - **File info** as Winamp's: every field of a track's tag, its cover and its audio properties, in a window opened by a click on the player's cover or `I` (see [File info](#file-info)).
 - **One window**: files opened from Explorer go to the window already open.
 - **File associations** with an icon for each type, offered by the installer.
-- **English or Russian interface**: it follows the language of Windows and can be changed in the About window (`F1`).
+- **English or Russian interface**: it follows the language of Windows and can be changed in the About window (`F1`, or a click on the icon in the title row).
 - **Portable**: the [portable archive](#installation) keeps its settings, the library index and the covers next to the program.
 - **Privacy**: no network access beyond the optional update check (see [Update check and privacy](#update-check-and-privacy)).
 
@@ -100,13 +100,13 @@ The playlist on the right (`Alt+E` shows or hides it) lists "Artist – Title" w
 | Arrows, `Page Up`, `Page Down`, `Home`, `End` | Move in the pane clicked last |
 | `Enter` | Play the selection |
 | `Delete` | Remove from the playlist |
-| `F1` | About |
+| `F1` | About (also a click on the icon in the title row) |
 
 The media keys of keyboards and headsets work while the window is in front.
 
 ## Update check and privacy
 
-The update check is optional and off by default. With **Check for updates at start-up (once a day)** enabled in the About window, the program asks the GitHub Releases API (`api.github.com`) for the latest release at most once a day; **Check now** in the same window asks at once. The request carries nothing but the program version in its `User-Agent` header, and nothing is downloaded or installed: when a newer release exists, a button with its version appears beside the About button and opens the release page in the browser. Otherwise the program does not access the network.
+The update check is optional and off by default. With **Check for updates at start-up (once a day)** enabled in the About window, the program asks the GitHub Releases API (`api.github.com`) for the latest release at most once a day; **Check now** in the same window asks at once. The request carries nothing but the program version in its `User-Agent` header, and nothing is downloaded or installed: when a newer release exists, a button with its version appears in the title row and opens the release page in the browser. Otherwise the program does not access the network.
 
 ## Building
 

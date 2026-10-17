@@ -62,18 +62,9 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, selected: bool, tip: &str) -> Respon
     response
 }
 
-/// Opens the About window: an "i" in a circle.
-pub fn about_button(ui: &mut Ui) -> Response {
-    let tip = tr!(
-        format!("About {} (F1)", crate::APP_NAME),
-        format!("О программе {} (F1)", crate::APP_NAME)
-    );
-    icon_button(ui, Icon::Info, false, &tip)
-}
-
 /// A newer release: its version with a download arrow in the link colour;
-/// a click opens its release page. Shown right of About (or at the
-/// toolbar's right end) only while `Updates::newer` is `Some`.
+/// a click opens its release page. Shown in the title row, before the
+/// window's buttons, only while `Updates::newer` is `Some`.
 pub fn update_button(ui: &mut Ui, tag: &str) -> Response {
     let version = crate::update::version_of(tag);
     let id = ui.id().with("update_icon");

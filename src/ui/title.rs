@@ -1,7 +1,9 @@
 //! The title row of the frameless window (metalmpv's `ui/title.rs`): the
-//! icon and the title on the left, About and a newer release's button,
-//! then minimise, maximise and close on the right. Its free area drags the
-//! window; a double click maximises it or brings it back.
+//! icon (a click: About, as F1) and the title on the left, a newer
+//! release's button, then minimise, maximise and close on the right. Its
+//! free area drags the window; a double click maximises it or brings it
+//! back. The family's "i" button is left out: the row is bare, as
+//! Winamp's.
 
 use egui::{Align2, FontId, Rect, Sense, TextureHandle, Ui, pos2, vec2};
 
@@ -23,7 +25,7 @@ pub enum TitleCmd {
 }
 
 /// `update` is the tag of a newer release, shown as a button left of
-/// About.
+/// the window's own.
 pub fn row(
     ui: &mut Ui,
     title: &str,
@@ -41,12 +43,26 @@ pub fn row(
     }
     let icon_rect =
         Rect::from_center_size(pos2(rect.left() + 18.0, rect.center().y), vec2(18.0, 18.0));
+    let icon_resp = ui.interact(icon_rect.expand(5.0), ui.id().with("app_icon"), Sense::click());
+    if icon_resp.hovered() {
+        ui.painter()
+            .rect_filled(icon_rect.expand(5.0), 4.0, palette::HOVER);
+    }
     ui.painter().image(
         icon.id(),
         icon_rect,
         Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
         egui::Color32::WHITE,
     );
+    if icon_resp
+        .on_hover_text(tr!(
+            format!("About {} (F1)", crate::APP_NAME),
+            format!("О программе {} (F1)", crate::APP_NAME)
+        ))
+        .clicked()
+    {
+        cmd = Some(TitleCmd::About);
+    }
 
     let buttons = [
         (TitleCmd::Close, Icon::Close, tr!("Close", "Закрыть")),
@@ -101,25 +117,22 @@ pub fn row(
         }
     }
 
-    // About and the update button, right to left before the window's own.
-    let r = Rect::from_min_max(
-        pos2(right - 200.0, rect.top()),
-        pos2(right - 6.0, rect.bottom()),
-    );
-    let mut child = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(r)
-            .layout(egui::Layout::right_to_left(egui::Align::Center)),
-    );
-    if super::about_button(&mut child).clicked() {
-        cmd = Some(TitleCmd::About);
+    // The update button, if any, before the window's own.
+    if let Some(tag) = update {
+        let r = Rect::from_min_max(
+            pos2(right - 200.0, rect.top()),
+            pos2(right - 6.0, rect.bottom()),
+        );
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(r)
+                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        );
+        if super::update_button(&mut child, tag).clicked() {
+            crate::win::shell_open(crate::update::release_url(tag));
+        }
+        right = child.min_rect().left() - 8.0;
     }
-    if let Some(tag) = update
-        && super::update_button(&mut child, tag).clicked()
-    {
-        crate::win::shell_open(crate::update::release_url(tag));
-    }
-    right = child.min_rect().left() - 8.0;
 
     // The title, left after the icon and cut to the room before the
     // buttons.
