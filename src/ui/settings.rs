@@ -621,9 +621,11 @@ fn sound(ui: &mut Ui, settings: &mut Settings, devices: &[Device], naming: &mut 
                             |d| d.name.clone(),
                         )
                 };
-                let chars = ((CONTROL - 30.0) / 7.5) as usize;
+                // Cut by its width: Cyrillic is wider than a count of
+                // letters allowed for.
                 egui::ComboBox::from_id_salt("settings_device")
-                    .selected_text(shorten(&name, chars))
+                    .selected_text(name)
+                    .truncate()
                     .width(CONTROL - 10.0)
                     .show_ui(ui, |ui| {
                         if ui
@@ -1399,16 +1401,6 @@ fn colour_wheel(painter: &egui::Painter, centre: egui::Pos2, radius: f32) {
     }
 }
 
-/// `text` cut to `chars` with an ellipsis.
-fn shorten(text: &str, chars: usize) -> String {
-    if text.chars().count() <= chars {
-        return text.to_owned();
-    }
-    let mut s: String = text.chars().take(chars.saturating_sub(1)).collect();
-    s.push('…');
-    s
-}
-
 fn updates_page(ui: &mut Ui, updates: &mut Updates) {
     section(
         ui,
@@ -1520,15 +1512,4 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     settings.output_device_name = d.output_device_name;
     settings.dsp = d.dsp;
     updates.enabled = d.check_updates;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn shortens_with_an_ellipsis() {
-        assert_eq!(shorten("Speakers", 10), "Speakers");
-        assert_eq!(shorten("Speakers (Realtek)", 10), "Speakers …");
-    }
 }
