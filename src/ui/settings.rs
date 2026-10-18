@@ -135,6 +135,8 @@ impl SettingsDialog {
         }
         let fresh = std::mem::take(&mut self.fresh);
         let before = settings.clone();
+        // Kept by the update check, saved with the settings.
+        let checking = updates.enabled;
         let mut close = false;
         let modal = egui::Modal::new(egui::Id::new("settings"))
             .frame(
@@ -253,7 +255,7 @@ impl SettingsDialog {
         changed.device = settings.output_device != before.output_device;
         changed.dsp = settings.dsp != before.dsp;
         changed.look = settings.look() != before.look();
-        changed.any = *settings != before;
+        changed.any = *settings != before || updates.enabled != checking;
         changed
     }
 
