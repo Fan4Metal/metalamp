@@ -30,6 +30,10 @@ pub struct App {
     /// The player bar's visualization and the samples it is fed.
     visual: crate::ui::visual::Visualizer,
     heard: Vec<f32>,
+    /// The title row and the player bar, as the frame before laid them
+    /// out: with the pointer there the arrows seek (the keys are read
+    /// before the panels are laid out).
+    player_area: egui::Rect,
     about: AboutDialog,
     updates: Updates,
     /// The window's handle; `None` off Windows.
@@ -145,6 +149,7 @@ impl App {
             settings_dialog: SettingsDialog::from_env(),
             visual: crate::ui::visual::Visualizer::new(),
             heard: Vec::new(),
+            player_area: egui::Rect::NOTHING,
             about,
             updates,
             hwnd,
@@ -448,8 +453,9 @@ impl App {
 
     /// The player's keys, when no text field takes them: Space, Z X C V B
     /// (Winamp's), Ctrl+arrows, Shift+arrows, M, R, S; the letters not
-    /// while `letters` (they go to an artist).
-    fn player_keys(&mut self, ctx: &egui::Context, letters: bool) {
+    /// while `letters` (they go to an artist); Left and Right seek while
+    /// `over_player` (else they move in the library's panes).
+    fn player_keys(&mut self, ctx: &egui::Context, letters: bool, over_player: bool) {
         if ctx.memory(|m| m.focused().is_some()) {
             return;
         }
@@ -477,6 +483,14 @@ impl App {
         }
         if pressed(Modifiers::SHIFT, Key::ArrowLeft) {
             self.player.seek_by(-5);
+        }
+        if over_player {
+            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowRight)) {
+                self.player.seek_by(5);
+            }
+            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowLeft)) {
+                self.player.seek_by(-5);
+            }
         }
         let mut volume = None;
         if pressed(Modifiers::COMMAND, Key::ArrowUp) {
@@ -948,7 +962,10 @@ impl eframe::App for App {
         }
         self.take_dropped(&ctx);
         if !modal {
-            self.player_keys(&ctx, letters);
+            let over_player = ctx
+                .pointer_hover_pos()
+                .is_some_and(|p| self.player_area.contains(p));
+            self.player_keys(&ctx, letters, over_player);
         }
         if !frameless::is_maximized(&ctx) {
             frameless::resize_edges(root_ui);
@@ -965,6 +982,7 @@ impl eframe::App for App {
             .show(root_ui, |ui| self.player_bar(ui))
             .response
             .rect;
+        self.player_area = title_rect.union(bar_rect);
         // The wheel anywhere over the title row and the player bar steps
         // the volume by 5, as over Winamp's main window.
         if !modal
