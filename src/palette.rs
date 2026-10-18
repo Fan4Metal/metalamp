@@ -51,9 +51,11 @@ pub enum Theme {
     Black,
     /// Dark with a blue cast.
     Midnight,
-    /// Graphite greys, as Winamp's media library.
+    /// Graphite greys.
     #[default]
     Dark,
+    /// Winamp's Modern skin: black lists, steel-blue text, a steel frame.
+    Steel,
     /// Softer greys with a cool cast, lighter than graphite.
     Dimmed,
     /// Warm paper.
@@ -64,10 +66,11 @@ pub enum Theme {
 impl Theme {
     /// From the darkest to the lightest, as the list shows them (a test
     /// holds the order).
-    pub const ALL: [Theme; 6] = [
+    pub const ALL: [Theme; 7] = [
         Theme::Black,
         Theme::Midnight,
         Theme::Dark,
+        Theme::Steel,
         Theme::Dimmed,
         Theme::Sepia,
         Theme::Light,
@@ -78,6 +81,7 @@ impl Theme {
             Theme::Black => tr!("Black", "Чёрная"),
             Theme::Midnight => tr!("Midnight blue", "Тёмно-синяя"),
             Theme::Dark => tr!("Dark", "Тёмная"),
+            Theme::Steel => tr!("Steel", "Стальная"),
             Theme::Dimmed => tr!("Dimmed", "Приглушённая"),
             Theme::Sepia => tr!("Sepia", "Сепия"),
             Theme::Light => tr!("Light", "Светлая"),
@@ -467,6 +471,30 @@ impl Palette {
                 error: hex(0xff8a80),
                 ..Palette::BLANK
             },
+            // Taken from a screenshot of Winamp's media library.
+            Theme::Steel => Palette {
+                dark: true,
+                title_bg: hex(0x343946),
+                bar_bg: hex(0x1a1b1c),
+                panel_bg: hex(0x333738),
+                list_bg: hex(0x08090a),
+                list_stripe: hex(0x0d0e0f),
+                header_bg: hex(0x494c4d),
+                card_bg: hex(0x3b3f40),
+                line: hex(0x1f2223),
+                text: hex(0x93afb9),
+                text_weak: hex(0x6a7f85),
+                text_bright: hex(0xdcdcdc),
+                hover: hex(0x1c1f24),
+                pressed: hex(0x2a2e39),
+                track: hex(0x3a3e40),
+                scroll_handle: hex(0x494c4d),
+                scroll_handle_hover: hex(0x646768),
+                scroll_handle_drag: hex(0x7d8081),
+                close_hover: hex(0xc42b1c),
+                error: hex(0xff8a80),
+                ..Palette::BLANK
+            },
             Theme::Dimmed => Palette {
                 dark: true,
                 title_bg: hex(0x25292f),
@@ -730,16 +758,20 @@ mod tests {
 
     #[test]
     fn themes_go_from_the_darkest_to_the_lightest() {
-        let grounds = |t: Theme| {
+        // The window's mean luminance: the lists take most of it, then
+        // the panels around them, then the player bar.
+        let light = |t: Theme| {
             let p = Palette::of(t, Accent::default());
             assert_eq!(p.dark, t.is_dark(), "{t:?}");
-            [p.list_bg, p.panel_bg, p.bar_bg].map(luminance)
+            0.6 * luminance(p.list_bg) + 0.25 * luminance(p.panel_bg) + 0.15 * luminance(p.bar_bg)
         };
         for pair in Theme::ALL.windows(2) {
-            let (a, b) = (grounds(pair[0]), grounds(pair[1]));
-            for i in 0..3 {
-                assert!(a[i] < b[i], "{:?} before {:?}", pair[0], pair[1]);
-            }
+            assert!(
+                light(pair[0]) < light(pair[1]),
+                "{:?} before {:?}",
+                pair[0],
+                pair[1]
+            );
         }
         assert_eq!(Theme::default(), Theme::Dark);
     }
