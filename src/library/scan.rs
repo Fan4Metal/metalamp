@@ -131,6 +131,12 @@ fn run(
         return;
     }
     if folders.is_empty() {
+        // The index read and no folder to look at: done.
+        send(ScanMsg::Done(Scanned {
+            library: previous.unwrap_or_default(),
+            read: 0,
+            took: start.elapsed(),
+        }));
         return;
     }
     let started = Instant::now();
