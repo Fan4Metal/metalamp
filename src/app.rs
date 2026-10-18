@@ -217,11 +217,22 @@ impl App {
     /// Scan the library's folders again (Ctrl+R, a folder added or removed),
     /// keeping the tags of unchanged files. A scan under way is dropped.
     pub(crate) fn rescan(&mut self) {
+        self.start_scan(false);
+    }
+
+    /// Every file's tags read again (the folders' menu): a tagger may
+    /// change a tag and keep the file's size and time.
+    fn read_all(&mut self) {
+        self.start_scan(true);
+    }
+
+    fn start_scan(&mut self, read_all: bool) {
         self.scan_progress = None;
         self.scan = Some(Scan::start(
             self.settings.library_folders.clone(),
             Some(Arc::clone(&self.library)),
             false,
+            read_all,
             Arc::clone(&self.wake),
         ));
     }
@@ -262,6 +273,7 @@ impl App {
         use crate::ui::library::LibraryAction;
         match action {
             LibraryAction::Rescan => self.rescan(),
+            LibraryAction::ReadAll => self.read_all(),
             LibraryAction::AddFolder => self.pick_folder(frame),
             LibraryAction::RemoveFolder(i) => {
                 if i < self.settings.library_folders.len() {

@@ -52,6 +52,8 @@ pub enum LibraryAction {
     /// Add `tracks` to the playlist's end.
     Enqueue(Vec<TrackId>),
     Rescan,
+    /// Read every file's tags again, changed or not.
+    ReadAll,
     AddFolder,
     RemoveFolder(usize),
     /// Open the file info window for a track.
@@ -731,6 +733,18 @@ fn top_bar(
                 .clicked()
             {
                 actions.push(LibraryAction::AddFolder);
+                ui.close();
+            }
+            if !settings.library_folders.is_empty()
+                && ui
+                    .button(tr!("Read all the tags again", "Перечитать все теги"))
+                    .on_hover_text(tr!(
+                        "Every file, also those whose size and time did not change (a tagger that keeps the files' time)",
+                        "Все файлы, и те, у которых не изменились размер и время (теггер, сохраняющий время файлов)"
+                    ))
+                    .clicked()
+            {
+                actions.push(LibraryAction::ReadAll);
                 ui.close();
             }
         });

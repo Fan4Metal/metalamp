@@ -57,20 +57,28 @@ pub type Wake = Arc<OnceLock<egui::Context>>;
 
 impl Scan {
     /// Loads the index when `load_index`, then scans `folders` (if any),
-    /// taking unchanged files from what was loaded or from `previous`.
+    /// taking unchanged files from what was loaded or from `previous`, or,
+    /// `read_all`, reading every file again (`previous` shown meanwhile).
     pub fn start(
         folders: Vec<PathBuf>,
         previous: Option<Arc<Library>>,
         load_index: bool,
+        read_all: bool,
         wake: Wake,
     ) -> Scan {
         let cancel = Arc::new(AtomicBool::new(false));
         let (tx, rx) = channel();
         let stop = Arc::clone(&cancel);
-        let number = index::ask();
+        let asked = Asked {
+            folders,
+            previous,
+            load_index,
+            read_all,
+            number: index::ask(),
+        };
         let spawned = std::thread::Builder::new()
             .name("scan".into())
-            .spawn(move || run(folders, previous, load_index, number, &stop, &tx, &wake));
+            .spawn(move || run(asked, &stop, &tx, &wake));
         if let Err(e) = spawned {
             log::warn!("cannot start the scan: {e}");
         }
@@ -91,15 +99,24 @@ impl Drop for Scan {
     }
 }
 
-fn run(
+/// What a scan was asked to do ([`Scan::start`]), and the number of its
+/// index saves.
+struct Asked {
     folders: Vec<PathBuf>,
     previous: Option<Arc<Library>>,
     load_index: bool,
+    read_all: bool,
     number: u64,
-    cancel: &AtomicBool,
-    tx: &Sender<ScanMsg>,
-    wake: &Wake,
-) {
+}
+
+fn run(asked: Asked, cancel: &AtomicBool, tx: &Sender<ScanMsg>, wake: &Wake) {
+    let Asked {
+        folders,
+        previous,
+        load_index,
+        read_all: read_again,
+        number,
+    } = asked;
     let send = |msg| {
         let _ = tx.send(msg);
         if let Some(ctx) = wake.get() {
@@ -107,7 +124,7 @@ fn run(
         }
     };
     let start = Instant::now();
-    let mut read_all = false;
+    let mut read_all = read_again;
     let previous = if load_index {
         let (tracks, stale) = index::load();
         read_all = stale;

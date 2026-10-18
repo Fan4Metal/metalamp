@@ -144,6 +144,7 @@ fn main() -> eframe::Result {
         settings.library_folders.clone(),
         None,
         true,
+        false,
         std::sync::Arc::clone(&wake),
     );
     let options = eframe::NativeOptions {
