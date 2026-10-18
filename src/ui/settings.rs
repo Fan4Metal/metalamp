@@ -10,6 +10,8 @@ use egui::{
     Stroke, Ui, pos2, vec2,
 };
 
+use crate::palette::ColourText;
+
 use crate::audio::dsp::{DspSettings, eq};
 use crate::audio::output::Device;
 use crate::i18n::LangChoice;
@@ -1040,37 +1042,245 @@ fn smooth(points: &[egui::Pos2]) -> Vec<egui::Pos2> {
     out
 }
 
-/// The width of the accents' row.
-const ACCENTS_WIDTH: f32 = 250.0;
+/// The width of the accents' row: ten swatches.
+const ACCENTS_WIDTH: f32 = 275.0;
 /// The size of an accent's swatch.
 const SWATCH: f32 = 22.0;
 
-/// The accents as round swatches, the chosen one ringed (metalmpv's,
-/// without the user's own colour).
+/// The accents as round swatches, the chosen one ringed, and last the
+/// user's own colour, picked in a popup (metalmpv's).
 fn accents(ui: &mut Ui, accent: &mut Accent) {
     ui.spacing_mut().item_spacing.x = 5.0;
-    // Right to left: the last first.
+    // Right to left: the own colour first, then the ready ones from the last.
+    own_accent(ui, accent);
     for a in Accent::ALL.into_iter().rev() {
         let (rect, response) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
         let response = response.on_hover_text(a.label());
         let selected = *accent == a;
-        let painter = ui.painter();
-        let centre = rect.center();
-        let radius = SWATCH / 2.0;
-        if selected {
-            painter.circle_stroke(
-                centre,
-                radius - 1.0,
-                Stroke::new(2.0, palette::text_bright()),
-            );
-            painter.circle_filled(centre, radius - 4.5, a.base());
-        } else {
-            let grow = if response.hovered() { 1.0 } else { 0.0 };
-            painter.circle_filled(centre, radius - 3.0 + grow, a.base());
-        }
+        swatch(ui, rect, selected, response.hovered(), |p, centre, r| {
+            p.circle_filled(centre, r, a.base());
+        });
         if response.clicked() {
             *accent = a;
         }
+    }
+}
+
+/// A round swatch in `rect`: ringed when chosen, a little bigger under the
+/// pointer; `fill` paints the inside at a centre and a radius.
+fn swatch(
+    ui: &Ui,
+    rect: Rect,
+    selected: bool,
+    hovered: bool,
+    fill: impl FnOnce(&egui::Painter, egui::Pos2, f32),
+) {
+    let painter = ui.painter();
+    let centre = rect.center();
+    let radius = SWATCH / 2.0;
+    if selected {
+        painter.circle_stroke(
+            centre,
+            radius - 1.0,
+            Stroke::new(2.0, palette::text_bright()),
+        );
+        fill(painter, centre, radius - 4.5);
+    } else {
+        let grow = if hovered { 1.0 } else { 0.0 };
+        fill(painter, centre, radius - 3.0 + grow);
+    }
+}
+
+fn custom([r, g, b]: [u8; 3]) -> Accent {
+    Accent::Custom(u32::from_be_bytes([0, r, g, b]))
+}
+
+/// The width of the own colour's picker, its square and its hue bar.
+const PICKER: f32 = 180.0;
+
+/// The own colour's swatch: a colour wheel, or the colour once chosen; a
+/// click opens the picker, a field for its code (HEX, RGB or HSL) and R,
+/// G, B fields, which start from the accent in use.
+fn own_accent(ui: &mut Ui, accent: &mut Accent) {
+    let (rect, response) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
+    let response = response.on_hover_text(tr!("Your own colour…", "Свой цвет…"));
+    let own = matches!(accent, Accent::Custom(_));
+    let current = accent.base();
+    swatch(ui, rect, own, response.hovered(), |p, centre, r| {
+        if own {
+            p.circle_filled(centre, r, current);
+        } else {
+            colour_wheel(p, centre, r);
+        }
+    });
+    egui::Popup::menu(&response)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            let mut colour = accent.base();
+            if colour_picker(ui, &mut colour) {
+                *accent = custom([colour.r(), colour.g(), colour.b()]);
+            }
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                // The code's form, HEX, RGB or HSL, changed by a click on
+                // its name; the field takes any of them.
+                let mode_id = ui.id().with("accent_text_mode");
+                let mut mode = ui.data(|d| d.get_temp::<ColourText>(mode_id).unwrap_or_default());
+                let label = ui
+                    .add(egui::Label::new(mode.name()).sense(Sense::click()))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text(tr!(
+                        "Show the code as HEX, RGB or HSL",
+                        "Показать код как HEX, RGB или HSL"
+                    ));
+                if label.clicked() {
+                    mode = mode.next();
+                    ui.data_mut(|d| d.insert_temp(mode_id, mode));
+                }
+                // Kept as typed while the field has the focus.
+                let id = ui.id().with("accent_hex");
+                let base = accent.base();
+                let mut text = ui
+                    .data_mut(|d| d.get_temp::<String>(id))
+                    .unwrap_or_else(|| mode.show([base.r(), base.g(), base.b()]));
+                let width = PICKER - label.rect.width() - ui.spacing().item_spacing.x;
+                let field = ui.add(egui::TextEdit::singleline(&mut text).desired_width(width));
+                if field.changed()
+                    && let Some(typed) = Accent::typed(&text)
+                {
+                    *accent = typed;
+                }
+                if field.has_focus() {
+                    ui.data_mut(|d| d.insert_temp(id, text));
+                } else {
+                    ui.data_mut(|d| d.remove::<String>(id));
+                }
+            });
+            // The same colour as red, green and blue, each 0–255, in
+            // three fields as wide as the picker.
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                let spacing = ui.spacing().item_spacing.x;
+                let size = vec2((PICKER - 2.0 * spacing) / 3.0, ui.spacing().interact_size.y);
+                let base = accent.base();
+                let mut rgb = [base.r(), base.g(), base.b()];
+                let mut edited = false;
+                for (value, name) in rgb.iter_mut().zip(["R ", "G ", "B "]) {
+                    let field = egui::DragValue::new(value)
+                        .speed(0.5)
+                        .range(0..=255)
+                        .prefix(name);
+                    edited |= ui.add_sized(size, field).changed();
+                }
+                if edited {
+                    *accent = custom(rgb);
+                }
+            });
+        });
+}
+
+/// The own colour's picker: saturation across and brightness up a square,
+/// the hue along a bar under it (metalmpv's). True when `colour` was
+/// changed.
+fn colour_picker(ui: &mut Ui, colour: &mut Color32) -> bool {
+    use egui::ecolor::HsvaGamma;
+    // The hue kept while it gives the colour shown: a grey has none.
+    let id = ui.id().with("accent_hsv");
+    let mut hsv = ui
+        .data(|d| d.get_temp::<(Color32, HsvaGamma)>(id))
+        .filter(|(c, _)| c == colour)
+        .map_or_else(|| HsvaGamma::from(*colour), |(_, hsv)| hsv);
+    let before = hsv;
+    let marker = |p: &egui::Painter, at: egui::Pos2, r: f32| {
+        p.circle_stroke(at, r + 1.0, Stroke::new(1.0, Color32::BLACK));
+        p.circle_stroke(at, r, Stroke::new(1.5, Color32::WHITE));
+    };
+
+    let (square, response) = ui.allocate_exact_size(vec2(PICKER, PICKER), Sense::click_and_drag());
+    if let Some(at) = response.interact_pointer_pos() {
+        hsv.s = egui::remap_clamp(at.x, square.x_range(), 0.0..=1.0);
+        hsv.v = egui::remap_clamp(at.y, square.bottom()..=square.top(), 0.0..=1.0);
+    }
+    const STEPS: u32 = 24;
+    let mut mesh = egui::Mesh::default();
+    for row in 0..=STEPS {
+        for column in 0..=STEPS {
+            let (s, v) = (column as f32 / STEPS as f32, row as f32 / STEPS as f32);
+            let at = square.lerp_inside(vec2(s, 1.0 - v));
+            let shade = HsvaGamma {
+                s,
+                v,
+                a: 1.0,
+                ..hsv
+            };
+            mesh.colored_vertex(at, shade.into());
+            if row < STEPS && column < STEPS {
+                let i = row * (STEPS + 1) + column;
+                mesh.add_triangle(i, i + 1, i + STEPS + 1);
+                mesh.add_triangle(i + 1, i + STEPS + 2, i + STEPS + 1);
+            }
+        }
+    }
+    let painter = ui.painter();
+    painter.add(mesh);
+    marker(painter, square.lerp_inside(vec2(hsv.s, 1.0 - hsv.v)), 5.0);
+
+    ui.add_space(6.0);
+    let (bar, response) = ui.allocate_exact_size(vec2(PICKER, 14.0), Sense::click_and_drag());
+    if let Some(at) = response.interact_pointer_pos() {
+        hsv.h = egui::remap_clamp(at.x, bar.x_range(), 0.0..=1.0);
+    }
+    const HUES: u32 = 36;
+    let mut mesh = egui::Mesh::default();
+    for i in 0..=HUES {
+        let h = i as f32 / HUES as f32;
+        let x = egui::lerp(bar.x_range(), h);
+        let hue: Color32 = HsvaGamma {
+            h,
+            s: 1.0,
+            v: 1.0,
+            a: 1.0,
+        }
+        .into();
+        mesh.colored_vertex(pos2(x, bar.top()), hue);
+        mesh.colored_vertex(pos2(x, bar.bottom()), hue);
+        if i < HUES {
+            let j = 2 * i;
+            mesh.add_triangle(j, j + 1, j + 2);
+            mesh.add_triangle(j + 1, j + 3, j + 2);
+        }
+    }
+    let painter = ui.painter();
+    painter.add(mesh);
+    marker(
+        painter,
+        pos2(egui::lerp(bar.x_range(), hsv.h), bar.center().y),
+        5.0,
+    );
+
+    let changed = hsv != before;
+    if changed {
+        *colour = hsv.into();
+    }
+    ui.data_mut(|d| d.insert_temp(id, (*colour, hsv)));
+    changed
+}
+
+/// A disc of all the hues round its centre.
+fn colour_wheel(painter: &egui::Painter, centre: egui::Pos2, radius: f32) {
+    const SLICES: usize = 36;
+    let point = |i: usize| {
+        let angle = i as f32 / SLICES as f32 * std::f32::consts::TAU;
+        centre + radius * vec2(angle.cos(), angle.sin())
+    };
+    for i in 0..SLICES {
+        let hue = (i as f32 + 0.5) / SLICES as f32;
+        let colour = Color32::from(egui::ecolor::Hsva::new(hue, 0.75, 0.95, 1.0));
+        painter.add(egui::Shape::convex_polygon(
+            vec![centre, point(i), point(i + 1)],
+            colour,
+            Stroke::new(0.6, colour),
+        ));
     }
 }
 
