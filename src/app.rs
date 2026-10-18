@@ -901,9 +901,14 @@ impl eframe::App for App {
         if self.player.poll().track {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
         }
-        if self.player.status == crate::player::Status::Playing || self.visual.active() {
-            // The visualization moves: 50 frames a second.
+        // The visualization moves: 50 frames a second; without one (off,
+        // or the compact bar) only the time and the seek bar move.
+        let shown = self.settings.bar_layout == crate::settings::BarLayout::Winamp
+            && self.settings.visualization != crate::settings::Visual::Off;
+        if shown && (self.player.status == crate::player::Status::Playing || self.visual.active()) {
             ctx.request_repaint_after(Duration::from_millis(20));
+        } else if self.player.status == crate::player::Status::Playing {
+            ctx.request_repaint_after(Duration::from_millis(250));
         }
         self.follow_media_keys();
         self.show_on_taskbar();

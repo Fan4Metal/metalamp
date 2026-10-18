@@ -246,6 +246,9 @@ fn winamp(
         egui::Popup::context_menu(&response).show(|ui| {
             ui.set_min_width(160.0);
             for v in Visual::ALL {
+                if v == Visual::Off {
+                    ui.separator();
+                }
                 if ui.selectable_label(v == now.visual, v.label()).clicked() {
                     cmds.push(BarCmd::Visual(v));
                     ui.close();

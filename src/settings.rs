@@ -173,14 +173,17 @@ pub enum Visual {
     Scope,
     /// The spectrum's bands as colours rolling from the right.
     Spectrogram,
+    /// An empty display, and no frames drawn for it.
+    Off,
 }
 
 impl Visual {
-    pub const ALL: [Visual; 4] = [
+    pub const ALL: [Visual; 5] = [
         Visual::Spectrum,
         Visual::Waveform,
         Visual::Scope,
         Visual::Spectrogram,
+        Visual::Off,
     ];
 
     pub fn label(self) -> &'static str {
@@ -189,6 +192,7 @@ impl Visual {
             Visual::Waveform => tr!("Waveform", "Волна"),
             Visual::Scope => tr!("Oscilloscope", "Осциллограф"),
             Visual::Spectrogram => tr!("Spectrogram", "Спектрограмма"),
+            Visual::Off => tr!("Off", "Выключена"),
         }
     }
 

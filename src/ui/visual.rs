@@ -9,7 +9,8 @@
 //! rolling from the right: the loud ones bright). The waveform and the
 //! spectrogram count the frames heard since the frame before (the tap's
 //! `end`), so they roll with the sound, whatever the frame rate; paused,
-//! they stand; stopped, they roll silence until they are empty.
+//! they stand; stopped, they roll silence until they are empty. Off, the
+//! display stays empty and the app repaints only as the time needs.
 
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -189,6 +190,7 @@ impl Visualizer {
                     self.gram.pop_front();
                 }
             }
+            Visual::Off => {}
             Visual::Scope => match heard {
                 Some((s, h)) => {
                     let span = ((h.rate as f32 * SCOPE_S) as usize).clamp(16, s.len() / 2);
@@ -223,6 +225,7 @@ impl Visualizer {
             Visual::Waveform => !self.wave.is_empty(),
             Visual::Spectrogram => !self.gram.is_empty(),
             Visual::Scope => !self.scope.is_empty(),
+            Visual::Off => false,
         }
     }
 
@@ -233,6 +236,7 @@ impl Visualizer {
             Visual::Waveform => self.paint_wave(painter, rect),
             Visual::Spectrogram => self.paint_gram(painter, rect),
             Visual::Scope => self.paint_scope(painter, rect),
+            Visual::Off => {}
         }
     }
 
