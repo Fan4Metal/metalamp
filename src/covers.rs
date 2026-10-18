@@ -232,11 +232,20 @@ fn cover(job: &Job, dir: Option<&Path>) -> Option<egui::ColorImage> {
     if none.as_ref().is_some_and(|p| p.exists()) {
         return None;
     }
-    let bytes = in_folder(&job.folder)
+    // The folder's picture, else the tag's: also when the folder's cannot
+    // be decoded (too large, another format under a JPEG's name).
+    let picture = in_folder(&job.folder)
         .and_then(|p| std::fs::read(p).ok())
-        .or_else(|| job.tagged.as_deref().and_then(embedded));
-    let Some(picture) = bytes.as_deref().and_then(decode) else {
-        if let Some(none) = none {
+        .and_then(|bytes| decode(&bytes))
+        .or_else(|| {
+            let bytes = job.tagged.as_deref().and_then(embedded)?;
+            decode(&bytes)
+        });
+    let Some(picture) = picture else {
+        // Known to have none only when both places could be looked at: a
+        // disk not plugged in yet is looked at again next time.
+        let looked = job.folder.is_dir() && job.tagged.as_deref().is_none_or(|t| t.is_file());
+        if looked && let Some(none) = none {
             let _ = std::fs::write(none, b"");
         }
         return None;
