@@ -227,10 +227,11 @@ pub fn cloak(hwnd: isize, on: bool) {
 
 /// The window's restored rectangle in pixels (left, top, right, bottom, in
 /// work-area coordinates), also while it is maximized, and whether it is
-/// maximized.
+/// maximized (or minimized from maximized: it comes back maximized).
 pub fn placement(hwnd: isize) -> Option<([i32; 4], bool)> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetWindowPlacement, SW_SHOWMAXIMIZED, WINDOWPLACEMENT,
+        GetWindowPlacement, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, WINDOWPLACEMENT,
+        WPF_RESTORETOMAXIMIZED,
     };
     let mut placement: WINDOWPLACEMENT = unsafe { std::mem::zeroed() };
     placement.length = size_of::<WINDOWPLACEMENT>() as u32;
@@ -238,10 +239,11 @@ pub fn placement(hwnd: isize) -> Option<([i32; 4], bool)> {
         return None;
     }
     let r = placement.rcNormalPosition;
-    (r.right > r.left && r.bottom > r.top).then_some((
-        [r.left, r.top, r.right, r.bottom],
-        placement.showCmd == SW_SHOWMAXIMIZED as u32,
-    ))
+    let maximized = placement.showCmd == SW_SHOWMAXIMIZED as u32
+        || (placement.showCmd == SW_SHOWMINIMIZED as u32
+            && placement.flags & WPF_RESTORETOMAXIMIZED != 0);
+    (r.right > r.left && r.bottom > r.top)
+        .then_some(([r.left, r.top, r.right, r.bottom], maximized))
 }
 
 /// Put the window, still hidden, at its restored rectangle `normal`
