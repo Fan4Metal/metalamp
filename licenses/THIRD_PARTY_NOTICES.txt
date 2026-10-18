@@ -23,7 +23,6 @@ Crates
   bitflags 1.3.2: MIT/Apache-2.0
   bitflags 2.13.2: MIT OR Apache-2.0
   bytemuck 1.25.2: Zlib OR Apache-2.0 OR MIT
-  bytemuck_derive 1.12.1: Zlib OR Apache-2.0 OR MIT
   byteorder 1.5.0: Unlicense OR MIT
   byteorder-lite 0.1.0: Unlicense OR MIT
   cfg-if 1.0.5: MIT OR Apache-2.0
@@ -37,11 +36,8 @@ Crates
   cursor-icon 1.2.0: MIT OR Apache-2.0 OR Zlib
   data-encoding 2.11.1: MIT
   defmt 1.1.1: MIT OR Apache-2.0
-  defmt-macros 1.1.1: MIT OR Apache-2.0
-  defmt-parser 1.0.0: MIT OR Apache-2.0
   directories 6.0.0: MIT OR Apache-2.0
   dirs-sys 0.5.0: MIT OR Apache-2.0
-  document-features 0.2.12: MIT OR Apache-2.0
   dpi 0.1.2: Apache-2.0 AND MIT
   ecolor 0.36.2: MIT OR Apache-2.0
   eframe 0.36.2: MIT OR Apache-2.0
@@ -81,10 +77,8 @@ Crates
   kurbo 0.13.1: Apache-2.0 OR MIT
   libloading 0.8.9: ISC
   linebender_resource_handle 0.1.1: Apache-2.0 OR MIT
-  litrs 1.0.0: MIT OR Apache-2.0
   lock_api 0.4.14: MIT OR Apache-2.0
   lofty 0.25.4: MIT OR Apache-2.0
-  lofty_attr 0.13.0: MIT OR Apache-2.0
   log 0.4.34: MIT OR Apache-2.0
   memchr 2.8.3: Unlicense OR MIT
   miniz_oxide 0.8.9: MIT OR Zlib OR Apache-2.0
@@ -98,16 +92,13 @@ Crates
   option-ext 0.2.0: MPL-2.0
   parking_lot 0.12.5: MIT OR Apache-2.0
   parking_lot_core 0.9.12: MIT OR Apache-2.0
-  paste 1.0.15: MIT OR Apache-2.0
   peniko 0.6.1: Apache-2.0 OR MIT
   pin-project-lite 0.2.17: Apache-2.0 OR MIT
   png 0.18.1: MIT OR Apache-2.0
   polycool 0.4.0: MIT OR Apache-2.0
-  proc-macro2 1.0.107: MIT OR Apache-2.0
   profiling 1.0.18: MIT OR Apache-2.0
   pxfm 0.1.30: BSD-3-Clause OR Apache-2.0
   quick-error 2.0.1: MIT/Apache-2.0
-  quote 1.0.47: MIT OR Apache-2.0
   raw-window-handle 0.6.2: MIT OR Apache-2.0 OR Zlib
   rayon 1.12.0: MIT OR Apache-2.0
   rayon-core 1.13.0: MIT OR Apache-2.0
@@ -121,22 +112,17 @@ Crates
   self_cell 1.3.0: Apache-2.0 OR GPL-2.0-only
   serde 1.0.229: MIT OR Apache-2.0
   serde_core 1.0.229: MIT OR Apache-2.0
-  serde_derive 1.0.229: MIT OR Apache-2.0
   serde_json 1.0.152: MIT OR Apache-2.0
   simd-adler32 0.3.10: MIT
   skrifa 0.44.0: MIT OR Apache-2.0
   smallvec 1.16.3: MIT OR Apache-2.0
   smol_str 0.2.2: MIT OR Apache-2.0
   static_assertions 1.1.0: MIT OR Apache-2.0
-  syn 2.0.119: MIT OR Apache-2.0
-  syn 3.0.8: MIT OR Apache-2.0
   thiserror 2.0.21: MIT OR Apache-2.0
-  thiserror-impl 2.0.21: MIT OR Apache-2.0
   tiff 0.11.3: MIT
   tracing 0.1.44: MIT
   tracing-core 0.1.36: MIT
   unicode-general-category 1.1.0: Apache-2.0
-  unicode-ident 1.0.27: (MIT OR Apache-2.0) AND Unicode-3.0
   unicode-segmentation 1.13.3: MIT OR Apache-2.0
   utf8parse 0.2.2: Apache-2.0 OR MIT
   uuid 1.28.0: Apache-2.0 OR MIT
@@ -150,8 +136,6 @@ Crates
   windows-collections 0.3.2: MIT OR Apache-2.0
   windows-core 0.62.2: MIT OR Apache-2.0
   windows-future 0.3.2: MIT OR Apache-2.0
-  windows-implement 0.60.2: MIT OR Apache-2.0
-  windows-interface 0.59.3: MIT OR Apache-2.0
   windows-link 0.2.1: MIT OR Apache-2.0
   windows-numerics 0.3.1: MIT OR Apache-2.0
   windows-result 0.4.1: MIT OR Apache-2.0
@@ -166,7 +150,6 @@ Crates
   windows_x86_64_msvc 0.53.1: MIT OR Apache-2.0
   winit 0.30.13: Apache-2.0
   zerocopy 0.8.62: BSD-2-Clause OR Apache-2.0 OR MIT
-  zerocopy-derive 0.8.62: BSD-2-Clause OR Apache-2.0 OR MIT
   zlib-rs 0.6.8: Zlib
   zmij 1.0.23: MIT
   zune-core 0.5.3: MIT OR Apache-2.0 OR Zlib
@@ -470,14 +453,6 @@ The above copyright notice and this permission notice (including the next paragr
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ==============================================================================
-bytemuck_derive 1.12.1
-License: Zlib OR Apache-2.0 OR MIT
-Repository: https://github.com/Lokathor/bytemuck
-
---- LICENSE-MIT ---
-(The same text as LICENSE-MIT of bytemuck above.)
-
-==============================================================================
 byteorder 1.5.0
 License: Unlicense OR MIT
 Repository: https://github.com/BurntSushi/byteorder
@@ -757,40 +732,6 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ==============================================================================
-defmt-macros 1.1.1
-License: MIT OR Apache-2.0
-Repository: https://github.com/knurling-rs/defmt
-
---- LICENSE-MIT ---
-(The same text as LICENSE-MIT of defmt above.)
-
-==============================================================================
-defmt-parser 1.0.0
-License: MIT OR Apache-2.0
-Repository: https://github.com/knurling-rs/defmt
-
---- MIT (no licence file in the crate) ---
-Copyright (c) The Knurling-rs developers
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-==============================================================================
 directories 6.0.0
 License: MIT OR Apache-2.0
 Repository: https://github.com/soc/directories-rs
@@ -823,32 +764,6 @@ Repository: https://github.com/dirs-dev/dirs-sys-rs
 
 --- LICENSE-MIT ---
 Copyright (c) 2018-2019 dirs-rs contributors
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-==============================================================================
-document-features 0.2.12
-License: MIT OR Apache-2.0
-Repository: https://github.com/slint-ui/document-features
-
---- LICENSE-MIT ---
-Copyright (c) 2020 Olivier Goffart <ogoffart@sixtyfps.io>
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -1953,38 +1868,6 @@ Repository: https://github.com/linebender/raw_resource_handle
 (The same text as LICENSE-MIT of color above.)
 
 ==============================================================================
-litrs 1.0.0
-License: MIT OR Apache-2.0
-Repository: https://github.com/LukasKalbertodt/litrs
-
---- LICENSE-MIT ---
-Copyright (c) 2020 Project Developers
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-
-==============================================================================
 lock_api 0.4.14
 License: MIT OR Apache-2.0
 Repository: https://github.com/Amanieu/parking_lot
@@ -2041,14 +1924,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-==============================================================================
-lofty_attr 0.13.0
-License: MIT OR Apache-2.0
-Repository: https://github.com/Serial-ATA/lofty-rs
-
---- MIT (no licence file in the crate) ---
-(The same text as MIT (no licence file in the crate) of lofty above.)
 
 ==============================================================================
 log 0.4.34
@@ -2795,14 +2670,6 @@ Repository: https://github.com/Amanieu/parking_lot
 (The same text as LICENSE-MIT of lock_api above.)
 
 ==============================================================================
-paste 1.0.15
-License: MIT OR Apache-2.0
-Repository: https://github.com/dtolnay/paste
-
---- LICENSE-MIT ---
-(The same text as LICENSE-MIT of adler2 above.)
-
-==============================================================================
 peniko 0.6.1
 License: Apache-2.0 OR MIT
 Repository: https://github.com/linebender/peniko
@@ -2857,14 +2724,6 @@ Repository: https://github.com/linebender/kurbo
 
 --- LICENSE-MIT ---
 (The same text as LICENSE-MIT of fearless_simd above.)
-
-==============================================================================
-proc-macro2 1.0.107
-License: MIT OR Apache-2.0
-Repository: https://github.com/dtolnay/proc-macro2
-
---- LICENSE-MIT ---
-(The same text as LICENSE-MIT of adler2 above.)
 
 ==============================================================================
 profiling 1.0.18
@@ -2928,14 +2787,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-==============================================================================
-quote 1.0.47
-License: MIT OR Apache-2.0
-Repository: https://github.com/dtolnay/quote
-
---- LICENSE-MIT ---
-(The same text as LICENSE-MIT of adler2 above.)
 
 ==============================================================================
 raw-window-handle 0.6.2
@@ -3691,14 +3542,6 @@ Repository: https://github.com/serde-rs/serde
 (The same text as LICENSE-MIT of adler2 above.)
 
 ==============================================================================
-serde_derive 1.0.229
-License: MIT OR Apache-2.0
-Repository: https://github.com/serde-rs/serde
-
---- LICENSE-MIT ---
-(The same text as LICENSE-MIT of adler2 above.)
-
-==============================================================================
 serde_json 1.0.152
 License: MIT OR Apache-2.0
 Repository: https://github.com/serde-rs/json
@@ -3811,31 +3654,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ==============================================================================
-syn 2.0.119
-License: MIT OR Apache-2.0
-Repository: https://github.com/dtolnay/syn
-
---- LICENSE-MIT ---
-(The same text as LICENSE-MIT of adler2 above.)
-
-==============================================================================
-syn 3.0.8
-License: MIT OR Apache-2.0
-Repository: https://github.com/dtolnay/syn
-
---- LICENSE-MIT ---
-(The same text as LICENSE-MIT of adler2 above.)
-
-==============================================================================
 thiserror 2.0.21
-License: MIT OR Apache-2.0
-Repository: https://github.com/dtolnay/thiserror
-
---- LICENSE-MIT ---
-(The same text as LICENSE-MIT of adler2 above.)
-
-==============================================================================
-thiserror-impl 2.0.21
 License: MIT OR Apache-2.0
 Repository: https://github.com/dtolnay/thiserror
 
@@ -3917,14 +3736,6 @@ Repository: https://github.com/yeslogic/unicode-general-category
 
 --- LICENSE ---
 (The same text as LICENSE of dpi above.)
-
-==============================================================================
-unicode-ident 1.0.27
-License: (MIT OR Apache-2.0) AND Unicode-3.0
-Repository: https://github.com/dtolnay/unicode-ident
-
---- LICENSE-MIT ---
-(The same text as LICENSE-MIT of adler2 above.)
 
 ==============================================================================
 unicode-segmentation 1.13.3
@@ -4188,22 +3999,6 @@ Repository: https://github.com/microsoft/windows-rs
 (The same text as license-mit of windows above.)
 
 ==============================================================================
-windows-implement 0.60.2
-License: MIT OR Apache-2.0
-Repository: https://github.com/microsoft/windows-rs
-
---- license-mit ---
-(The same text as license-mit of windows above.)
-
-==============================================================================
-windows-interface 0.59.3
-License: MIT OR Apache-2.0
-Repository: https://github.com/microsoft/windows-rs
-
---- license-mit ---
-(The same text as license-mit of windows above.)
-
-==============================================================================
 windows-link 0.2.1
 License: MIT OR Apache-2.0
 Repository: https://github.com/microsoft/windows-rs
@@ -4338,14 +4133,6 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
-
-==============================================================================
-zerocopy-derive 0.8.62
-License: BSD-2-Clause OR Apache-2.0 OR MIT
-Repository: https://github.com/google/zerocopy
-
---- LICENSE-MIT ---
-(The same text as LICENSE-MIT of zerocopy above.)
 
 ==============================================================================
 zlib-rs 0.6.8

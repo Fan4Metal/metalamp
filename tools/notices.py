@@ -92,7 +92,9 @@ def lock_hash() -> str:
 
 
 def crates():
-    """The packages compiled into the exe: normal dependencies, for Windows."""
+    """The packages compiled into the exe: normal dependencies, for Windows;
+    not procedural macros (serde_derive and the like run in the compiler) nor
+    what only they use (syn, quote, proc-macro2)."""
     meta = json.loads(
         subprocess.run(
             ["cargo", "metadata", "--format-version", "1", "--locked", "--filter-platform", TARGET],
@@ -102,6 +104,11 @@ def crates():
         ).stdout
     )
     nodes = {n["id"]: n for n in meta["resolve"]["nodes"]}
+    packages = {p["id"]: p for p in meta["packages"]}
+
+    def proc_macro(i):
+        return any("proc-macro" in t["kind"] for t in packages[i]["targets"])
+
     root = meta["resolve"]["root"]
     seen, stack = set(), [root]
     while stack:
@@ -110,9 +117,8 @@ def crates():
             continue
         seen.add(node)
         for dep in nodes[node]["deps"]:
-            if any(k["kind"] is None for k in dep["dep_kinds"]):
+            if any(k["kind"] is None for k in dep["dep_kinds"]) and not proc_macro(dep["pkg"]):
                 stack.append(dep["pkg"])
-    packages = {p["id"]: p for p in meta["packages"]}
     return sorted((packages[i] for i in seen if i != root), key=lambda p: (p["name"], p["version"]))
 
 
@@ -133,7 +139,11 @@ def license_texts(package):
     mit_choice = re.search(r"\bMIT\b", expression) and " OR " in expression.replace("/", " OR ")
     if mit_choice:
         mit = [f for f in files if "MIT" in f.name.upper()]
-        if mit:
+        if mit and " AND " in expression:
+            # "(MIT OR Apache-2.0) AND Unicode-3.0": the MIT text, and the
+            # licence that is not a choice (all but the Apache one).
+            files = mit + [f for f in files if f not in mit and "APACHE" not in f.name.upper()]
+        elif mit:
             files = mit + [f for f in files if f.name.upper().startswith("NOTICE") and f not in mit]
     texts = [(f.name, f.read_text(encoding="utf-8", errors="replace").strip()) for f in files]
     if texts:
