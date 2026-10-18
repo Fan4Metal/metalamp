@@ -7,9 +7,11 @@
 //! (repeat one) starts anew with a new token, so its start is news.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use crate::audio::dsp::{self, DspSettings};
 use crate::audio::{self, Cmd, Engine, Event};
+use crate::loudness::Loudness;
 use crate::queue::{Queue, Repeat};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,6 +38,9 @@ pub struct Player {
     failed_in_row: usize,
     /// The last failure, for the status line.
     pub error: Option<String>,
+    /// The tracks' loudness, for normalisation.
+    loudness: Loudness,
+    dsp: DspSettings,
 }
 
 /// What changed with the engine's events, for the app.
@@ -53,8 +58,10 @@ impl Player {
         repeat: Repeat,
         shuffle: bool,
         device: String,
+        dsp: DspSettings,
     ) -> Player {
-        let engine = Engine::start(ctx.clone(), device);
+        let engine = Engine::start(ctx.clone(), device, dsp.clone());
+        let loudness = Loudness::load(ctx.clone());
         engine.set_gain(audio::gain_of(volume, mute));
         let mut queue = Queue::default();
         queue.repeat = repeat;
@@ -71,6 +78,50 @@ impl Player {
             preloaded: None,
             failed_in_row: 0,
             error: None,
+            loudness,
+            dsp,
+        }
+    }
+
+    /// The loudness gain of `path` for the engine: known, or 1 while it
+    /// is measured (the gain follows with `Cmd::Gain`); 1 when
+    /// normalisation is off.
+    fn gain_for(&mut self, path: &Path) -> f32 {
+        if !self.dsp.normalize {
+            return 1.0;
+        }
+        match self.loudness.get(path) {
+            Some(m) => dsp::track_gain(m.lufs, m.peak),
+            None => {
+                self.loudness.measure(path);
+                1.0
+            }
+        }
+    }
+
+    /// The path of the entry a token stands for.
+    fn path_of_token(&self, token: u64) -> Option<PathBuf> {
+        let entry = *self.tokens.get(&token)?;
+        let i = self.queue.index_of(entry)?;
+        Some(self.queue.entries()[i].path.clone())
+    }
+
+    /// New processing settings for the engine; normalisation turned on
+    /// gives the tracks open their gains.
+    pub fn set_dsp(&mut self, dsp: &DspSettings) {
+        let turned_on = dsp.normalize && !self.dsp.normalize;
+        self.dsp = dsp.clone();
+        self.engine.send(Cmd::Dsp(dsp.clone()));
+        if turned_on {
+            let live: Vec<(u64, PathBuf)> = self
+                .tokens
+                .keys()
+                .filter_map(|&t| self.path_of_token(t).map(|p| (t, p)))
+                .collect();
+            for (token, path) in live {
+                let gain = self.gain_for(&path);
+                self.engine.send(Cmd::Gain { id: token, gain });
+            }
         }
     }
 
@@ -88,9 +139,11 @@ impl Player {
         self.queue.set_current(Some(index));
         let token = self.token_for(entry.id);
         self.preloaded = None;
+        let gain = self.gain_for(&entry.path);
         self.engine.send(Cmd::Play {
             id: token,
             path: entry.path,
+            gain,
         });
         self.status = Status::Playing;
         self.error = None;
@@ -264,7 +317,8 @@ impl Player {
             Some(e) => {
                 let token = self.token_for(e.id);
                 self.preloaded = Some((token, e.id));
-                self.engine.send(Cmd::Preload(Some((token, e.path))));
+                let gain = self.gain_for(&e.path);
+                self.engine.send(Cmd::Preload(Some((token, e.path, gain))));
             }
             None => {
                 self.preloaded = None;
@@ -276,6 +330,23 @@ impl Player {
     /// The engine's events.
     pub fn poll(&mut self) -> Changes {
         let mut changes = Changes::default();
+        // Tracks measured meanwhile: their gains to the engine, for the
+        // ones it has open.
+        for (path, m) in self.loudness.poll() {
+            if !self.dsp.normalize {
+                continue;
+            }
+            let gain = dsp::track_gain(m.lufs, m.peak);
+            let tokens: Vec<u64> = self
+                .tokens
+                .keys()
+                .copied()
+                .filter(|&t| self.path_of_token(t).as_deref() == Some(path.as_path()))
+                .collect();
+            for token in tokens {
+                self.engine.send(Cmd::Gain { id: token, gain });
+            }
+        }
         for event in self.engine.poll() {
             match event {
                 Event::Started { id: token } => {
@@ -323,7 +394,8 @@ impl Player {
                         {
                             let token = self.token_for(e.id);
                             self.preloaded = Some((token, e.id));
-                            self.engine.send(Cmd::Preload(Some((token, e.path))));
+                            let gain = self.gain_for(&e.path);
+                            self.engine.send(Cmd::Preload(Some((token, e.path, gain))));
                         }
                         continue;
                     }

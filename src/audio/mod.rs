@@ -16,6 +16,7 @@
 //! default device reopens the output and goes on from the position heard.
 
 pub mod decoder;
+pub mod dsp;
 pub mod mf;
 pub mod mp3gap;
 pub mod output;
@@ -35,13 +36,23 @@ use output::{Output, Wasapi};
 /// What the UI asks of the audio thread.
 #[derive(Debug)]
 pub enum Cmd {
-    /// Play `path` from its start; `id` names it in the events.
+    /// Play `path` from its start; `id` names it in the events; `gain`
+    /// is its loudness gain (1 when not known).
     Play {
         id: u64,
         path: PathBuf,
+        gain: f32,
     },
-    /// The track to play after the current one, without a gap (or none).
-    Preload(Option<(u64, PathBuf)>),
+    /// The track to play after the current one, without a gap (or none),
+    /// with its loudness gain.
+    Preload(Option<(u64, PathBuf, f32)>),
+    /// The loudness gain of the track `id`, measured meanwhile.
+    Gain {
+        id: u64,
+        gain: f32,
+    },
+    /// New processing settings.
+    Dsp(dsp::DspSettings),
     Pause,
     Resume,
     Stop,
@@ -83,7 +94,7 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn start(ctx: egui::Context, device: String) -> Engine {
+    pub fn start(ctx: egui::Context, device: String, dsp: dsp::DspSettings) -> Engine {
         let (tx, rx) = channel();
         let (etx, events) = channel();
         let shared = Arc::new(Shared::default());
@@ -91,7 +102,7 @@ impl Engine {
         let worker = Arc::clone(&shared);
         let thread = std::thread::Builder::new()
             .name("audio".into())
-            .spawn(move || run(&rx, &etx, &worker, &ctx, device))
+            .spawn(move || run(&rx, &etx, &worker, &ctx, device, dsp))
             .map_err(|e| log::error!("cannot start the audio thread: {e}"))
             .ok();
         Engine {
@@ -162,6 +173,8 @@ struct Open {
     id: u64,
     path: PathBuf,
     decoder: Decoder,
+    /// The loudness gain (`dsp::track_gain`), 1 when not known.
+    gain: f32,
 }
 
 /// Where a track's first frame went among the frames written since the
@@ -196,6 +209,9 @@ struct Player<'a> {
     checked_device: Instant,
     /// The device wanted (its id; empty: the default).
     device: String,
+    dsp: dsp::DspSettings,
+    /// The processing for the output's format, made with it.
+    chain: Option<dsp::Chain>,
 }
 
 fn run(
@@ -204,6 +220,7 @@ fn run(
     shared: &Shared,
     ctx: &egui::Context,
     device: String,
+    dsp: dsp::DspSettings,
 ) {
     let _com = mf::com_init_mta();
     // Before anything holding MF objects, so it is dropped after them.
@@ -234,6 +251,8 @@ fn run(
         drained_since: None,
         checked_device: Instant::now(),
         device,
+        dsp,
+        chain: None,
     };
     loop {
         let busy = p.decoding.is_some() && !p.paused;
@@ -283,20 +302,35 @@ impl Player<'_> {
 
     fn handle(&mut self, cmd: Cmd) {
         match cmd {
-            Cmd::Play { id, path } => match Decoder::open(&path) {
-                Ok(decoder) => self.begin(Open { id, path, decoder }, 0),
+            Cmd::Play { id, path, gain } => match Decoder::open(&path) {
+                Ok(decoder) => self.begin(
+                    Open {
+                        id,
+                        path,
+                        decoder,
+                        gain,
+                    },
+                    0,
+                ),
                 Err(e) => self.send(Event::Failed {
                     id,
                     message: mf::describe(&e),
                 }),
             },
             Cmd::Preload(None) => self.next = None,
-            Cmd::Preload(Some((id, path))) => {
+            Cmd::Preload(Some((id, path, gain))) => {
                 if self.next.as_ref().is_some_and(|n| n.id == id) {
                     return;
                 }
                 match Decoder::open(&path) {
-                    Ok(decoder) => self.next = Some(Open { id, path, decoder }),
+                    Ok(decoder) => {
+                        self.next = Some(Open {
+                            id,
+                            path,
+                            decoder,
+                            gain,
+                        })
+                    }
                     Err(e) => {
                         self.next = None;
                         self.send(Event::Failed {
@@ -322,6 +356,22 @@ impl Player<'_> {
             }
             Cmd::Stop => self.stop(),
             Cmd::Seek(ms) => self.seek(ms),
+            Cmd::Gain { id, gain } => {
+                for open in [self.decoding.as_mut(), self.next.as_mut()]
+                    .into_iter()
+                    .flatten()
+                {
+                    if open.id == id {
+                        open.gain = gain;
+                    }
+                }
+            }
+            Cmd::Dsp(settings) => {
+                if let Some(chain) = &mut self.chain {
+                    chain.configure(&settings);
+                }
+                self.dsp = settings;
+            }
             Cmd::Device(device) => {
                 if self.device != device {
                     self.device = device;
@@ -365,6 +415,7 @@ impl Player<'_> {
                 Ok(out) => {
                     self.out = Some(Box::new(out));
                     self.format = format;
+                    self.chain = Some(dsp::Chain::new(format.0, format.1, &self.dsp));
                 }
                 Err(e) => {
                     let id = open.id;
@@ -409,9 +460,20 @@ impl Player<'_> {
         self.segments.front()
     }
 
+    /// The loudness gain of the track `id` among those open (1 when it
+    /// is not).
+    fn gain_of(&self, id: u64) -> f32 {
+        [self.decoding.as_ref(), self.next.as_ref()]
+            .into_iter()
+            .flatten()
+            .find(|o| o.id == id)
+            .map_or(1.0, |o| o.gain)
+    }
+
     fn seek(&mut self, ms: u64) {
         let Some(seg) = self.heard() else { return };
         let (id, path) = (seg.id, seg.path.clone());
+        let gain = self.gain_of(id);
         let paused = self.paused;
         // The track heard may be behind the one being decoded (the last
         // second of one, the next already in the ring): open it again,
@@ -424,9 +486,12 @@ impl Player<'_> {
                 {
                     self.next = Some(a);
                 }
-                Decoder::open(&path)
-                    .ok()
-                    .map(|decoder| Open { id, path, decoder })
+                Decoder::open(&path).ok().map(|decoder| Open {
+                    id,
+                    path,
+                    decoder,
+                    gain,
+                })
             }
         };
         let Some(open) = open else { return };
@@ -452,7 +517,12 @@ impl Player<'_> {
                     break;
                 };
                 match open.decoder.next() {
-                    Ok(Some(block)) => self.ring.extend(block),
+                    Ok(Some(mut block)) => {
+                        if let Some(chain) = &mut self.chain {
+                            chain.process(&mut block, open.gain);
+                        }
+                        self.ring.extend(block);
+                    }
                     Ok(None) => self.track_decoded(),
                     Err(e) => {
                         // A damaged end of a file: as if it ended there.
@@ -567,6 +637,7 @@ impl Player<'_> {
             return;
         };
         let (id, path) = (seg.id, seg.path.clone());
+        let gain = self.gain_of(id);
         let position = self.shared.position_ms.load(Relaxed);
         let paused = self.paused;
         self.out = None;
@@ -578,9 +649,12 @@ impl Player<'_> {
                 {
                     self.next = Some(a);
                 }
-                Decoder::open(&path)
-                    .ok()
-                    .map(|decoder| Open { id, path, decoder })
+                Decoder::open(&path).ok().map(|decoder| Open {
+                    id,
+                    path,
+                    decoder,
+                    gain,
+                })
             }
         };
         match open {
@@ -649,7 +723,11 @@ mod tests {
             .nth(1)
             .cloned()
             .expect("a second file in the folder");
-        let engine = Engine::start(egui::Context::default(), String::new());
+        let engine = Engine::start(
+            egui::Context::default(),
+            String::new(),
+            dsp::DspSettings::default(),
+        );
         engine.set_gain(0.05);
         let wait = |what: &dyn Fn(&Event) -> bool, secs: u64| {
             let until = Instant::now() + Duration::from_secs(secs);
@@ -665,11 +743,15 @@ mod tests {
             }
             false
         };
-        engine.send(Cmd::Play { id: 1, path: first });
+        engine.send(Cmd::Play {
+            id: 1,
+            path: first,
+            gain: 1.0,
+        });
         assert!(wait(&|e| matches!(e, Event::Started { id: 1 }), 5));
         let duration = engine.duration_ms();
         assert!(duration > 5000, "{duration}");
-        engine.send(Cmd::Preload(Some((2, second))));
+        engine.send(Cmd::Preload(Some((2, second, 1.0))));
         engine.send(Cmd::Seek(duration - 1500));
         // The second starts within the second and a half left, and the
         // first does not end on its own.
@@ -689,7 +771,11 @@ mod tests {
     fn play_while_paused_plays() {
         use std::time::Instant;
         let file = PathBuf::from(std::env::var("METALAMP_SAMPLE").expect("METALAMP_SAMPLE"));
-        let engine = Engine::start(egui::Context::default(), String::new());
+        let engine = Engine::start(
+            egui::Context::default(),
+            String::new(),
+            dsp::DspSettings::default(),
+        );
         engine.set_gain(0.05);
         let wait = |what: &dyn Fn(&Event) -> bool, secs: u64| {
             let until = Instant::now() + Duration::from_secs(secs);
@@ -708,12 +794,17 @@ mod tests {
         engine.send(Cmd::Play {
             id: 1,
             path: file.clone(),
+            gain: 1.0,
         });
         assert!(wait(&|e| matches!(e, Event::Started { id: 1 }), 5));
         std::thread::sleep(Duration::from_millis(500));
         engine.send(Cmd::Pause);
         std::thread::sleep(Duration::from_millis(300));
-        engine.send(Cmd::Play { id: 2, path: file });
+        engine.send(Cmd::Play {
+            id: 2,
+            path: file,
+            gain: 1.0,
+        });
         assert!(wait(&|e| matches!(e, Event::Started { id: 2 }), 5));
         std::thread::sleep(Duration::from_millis(800));
         let position = engine.position_ms();

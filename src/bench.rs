@@ -5,6 +5,9 @@
 //! - `--bench scan <folder>…`: a full scan without the index: the walk,
 //!   the tags (on the scan's threads), the grouping, the index's size.
 //! - `--bench gapless <file>…`: an MP3 decoded whole against its LAME tag.
+//! - `--bench loudness <file>…`: each file's loudness (EBU R128), peak and
+//!   the gain normalisation would give it, with the time the measuring
+//!   took; `ffmpeg -af ebur128 -f null -` gives the figure to compare.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -27,10 +30,15 @@ pub fn run(args: &[String]) -> i32 {
             bench_gapless(&files, &mut out);
             0
         }
+        Some("loudness") if args.len() > 1 => {
+            let files: Vec<PathBuf> = args[1..].iter().map(PathBuf::from).collect();
+            bench_loudness(&files, &mut out);
+            0
+        }
         _ => {
             let _ = writeln!(
                 out,
-                "usage: metalamp --bench scan <folder>... | gapless <file>..."
+                "usage: metalamp --bench scan <folder>... | gapless <file>... | loudness <file>..."
             );
             2
         }
@@ -125,6 +133,39 @@ fn bench_scan(folders: &[PathBuf], out: &mut impl Write) {
             })
             .collect();
         let _ = writeln!(out, "  {}: {}", folder.display(), names.join(" | "));
+    }
+}
+
+/// `--bench loudness <file>…`: the loudness measured as the player does
+/// it before a track's first play.
+fn bench_loudness(files: &[PathBuf], out: &mut impl Write) {
+    use crate::audio::{dsp, mf};
+    let _com = mf::com_init_mta();
+    let _mf = match mf::Mf::start() {
+        Ok(m) => m,
+        Err(e) => {
+            let _ = writeln!(out, "Media Foundation: {}", mf::describe(&e));
+            return;
+        }
+    };
+    for file in files {
+        let started = Instant::now();
+        match crate::loudness::measure_file(file) {
+            Some(m) => {
+                let gain = dsp::biquad::gain_to_db(dsp::track_gain(m.lufs, m.peak));
+                let _ = writeln!(
+                    out,
+                    "{}: {:.1} LUFS, peak {:.2} dBFS, gain {gain:+.1} dB, {} ms",
+                    file.display(),
+                    m.lufs,
+                    dsp::biquad::gain_to_db(m.peak),
+                    started.elapsed().as_millis()
+                );
+            }
+            None => {
+                let _ = writeln!(out, "{}: cannot measure", file.display());
+            }
+        }
     }
 }
 

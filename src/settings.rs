@@ -71,6 +71,8 @@ pub struct Settings {
     /// name, shown while it is not present.
     pub output_device: String,
     pub output_device_name: String,
+    /// The sound processing (`audio::dsp`).
+    pub dsp: crate::audio::dsp::DspSettings,
 }
 
 /// The player bar's layout.
@@ -129,6 +131,7 @@ impl Default for Settings {
             bar_layout: BarLayout::default(),
             output_device: String::new(),
             output_device_name: String::new(),
+            dsp: Default::default(),
         }
     }
 }

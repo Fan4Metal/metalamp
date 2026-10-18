@@ -20,6 +20,7 @@ mod frameless;
 mod icon;
 mod instance;
 mod library;
+mod loudness;
 mod palette;
 mod player;
 mod queue;
@@ -111,7 +112,9 @@ fn main() -> eframe::Result {
                 println!(
                     "metalamp --register | --unregister   (the file types, for the installer)"
                 );
-                println!("metalamp --bench scan FOLDER... | --bench gapless FILE...");
+                println!(
+                    "metalamp --bench scan FOLDER... | --bench gapless FILE... | --bench loudness FILE..."
+                );
                 return Ok(());
             }
             _ => {

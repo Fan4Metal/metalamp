@@ -73,9 +73,11 @@ The player bar, in its default layout, is laid out as Winamp's main window. On t
 
 Media Foundation, the media framework of Windows, decodes the files, and the WASAPI shared mode plays them on the default device; a change of the default device or a device unplugged is followed without stopping. The track after the current one is opened in advance, so tracks of one format follow each other without a pause. An MP3 encoder adds silence before the music and after it; MetalAMP reads how much from the file's LAME tag and leaves it out, so an album recorded without pauses plays as one piece.
 
+The sound can be processed on its way to the device, all of it off by default and switched on in the settings window. **The same loudness for every track** measures a track after EBU R128 in the background before its first play (the measurement is kept, so each track is read once) and brings it to −18 LUFS, a quiet track only as far as its peaks allow. The **equalizer** has Winamp's ten bands and a preamp. The **enhancer** has four amounts of 0 to 10: bass (a shelf under 100 Hz and the harmonics of the bass, which small speakers make heard as bass they cannot play), clarity (the air over 6 kHz an MP3's low-pass took away), width (a wider stereo image, the bass kept in the middle) and warmth (a soft rounding of the peaks, as tape does). Whenever any of these is on, a look-ahead limiter after them keeps the sound from clipping. The spectrum analyzer shows the result.
+
 ### Settings
 
-The settings window (`Ctrl+P`, as Winamp's Preferences, or the gear in the library's bar) holds the interface language, the layout of the player bar, the sound output device (Windows' default, which follows the device chosen in Windows, or one of the devices present; a chosen device that is absent when a track starts is replaced by the default one until it is back) and the update check. **Reset** puts them back to their defaults.
+The settings window (`Ctrl+P`, as Winamp's Preferences, or the gear in the library's bar) holds the interface language, the layout of the player bar, the sound output device (Windows' default, which follows the device chosen in Windows, or one of the devices present; a chosen device that is absent when a track starts is replaced by the default one until it is back), the sound processing (loudness, the equalizer, the enhancer) and the update check. **Reset** puts them back to their defaults.
 
 ### The playlist
 

@@ -10,6 +10,7 @@ use egui::{
     Stroke, Ui, pos2, vec2,
 };
 
+use crate::audio::dsp::{DspSettings, eq};
 use crate::audio::output::Device;
 use crate::i18n::LangChoice;
 use crate::palette;
@@ -50,8 +51,8 @@ impl Page {
                 "Язык и вид панели плеера."
             ),
             Page::Sound => tr!(
-                "The device the sound goes to.",
-                "Устройство, на которое выводится звук."
+                "The device the sound goes to; one loudness for every track, the equalizer and the enhancer.",
+                "Устройство, на которое выводится звук; одна громкость у всех треков, эквалайзер и улучшение звука."
             ),
             Page::Updates => tr!(
                 "Asking GitHub whether a newer version is out.",
@@ -66,6 +67,8 @@ impl Page {
 pub struct Changed {
     /// The output device (`settings.output_device`).
     pub device: bool,
+    /// The sound processing (`settings.dsp`).
+    pub dsp: bool,
     /// Anything to save.
     pub any: bool,
 }
@@ -218,6 +221,7 @@ impl SettingsDialog {
             self.open = false;
         }
         changed.device = settings.output_device != before.output_device;
+        changed.dsp = settings.dsp != before.dsp;
         changed.any = *settings != before;
         changed
     }
@@ -511,6 +515,147 @@ fn sound(ui: &mut Ui, settings: &mut Settings, devices: &[Device]) {
             },
         );
     });
+    processing(ui, &mut settings.dsp);
+}
+
+/// The loudness, the equalizer and the enhancer.
+fn processing(ui: &mut Ui, dsp: &mut DspSettings) {
+    section(ui, tr!("Loudness", "Громкость"), |ui| {
+        row(
+            ui,
+            tr!(
+                "The same loudness for every track",
+                "Одна громкость у всех треков"
+            ),
+            Some(tr!(
+                "A track is measured (EBU R128) in the background before its first play and brought to -18 LUFS; the measurement is kept, so each track is read once. A quiet track is raised only as far as its peaks allow.",
+                "Трек измеряется (EBU R128) в фоне перед первым воспроизведением и приводится к -18 LUFS; замер сохраняется, так что каждый трек читается один раз. Тихий трек поднимается лишь настолько, насколько позволяют его пики."
+            )),
+            50.0,
+            |ui| switch(ui, &mut dsp.normalize),
+        );
+    });
+    section(ui, tr!("Equalizer", "Эквалайзер"), |ui| {
+        row(
+            ui,
+            tr!("Equalizer", "Эквалайзер"),
+            Some(tr!(
+                "Ten bands, Winamp's, and a preamp; a limiter after them keeps the sound from clipping.",
+                "Десять полос, как в Winamp, и предусиление; лимитер после них не даёт звуку клиповать."
+            )),
+            50.0,
+            |ui| switch(ui, &mut dsp.eq),
+        );
+        divider(ui);
+        equalizer(ui, dsp);
+    });
+    section(ui, tr!("Enhancer", "Улучшение звука"), |ui| {
+        row(
+            ui,
+            tr!("Enhancer", "Улучшение звука"),
+            Some(tr!(
+                "What the sound improvers of Winamp's days did, in four amounts; 0 leaves a part alone.",
+                "То, что делали улучшайзеры времён Winamp, четырьмя регуляторами; 0 оставляет часть без изменений."
+            )),
+            50.0,
+            |ui| switch(ui, &mut dsp.enhancer),
+        );
+        divider(ui);
+        amount(
+            ui,
+            tr!("Bass", "Бас"),
+            tr!(
+                "A shelf under 100 Hz and the harmonics of the bass, which small speakers make heard as bass they cannot play.",
+                "Полка ниже 100 Гц и гармоники баса, которые на небольших колонках слышны как бас, недоступный им самим."
+            ),
+            &mut dsp.bass,
+        );
+        divider(ui);
+        amount(
+            ui,
+            tr!("Clarity", "Ясность"),
+            tr!(
+                "Air over 6 kHz, the harmonics of the top: what an MP3's low-pass took away.",
+                "Воздух выше 6 кГц, гармоники верха: то, что срезал фильтр MP3."
+            ),
+            &mut dsp.clarity,
+        );
+        divider(ui);
+        amount(
+            ui,
+            tr!("Width", "Ширина"),
+            tr!(
+                "The stereo image wider, the bass kept in the middle.",
+                "Шире стереокартина, бас остаётся в центре."
+            ),
+            &mut dsp.width,
+        );
+        divider(ui);
+        amount(
+            ui,
+            tr!("Warmth", "Теплота"),
+            tr!(
+                "A soft rounding of the peaks, as tape does.",
+                "Мягкое скругление пиков, как у плёнки."
+            ),
+            &mut dsp.warmth,
+        );
+    });
+}
+
+/// A row with a slider of 0 to 10.
+fn amount(ui: &mut Ui, title: &str, hint: &str, value: &mut u8) {
+    row(ui, title, Some(hint), CONTROL, |ui| {
+        ui.spacing_mut().slider_width = CONTROL - 50.0;
+        ui.add(egui::Slider::new(value, 0..=10));
+    });
+}
+
+/// The preamp and the ten bands as vertical sliders, a value over each
+/// and its frequency under it, and a button that flattens them.
+fn equalizer(ui: &mut Ui, dsp: &mut DspSettings) {
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().slider_width = 96.0;
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let column = |ui: &mut Ui, label: String, v: &mut f32| {
+            ui.vertical(|ui| {
+                ui.set_width(38.0);
+                ui.vertical_centered(|ui| {
+                    ui.label(
+                        RichText::new(format!("{v:+.0}"))
+                            .size(11.0)
+                            .color(palette::TEXT_WEAK),
+                    );
+                    ui.add(
+                        egui::Slider::new(v, -eq::RANGE_DB..=eq::RANGE_DB)
+                            .vertical()
+                            .show_value(false)
+                            .step_by(1.0),
+                    );
+                    ui.label(RichText::new(label).size(11.0));
+                });
+            });
+        };
+        column(ui, tr!("Pre", "Пред.").to_owned(), &mut dsp.preamp);
+        ui.add_space(6.0);
+        for (i, &f) in eq::BANDS.iter().enumerate() {
+            let label = if f >= 1000.0 {
+                format!("{}k", f / 1000.0)
+            } else {
+                format!("{f}")
+            };
+            column(ui, label, &mut dsp.bands[i]);
+        }
+    });
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        if ui.button(tr!("Flat", "Выровнять")).clicked() {
+            dsp.preamp = 0.0;
+            dsp.bands = [0.0; 10];
+        }
+    });
+    ui.add_space(6.0);
 }
 
 /// `text` cut to `chars` with an ellipsis.
@@ -626,6 +771,7 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     settings.bar_layout = d.bar_layout;
     settings.output_device = d.output_device;
     settings.output_device_name = d.output_device_name;
+    settings.dsp = d.dsp;
     updates.enabled = d.check_updates;
 }
 

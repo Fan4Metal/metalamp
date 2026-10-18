@@ -119,6 +119,7 @@ impl App {
             settings.repeat,
             settings.shuffle,
             settings.output_device.clone(),
+            settings.dsp.clone(),
         );
         let mut player = player;
         let saved_playlist = load_playlist(&mut player, settings.playlist_current);
@@ -946,6 +947,9 @@ impl eframe::App for App {
             .show(&ctx, &mut self.settings, &mut self.updates);
         if changed.device {
             self.player.set_device(&self.settings.output_device);
+        }
+        if changed.dsp {
+            self.player.set_dsp(&self.settings.dsp);
         }
         if changed.any {
             self.place_changed = Some(Instant::now());
