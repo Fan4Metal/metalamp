@@ -130,8 +130,6 @@ impl Engine {
         self.shared.duration_ms.load(Relaxed)
     }
 
-    /// The gain of what is heard, taken at the audio thread's next turn
-    /// (within 10 ms while playing).
     /// The `n` frames heard last into `out`, for the visualizations, their
     /// sample rate and where they end; `None` while nothing is heard.
     pub fn heard_samples(&self, n: usize, out: &mut Vec<f32>) -> Option<vis::Heard> {
@@ -142,6 +140,8 @@ impl Engine {
             .latest(n, out)
     }
 
+    /// The gain of what is heard, taken at the audio thread's next turn
+    /// (within 10 ms while playing).
     pub fn set_gain(&self, gain: f32) {
         self.shared.gain.store(gain.to_bits(), Relaxed);
     }

@@ -17,7 +17,7 @@
 
 MetalAMP is an audio player for Windows built around a media library: the music folders are scanned once, and the artists, the albums with their covers and the tracks are then shown at once and filtered as a search is typed. Playback uses the decoders of Windows itself (Media Foundation) and the WASAPI audio output, so the program is a single executable without additional libraries, and albums meant to be heard without pauses play without gaps.
 
-![MetalAMP: the artists on the left with Amorphis chosen, the covers of its albums, the tracks of Eclipse with the one playing in blue, the player bar on top and the playlist on the right](images/screenshot.png)
+![MetalAMP: the artists on the left with Amorphis chosen, the covers of its albums, the tracks of Eclipse with the one playing in amber, the player bar on top and the playlist on the right](images/screenshot.png)
 
 *Screenshot of version 0.1.0.*
 
@@ -57,7 +57,7 @@ The panes:
 
 - **Artists**: the name, the number of albums and of tracks; **All** at the top shows the whole library.
 - **Albums**: covers with the title and the year (or the artist), or a table with the artist, title, year, number of tracks, genre, length and size; the bar's two buttons switch between them. A cover is the picture in the album's folder (`folder`, `cover`, `front`, `albumart`, JPEG or PNG), else the one in the first track's tag; thumbnails are kept in the `covers` folder.
-- **Tracks**: number, title, length, album, year, artist, genre and bit rate; the track playing is shown in blue.
+- **Tracks**: number, title, length, album, year, artist, genre and bit rate; the track playing is shown in the colour of the controls (by default).
 
 A click on a column's header sorts by that column, a second click reverses the order; a column's right edge is dragged to change its width (a double click on it fits the column to its longest text, as in Windows' lists), and the borders between the panes move. Columns that do not fit in a pane scroll sideways (the scroll bar, or `Shift` with the mouse wheel). The search field (`Ctrl+F`) narrows all three panes as it is typed: every word must be found in the track's artist, album artist, album, title, genre or year; `Esc` clears it. The status line shows the number, the total length and the size of the tracks shown, and how long the search took.
 
@@ -71,7 +71,7 @@ A click on the cover in the player bar opens the file info window of the track p
 
 The player bar, in its default layout, has the player on the left and a visualization on the right. On the left: the time played in large digits (a click switches it to the time left, and back), the cover, the title, the artist and album, the bit rate, sample rate and channels; the seek bar with the length at its end; Previous, Play/Pause, Stop and Next; shuffle, repeat (off, the playlist, the track) and the volume with a mute button. On the right, in the room left, a visualization of the sound heard: a spectrum analyzer with peaks that hold and fall, a waveform rolling from the right, an oscilloscope, a spectrogram, or none; a click on it goes on to the next one, and the right button lists them. The mouse wheel anywhere over the title row and the player bar changes the volume in steps of 5 %. The taskbar button shows the position as its progress (yellow when paused) and has Previous, Play/Pause and Next under its thumbnail. The media keys of keyboards, headsets and remotes control the player also while another window is active, and Windows' media panel by the volume shows the track; the settings window can limit them to the player's window or turn them off. The settings window offers the compact bar of one row instead: the buttons, the cover and the names, shuffle, repeat and the volume, with the seek bar and the times under them.
 
-Media Foundation, the media framework of Windows, decodes the files, and the WASAPI shared mode plays them on the default device; a change of the default device or a device unplugged is followed without stopping. The track after the current one is opened in advance, so tracks of one format follow each other without a pause. An MP3 encoder adds silence before the music and after it; MetalAMP reads how much from the file's LAME tag and leaves it out, so an album recorded without pauses plays as one piece.
+Media Foundation, the media framework of Windows, decodes the files, and the WASAPI shared mode plays them on the default device or the one chosen in the settings; a change of the default device or a device unplugged is followed without stopping. The track after the current one is opened in advance, so tracks of one format follow each other without a pause. An MP3 encoder adds silence before the music and after it; MetalAMP reads how much from the file's LAME tag and leaves it out, so an album recorded without pauses plays as one piece.
 
 The sound can be processed on its way to the device, all of it off by default and switched on in the settings window. **The same loudness for every track** measures a track after EBU R128 in the background before its first play (the measurement is kept, so each track is read once) and brings it to −18 LUFS, a quiet track only as far as its peaks allow. The **equalizer** has the ten classic bands and a preamp, Flat and the classic presets (Rock, Pop, Classical and the rest) and the user's own, saved under a name. The **enhancer** has four amounts of 0 to 10: bass (a shelf under 100 Hz and the harmonics of the bass, which small speakers make heard as bass they cannot play), clarity (the air over 6 kHz an MP3's low-pass took away), width (a wider stereo image, the bass kept in the middle) and warmth (a soft rounding of the peaks, as tape does). Whenever any of these is on, a look-ahead limiter after them keeps the sound from clipping. The spectrum analyzer shows the result.
 
@@ -111,7 +111,7 @@ The playlist on the right (`Alt+E` shows or hides it) lists "Artist – Title" w
 | `Ctrl` + wheel over the covers | Larger or smaller covers (also the right button on the covers' button in the library bar: four sizes and a slider) |
 | `F5`, `Ctrl+P` | Settings (also the gear in the library's bar) |
 
-The media keys of keyboards and headsets work while the window is in front.
+The media keys of keyboards, headsets and remotes work also while another window is active; the settings window can limit them to the player's window or turn them off.
 
 ## Update check and privacy
 
@@ -128,7 +128,7 @@ cargo test
 
 `build.py` first closes a `metalamp.exe` running from the project's `target` folder, because it would lock the file, then runs `cargo build --release`. When the program is not running, plain `cargo build --release` works as well. The executable links the C runtime statically (`.cargo/config.toml`), so it needs nothing beyond Windows itself.
 
-Two measurements are built in: `metalamp --bench scan <folder>` reads a folder as a first scan does and prints the times, and `metalamp --bench gapless <file.mp3>` compares what the decoder gives with the file's LAME tag.
+Three measurements are built in: `metalamp --bench scan <folder>` reads a folder as a first scan does and prints the times, `metalamp --bench gapless <file.mp3>` compares what the decoder gives with the file's LAME tag, and `metalamp --bench loudness <file>` measures the file's loudness (EBU R128), its peak and the gain of normalisation.
 
 ## Installer and release
 

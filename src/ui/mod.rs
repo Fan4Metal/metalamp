@@ -1,8 +1,7 @@
 //! User interface pieces: the app icon as a texture, the toolbar button
 //! with a painted icon (`icons`), the About and update buttons, the close
 //! cross of a dialog; the start screen (`start`), the title row of the
-//! frameless window (`title`). The theme is always dark (`palette`), so the
-//! family's theme switch is left out.
+//! frameless window (`title`). The themes and the colours are `palette`'s.
 
 pub mod about;
 pub mod icons;
@@ -123,8 +122,6 @@ pub fn close_cross(ui: &mut Ui) -> bool {
     response.on_hover_text(tr!("Close", "Закрыть")).clicked()
 }
 
-/// A double click, also when it is the start of a triple one (egui reports
-/// the third click as a triple click instead of a second double click).
 /// `text` on one line at most `width` wide: a longer one cut with "…"
 /// (`Galley::elided`), as Windows' lists cut it; the caller shows the
 /// whole text as a tooltip then.
@@ -140,6 +137,8 @@ pub fn elided(
     painter.layout_job(job)
 }
 
+/// A double click, also when it is the start of a triple one (egui reports
+/// the third click as a triple click instead of a second double click).
 pub fn double_clicked(response: &Response) -> bool {
     response.double_clicked() || response.triple_clicked()
 }

@@ -101,8 +101,8 @@ fn devices() -> Result<Vec<Device>> {
 }
 
 const WAVE_FORMAT_IEEE_FLOAT: u16 = 3;
-/// The device buffer, in 100 ns: half a second written ahead of what is
-/// heard, so that the reading of tags and covers cannot starve it.
+/// The device buffer, in 100 ns: half a second, of which the engine keeps
+/// only `WRITE_AHEAD` written (a change of the settings is heard soon).
 const BUFFER: i64 = 5_000_000;
 
 pub struct Wasapi {

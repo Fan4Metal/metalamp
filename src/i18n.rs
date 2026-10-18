@@ -1,5 +1,5 @@
 //! Interface language: English or Russian, taken from the language of the
-//! Windows interface unless chosen in the About window.
+//! Windows interface unless chosen in the settings window.
 //!
 //! Strings stay next to the code that shows them, both languages together:
 //! `tr!("Open", "Открыть")` gives the one of the current language (and
@@ -37,7 +37,7 @@ impl LangChoice {
         }
     }
 
-    /// As listed in the About window: the languages in their own language,
+    /// As listed in the settings window: the languages in their own language,
     /// so that they can be found whatever the interface shows.
     pub fn label(self) -> String {
         let own = |lang| match lang {

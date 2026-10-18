@@ -1,5 +1,5 @@
 //! Update check: the latest release from the GitHub Releases API, asked
-//! only when enabled in the About window (at most once a day, at start-up)
+//! only when enabled in the settings window (at most once a day, at start-up)
 //! or with its "Check now" button. Nothing is downloaded: a newer version
 //! is offered as a toolbar button that opens its release page.
 
@@ -8,8 +8,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
 /// Compared with the release tag; not `main::VERSION`, which carries the
-/// commit of a `-dev` build. `X.Y.Z-dev` comes before release `X.Y.Z`,
-/// so a development build is offered its own release.
+/// commit of a `-dev` build. `-dev` is left out of the comparison: between
+/// releases the version is the next one's with `-dev`, so a development
+/// build is not offered the release it came after.
 const CURRENT: &str = env!("CARGO_PKG_VERSION");
 const API_HOST: &str = "api.github.com";
 /// Automatic checks are at least this far apart, in seconds.

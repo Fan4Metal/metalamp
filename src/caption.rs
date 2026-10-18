@@ -1,10 +1,9 @@
-//! The window's dark frame. The window is frameless with an always dark
-//! title row of the app's own, so the frame's colour is set once, while
+//! The window's frame, dark or light as the theme. The window is frameless
+//! with a title row of the app's own; the frame's colour is set first while
 //! the window is still hidden (`App::new`): set after egui's first frame,
-//! Windows 10 would keep the border of the Windows theme. The family's
-//! `refresh` (repainting the caption after a theme change) and
-//! `thread_windows` (child viewports) are left out: the theme never
-//! changes and there are no child viewports.
+//! Windows 10 would keep the border of the Windows theme. It is set again
+//! when the theme changes between dark and light. The family's
+//! `thread_windows` (child viewports) is left out: there are none.
 
 /// The window's handle, if it is a Win32 window. `eframe::CreationContext`
 /// and `eframe::Frame` both implement `HasWindowHandle`.
