@@ -143,20 +143,22 @@ fn full(
                 ),
             )
         };
-        // The largest of the fonts the text fits in.
+        // The largest of the fonts the text fits in; past ten hours left
+        // ("-10:00:00") not even the smallest does, and that one is used.
+        let layout = |size| {
+            ui.fonts_mut(|f| {
+                f.layout_no_wrap(
+                    text.clone(),
+                    FontId::monospace(size),
+                    palette::text_bright(),
+                )
+            })
+        };
         let galley = [30.0, 24.0, 18.0]
             .into_iter()
-            .map(|size| {
-                ui.fonts_mut(|f| {
-                    f.layout_no_wrap(
-                        text.clone(),
-                        FontId::monospace(size),
-                        palette::text_bright(),
-                    )
-                })
-            })
+            .map(layout)
             .find(|g| g.size().x <= TIME_WIDTH)
-            .expect("the smallest font fits");
+            .unwrap_or_else(|| layout(15.0));
         let resp = ui
             .interact(time_rect, ui.id().with("time"), Sense::click())
             .on_hover_cursor(egui::CursorIcon::PointingHand);
