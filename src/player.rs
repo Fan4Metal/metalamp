@@ -206,6 +206,11 @@ impl Player {
         self.engine.position_ms()
     }
 
+    /// The `n` frames heard last, for the analyzer, and their sample rate.
+    pub fn heard_samples(&self, n: usize, out: &mut Vec<f32>) -> Option<u32> {
+        self.engine.heard_samples(n, out)
+    }
+
     pub fn duration_ms(&self) -> u64 {
         self.engine.duration_ms()
     }

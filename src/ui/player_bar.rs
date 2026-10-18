@@ -1,7 +1,10 @@
-//! The player bar under the title row: Previous, Play/Pause (round, in
-//! the accent), Stop, Next; the cover, the title and the artist of the
-//! track heard; shuffle, repeat and the volume on the right; the seek bar
-//! across the bottom with the times at its ends.
+//! The player bar under the title row, laid out as Winamp's main window:
+//! the player on the left (`PLAYER_WIDTH`), the spectrum analyzer in the
+//! room on the right. The player: the time played (a click: the time
+//! left) in large digits, the cover, the title, the artist and album, the
+//! bit rate, sample rate and channels; the seek bar with the length at
+//! its end; Previous, Play/Pause (round, in the accent), Stop, Next;
+//! shuffle, repeat, the mute button and the volume.
 
 use egui::{Align2, Color32, FontId, Rect, Sense, Ui, pos2, vec2};
 
@@ -10,8 +13,15 @@ use crate::palette;
 use crate::player::Status;
 use crate::queue::Repeat;
 use crate::ui::icons::{self, Icon};
+use crate::ui::spectrum::Analyzer;
 
-pub const HEIGHT: f32 = 76.0;
+pub const HEIGHT: f32 = 112.0;
+/// The player's part on the left; the analyzer takes the rest.
+pub const PLAYER_WIDTH: f32 = 520.0;
+const MARGIN: f32 = 14.0;
+/// The room the time has (`-0:00` at the large font fits it).
+const TIME_WIDTH: f32 = 92.0;
+const COVER: f32 = 52.0;
 
 /// What a click in the bar asks for.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -27,6 +37,8 @@ pub enum BarCmd {
     Seek(u64),
     /// The cover clicked: the file info window.
     Info,
+    /// The time clicked: the time played or the time left.
+    TimeMode,
 }
 
 /// What the bar shows.
@@ -34,8 +46,15 @@ pub struct NowPlaying<'a> {
     pub status: Status,
     pub title: &'a str,
     pub artist: &'a str,
+    /// The track's kilobits per second, sample rate and channels (0: not
+    /// known).
+    pub bitrate: u32,
+    pub sample_rate: u32,
+    pub channels: u8,
     pub position_ms: u64,
     pub duration_ms: u64,
+    /// The time shown counts down to the end.
+    pub remaining: bool,
     pub volume: u8,
     pub mute: bool,
     pub shuffle: bool,
@@ -43,7 +62,7 @@ pub struct NowPlaying<'a> {
     pub cover: Option<egui::TextureHandle>,
 }
 
-pub fn show(ui: &mut Ui, now: &NowPlaying<'_>) -> Vec<BarCmd> {
+pub fn show(ui: &mut Ui, now: &NowPlaying<'_>, spectrum: &Analyzer) -> Vec<BarCmd> {
     let mut cmds = Vec::new();
     let rect = ui.max_rect();
     let painter = ui.painter().clone();
@@ -55,13 +74,139 @@ pub fn show(ui: &mut Ui, now: &NowPlaying<'_>) -> Vec<BarCmd> {
     // The free space drags the window, as the title row does.
     crate::frameless::drag_area(ui, rect, ui.id().with("bar_drag"), Sense::hover());
 
-    let top = Rect::from_min_size(rect.min, vec2(rect.width(), 50.0));
-    let cy = top.center().y + 2.0;
+    let player = Rect::from_min_size(
+        rect.min,
+        vec2(PLAYER_WIDTH.min(rect.width()), rect.height()),
+    );
+    let has_track = now.status != Status::Stopped || !now.title.is_empty();
 
-    // The transport buttons.
-    let mut x = rect.left() + 14.0;
+    // The upper row: the time, the cover and the names.
+    let info = Rect::from_min_max(
+        pos2(player.left() + MARGIN, player.top() + 8.0),
+        pos2(player.right() - MARGIN, player.top() + 8.0 + COVER),
+    );
+    let time_rect = Rect::from_min_size(info.min, vec2(TIME_WIDTH, info.height()));
+    if now.status != Status::Stopped {
+        let (text, tip) = if now.remaining && now.duration_ms > 0 {
+            (
+                format!(
+                    "-{}",
+                    format::time(now.duration_ms.saturating_sub(now.position_ms))
+                ),
+                tr!(
+                    "Time left; a click shows the time played",
+                    "Осталось; щелчок покажет прошедшее время"
+                ),
+            )
+        } else {
+            (
+                format::time(now.position_ms),
+                tr!(
+                    "Time played; a click shows the time left",
+                    "Прошло; щелчок покажет оставшееся время"
+                ),
+            )
+        };
+        // The largest of the fonts the text fits in.
+        let galley = [30.0, 24.0, 18.0]
+            .into_iter()
+            .map(|size| {
+                ui.fonts_mut(|f| {
+                    f.layout_no_wrap(text.clone(), FontId::monospace(size), palette::TEXT_BRIGHT)
+                })
+            })
+            .find(|g| g.size().x <= TIME_WIDTH)
+            .expect("the smallest font fits");
+        let resp = ui
+            .interact(time_rect, ui.id().with("time"), Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        let color = if resp.hovered() {
+            palette::ACCENT_HOVER
+        } else {
+            palette::TEXT_BRIGHT
+        };
+        let pos = pos2(
+            time_rect.left(),
+            time_rect.center().y - galley.size().y / 2.0,
+        );
+        painter.galley(pos, galley, color);
+        if resp.on_hover_text(tip).clicked() {
+            cmds.push(BarCmd::TimeMode);
+        }
+    }
+
+    let cover = Rect::from_min_size(
+        pos2(time_rect.right() + 6.0, info.top()),
+        vec2(COVER, COVER),
+    );
+    if has_track {
+        let resp = ui
+            .interact(cover, ui.id().with("cover"), Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        if resp
+            .on_hover_text(tr!("File info (I)", "Сведения о файле (I)"))
+            .clicked()
+        {
+            cmds.push(BarCmd::Info);
+        }
+    }
+    match &now.cover {
+        Some(t) => {
+            painter.image(
+                t.id(),
+                cover,
+                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                Color32::WHITE,
+            );
+        }
+        None => {
+            painter.rect_filled(cover, 3.0, palette::CARD_BG);
+        }
+    }
+    let text_left = cover.right() + 12.0;
+    let room = (info.right() - text_left).max(0.0);
+    let line = |text: &str, size: f32, color: Color32| {
+        let mut job = egui::text::LayoutJob::simple_singleline(
+            text.to_owned(),
+            FontId::proportional(size),
+            color,
+        );
+        job.wrap = egui::text::TextWrapping::truncate_at_width(room);
+        ui.fonts_mut(|f| f.layout_job(job))
+    };
+    if has_track {
+        let g1 = line(now.title, 15.0, palette::TEXT_BRIGHT);
+        let g2 = line(now.artist, 12.5, palette::TEXT_WEAK);
+        let g3 = line(&facts(now), 11.5, palette::TEXT_WEAK);
+        painter.galley(pos2(text_left, info.top() - 1.0), g1, palette::TEXT_BRIGHT);
+        painter.galley(pos2(text_left, info.top() + 19.0), g2, palette::TEXT_WEAK);
+        painter.galley(pos2(text_left, info.top() + 36.0), g3, palette::TEXT_WEAK);
+    }
+
+    // The seek bar, the length at its end.
+    let seek_y = info.bottom() + 12.0;
+    let length_w = 44.0;
+    let bar = Rect::from_min_max(
+        pos2(player.left() + MARGIN, seek_y - 6.0),
+        pos2(player.right() - MARGIN - length_w, seek_y + 6.0),
+    );
+    seek_bar(ui, &painter, bar, now, &mut cmds);
+    if now.status != Status::Stopped && now.duration_ms > 0 {
+        painter.text(
+            pos2(player.right() - MARGIN, seek_y),
+            Align2::RIGHT_CENTER,
+            format::time(now.duration_ms),
+            FontId::proportional(12.0),
+            palette::TEXT_WEAK,
+        );
+    }
+
+    // The lower row: the transport buttons on the left; shuffle, repeat
+    // and the volume on the right.
+    let cy = (seek_y + 10.0 + player.bottom()) / 2.0;
+    let mut x = player.left() + MARGIN;
     let mut button = |ui: &mut Ui, icon: Icon, size: f32, cmd: BarCmd, tip: &str, round: bool| {
-        let d = if round { 40.0 } else { 32.0 };
+        let d = if round { 36.0 } else { 30.0 };
         let r = Rect::from_center_size(pos2(x + d / 2.0, cy), vec2(d, d));
         x += d + 4.0;
         let resp = ui.interact(r, ui.id().with(("bar", tip)), Sense::click());
@@ -123,8 +268,7 @@ pub fn show(ui: &mut Ui, now: &NowPlaying<'_>) -> Vec<BarCmd> {
         false,
     );
 
-    // The right end: shuffle, repeat, the volume.
-    let mut right = rect.right() - 14.0;
+    let mut right = player.right() - MARGIN;
     let slider = Rect::from_min_max(pos2(right - 100.0, cy - 8.0), pos2(right, cy + 8.0));
     right = slider.left() - 6.0;
     let speaker = Rect::from_center_size(pos2(right - 14.0, cy), vec2(28.0, 28.0));
@@ -235,57 +379,57 @@ pub fn show(ui: &mut Ui, now: &NowPlaying<'_>) -> Vec<BarCmd> {
         tip.to_owned(),
     );
 
-    // The cover and the names between.
-    let cover = Rect::from_min_size(pos2(x + 14.0, cy - 21.0), vec2(42.0, 42.0));
-    if !now.title.is_empty() {
-        let resp = ui
-            .interact(cover, ui.id().with("cover"), Sense::click())
-            .on_hover_cursor(egui::CursorIcon::PointingHand);
-        if resp
-            .on_hover_text(tr!("File info (I)", "Сведения о файле (I)"))
-            .clicked()
-        {
-            cmds.push(BarCmd::Info);
-        }
-    }
-    match &now.cover {
-        Some(t) => {
-            painter.image(
-                t.id(),
-                cover,
-                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                Color32::WHITE,
-            );
-        }
-        None => {
-            painter.rect_filled(cover, 3.0, palette::CARD_BG);
-        }
-    }
-    let text_left = cover.right() + 12.0;
-    let room = (right - 16.0 - text_left).max(0.0);
-    let line = |text: &str, size: f32, color: Color32| {
-        let mut job = egui::text::LayoutJob::simple_singleline(
-            text.to_owned(),
-            FontId::proportional(size),
-            color,
+    // The analyzer: a dark display in the room on the right.
+    if let Some(display) = analyzer_rect(rect) {
+        painter.rect(
+            display,
+            4.0,
+            palette::LIST_BG,
+            egui::Stroke::new(1.0, palette::LINE),
+            egui::StrokeKind::Inside,
         );
-        job.wrap = egui::text::TextWrapping::truncate_at_width(room);
-        ui.fonts_mut(|f| f.layout_job(job))
-    };
-    if now.status != Status::Stopped || !now.title.is_empty() {
-        let g1 = line(now.title, 15.0, palette::TEXT_BRIGHT);
-        let g2 = line(now.artist, 12.5, palette::TEXT_WEAK);
-        painter.galley(pos2(text_left, cy - 19.0), g1, palette::TEXT_BRIGHT);
-        painter.galley(pos2(text_left, cy + 2.0), g2, palette::TEXT_WEAK);
+        spectrum.paint(&painter, display.shrink(4.0));
     }
+    cmds
+}
 
-    // The seek bar across the bottom.
-    let bottom = Rect::from_min_max(pos2(rect.left(), top.bottom()), rect.max);
-    let times_w = 52.0;
-    let bar = Rect::from_min_max(
-        pos2(bottom.left() + 14.0 + times_w, bottom.center().y - 6.0),
-        pos2(bottom.right() - 14.0 - times_w, bottom.center().y + 6.0),
+/// Where the analyzer's display sits in a bar of `rect`, and the room
+/// its bars have; `None` when the window is too narrow for it.
+pub fn analyzer_rect(rect: Rect) -> Option<Rect> {
+    let display = Rect::from_min_max(
+        pos2(rect.left() + PLAYER_WIDTH + 6.0, rect.top() + 10.0),
+        pos2(rect.right() - MARGIN, rect.bottom() - 11.0),
     );
+    (display.width() >= 60.0).then_some(display)
+}
+
+/// How many bars the analyzer in a bar of `rect` holds.
+pub fn analyzer_bands(rect: Rect) -> usize {
+    analyzer_rect(rect).map_or(0, |r| Analyzer::bands_for(r.shrink(4.0).width()))
+}
+
+/// The third line: `320 kbps · 44.1 kHz · Stereo`.
+fn facts(now: &NowPlaying<'_>) -> String {
+    let mut parts = Vec::new();
+    if now.bitrate > 0 {
+        parts.push(format::bitrate(now.bitrate));
+    }
+    if now.sample_rate > 0 {
+        parts.push(format::sample_rate(now.sample_rate));
+    }
+    if let Some(c) = format::channels(now.channels) {
+        parts.push(c);
+    }
+    parts.join(" · ")
+}
+
+fn seek_bar(
+    ui: &mut Ui,
+    painter: &egui::Painter,
+    bar: Rect,
+    now: &NowPlaying<'_>,
+    cmds: &mut Vec<BarCmd>,
+) {
     let duration = now.duration_ms;
     let resp = ui.interact(
         bar.expand2(vec2(0.0, 4.0)),
@@ -329,25 +473,4 @@ pub fn show(ui: &mut Ui, now: &NowPlaying<'_>) -> Vec<BarCmd> {
         let share = ((p.x - bar.left()) / bar.width()).clamp(0.0, 1.0);
         resp.on_hover_text_at_pointer(format::time((share as f64 * duration as f64) as u64));
     }
-    let time_color = palette::TEXT_WEAK;
-    let font = FontId::proportional(12.0);
-    if now.status != Status::Stopped {
-        painter.text(
-            pos2(bar.left() - 8.0, bar.center().y),
-            Align2::RIGHT_CENTER,
-            format::time(shown_ms),
-            font.clone(),
-            time_color,
-        );
-        if duration > 0 {
-            painter.text(
-                pos2(bar.right() + 8.0, bar.center().y),
-                Align2::LEFT_CENTER,
-                format::time(duration),
-                font,
-                time_color,
-            );
-        }
-    }
-    cmds
 }

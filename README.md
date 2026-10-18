@@ -69,7 +69,7 @@ A click on the cover in the player bar opens the file info window of the track p
 
 ### Playback
 
-The player bar holds Previous, Play/Pause, Stop and Next, the cover and the names of the track playing, shuffle, repeat (off, the playlist, the track), the volume with a mute button, and the seek bar with the time played and the length. The mouse wheel anywhere over the title row and the player bar changes the volume in steps of 5 %.
+The player bar is laid out as Winamp's main window. On the left: the time played in large digits (a click switches it to the time left, and back), the cover, the title, the artist and album, the bit rate, sample rate and channels; the seek bar with the length at its end; Previous, Play/Pause, Stop and Next; shuffle, repeat (off, the playlist, the track) and the volume with a mute button. On the right, in the room left, a spectrum analyzer of the sound heard, with peaks that hold and fall. The mouse wheel anywhere over the title row and the player bar changes the volume in steps of 5 %.
 
 Media Foundation, the media framework of Windows, decodes the files, and the WASAPI shared mode plays them on the default device; a change of the default device or a device unplugged is followed without stopping. The track after the current one is opened in advance, so tracks of one format follow each other without a pause. An MP3 encoder adds silence before the music and after it; MetalAMP reads how much from the file's LAME tag and leaves it out, so an album recorded without pauses plays as one piece.
 

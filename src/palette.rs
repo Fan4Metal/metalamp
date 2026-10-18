@@ -25,6 +25,12 @@ pub const LIST_BG: Color32 = rgb(0x16, 0x17, 0x1a);
 pub const LIST_STRIPE: Color32 = rgb(0x1a, 0x1b, 0x1f);
 /// Column headers.
 pub const HEADER_BG: Color32 = rgb(0x26, 0x28, 0x2e);
+/// The spectrum analyzer's bars: amber at the foot, pale gold at a full
+/// bar; the peaks in a warm white.
+pub const SPECTRUM_LOW: Color32 = rgb(0xc2, 0x74, 0x12);
+pub const SPECTRUM_HIGH: Color32 = rgb(0xff, 0xd6, 0x6e);
+pub const SPECTRUM_PEAK: Color32 = rgb(0xe8, 0xe3, 0xd6);
+
 /// A placeholder for a cover not loaded yet.
 pub const CARD_BG: Color32 = rgb(0x2a, 0x2d, 0x33);
 /// Lines between parts.

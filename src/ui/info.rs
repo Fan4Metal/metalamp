@@ -336,25 +336,13 @@ fn chips(d: &Details) -> Vec<String> {
         out.push(format::bitrate(d.bitrate));
     }
     if d.sample_rate > 0 {
-        let khz = d.sample_rate as f32 / 1000.0;
-        let khz = if khz.fract() == 0.0 {
-            format!("{khz:.0}")
-        } else {
-            format!("{khz:.1}")
-        };
-        out.push(tr!(
-            format!("{khz} kHz"),
-            format!("{} кГц", khz.replace('.', ","))
-        ));
+        out.push(format::sample_rate(d.sample_rate));
     }
     if let Some(bits) = d.bit_depth {
         out.push(tr!(format!("{bits} bit"), format!("{bits} бит")));
     }
-    match d.channels {
-        0 => {}
-        1 => out.push(tr!("Mono", "Моно").to_owned()),
-        2 => out.push(tr!("Stereo", "Стерео").to_owned()),
-        n => out.push(tr!(format!("{n} channels"), format!("{n} кан."))),
+    if let Some(c) = format::channels(d.channels) {
+        out.push(c);
     }
     out.push(format::size(d.size));
     out

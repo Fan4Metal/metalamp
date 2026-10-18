@@ -72,6 +72,30 @@ pub fn millis_in(lang: Lang, secs: f64) -> String {
     }
 }
 
+/// A sample rate: `44.1 kHz` / `44,1 кГц`, `48 kHz`.
+pub fn sample_rate(hz: u32) -> String {
+    let khz = hz as f32 / 1000.0;
+    let khz = if khz.fract() == 0.0 {
+        format!("{khz:.0}")
+    } else {
+        format!("{khz:.1}")
+    };
+    tr!(
+        format!("{khz} kHz"),
+        format!("{} кГц", khz.replace('.', ","))
+    )
+}
+
+/// The channels in words; `None` for 0.
+pub fn channels(n: u8) -> Option<String> {
+    match n {
+        0 => None,
+        1 => Some(tr!("Mono", "Моно").to_owned()),
+        2 => Some(tr!("Stereo", "Стерео").to_owned()),
+        n => Some(tr!(format!("{n} channels"), format!("{n} кан."))),
+    }
+}
+
 /// A bit rate in kilobits per second: `192 kbps` / `192 кбит/с`.
 pub fn bitrate(kbps: u32) -> String {
     if kbps == 0 {

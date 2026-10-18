@@ -64,6 +64,8 @@ pub struct Settings {
     pub playlist_cover: bool,
     /// The playlist's current entry (`playlist.m3u8` holds the list).
     pub playlist_current: Option<usize>,
+    /// The player bar's time counts down to the track's end.
+    pub time_remaining: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,6 +97,7 @@ impl Default for Settings {
             playlist_width: 340.0,
             playlist_cover: true,
             playlist_current: None,
+            time_remaining: false,
         }
     }
 }

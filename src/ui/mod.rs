@@ -10,6 +10,7 @@ pub mod info;
 pub mod library;
 pub mod player_bar;
 pub mod playlist;
+pub mod spectrum;
 pub mod start;
 pub mod status;
 pub mod table;

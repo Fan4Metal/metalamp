@@ -19,12 +19,13 @@ pub mod decoder;
 pub mod mf;
 pub mod mp3gap;
 pub mod output;
+pub mod vis;
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -68,6 +69,8 @@ pub struct Shared {
     /// The gain applied to the samples, as `f32` bits.
     gain: AtomicU32,
     quit: AtomicBool,
+    /// The samples heard, for the spectrum analyzer.
+    pub vis: Mutex<vis::Tap>,
 }
 
 pub struct Engine {
@@ -116,6 +119,16 @@ impl Engine {
 
     /// The gain of what is heard, taken at the audio thread's next turn
     /// (within 10 ms while playing).
+    /// The `n` frames heard last into `out`, for the analyzer, and their
+    /// sample rate; `None` while nothing is heard.
+    pub fn heard_samples(&self, n: usize, out: &mut Vec<f32>) -> Option<u32> {
+        self.shared
+            .vis
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .latest(n, out)
+    }
+
     pub fn set_gain(&self, gain: f32) {
         self.shared.gain.store(gain.to_bits(), Relaxed);
     }
@@ -247,6 +260,10 @@ fn raise_priority() {
 }
 
 impl Player<'_> {
+    fn vis(&self) -> std::sync::MutexGuard<'_, vis::Tap> {
+        self.shared.vis.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn send(&self, event: Event) {
         log::debug!("audio: {event:?}");
         let _ = self.events.send(event);
@@ -308,6 +325,7 @@ impl Player<'_> {
         self.paused = false;
         self.started = false;
         self.written = 0;
+        self.vis().clear();
         if let Some(out) = &mut self.out {
             let _ = out.reset();
         }
@@ -344,6 +362,7 @@ impl Player<'_> {
         }
         self.ring.clear();
         self.written = 0;
+        self.vis().clear();
         self.segments.clear();
         self.segments.push_back(Segment {
             start: 0,
@@ -432,6 +451,11 @@ impl Player<'_> {
             if frames > 0 {
                 let samples = self.ring.make_contiguous();
                 out.write(&samples[..frames * channels])?;
+                self.shared
+                    .vis
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(&samples[..frames * channels], channels, self.written);
                 self.ring.drain(..frames * channels);
                 self.written += frames as u64;
             }
@@ -443,6 +467,7 @@ impl Player<'_> {
 
         let out = self.out.as_mut().expect("checked above");
         let heard = out.heard()?;
+        self.vis().set_heard(heard, self.format.0);
         while self.segments.len() > 1 && self.segments[1].start <= heard {
             self.segments.pop_front();
         }

@@ -25,6 +25,9 @@ const PLACE_SAVE_DELAY: Duration = Duration::from_secs(1);
 
 pub struct App {
     settings: Settings,
+    /// The player bar's spectrum analyzer and the samples it is fed.
+    spectrum: crate::ui::spectrum::Analyzer,
+    heard: Vec<f32>,
     about: AboutDialog,
     updates: Updates,
     /// The window's handle; `None` off Windows.
@@ -127,6 +130,8 @@ impl App {
         about.lang = settings.language;
         Self {
             settings,
+            spectrum: crate::ui::spectrum::Analyzer::new(),
+            heard: Vec::new(),
             about,
             updates,
             hwnd,
@@ -350,21 +355,38 @@ impl App {
     fn player_bar(&mut self, ui: &mut egui::Ui) {
         use crate::ui::player_bar::{self, BarCmd, NowPlaying};
         let ctx = ui.ctx().clone();
-        let (title, artist, _) = self.now_playing();
+        let (title, artist, track) = self.now_playing();
         let cover = self.playing_cover(&ctx);
+        let (bitrate, sample_rate, channels) = track
+            .and_then(|t| self.library.tracks.get(t as usize))
+            .map_or((0, 0, 0), |t| (t.bitrate, t.sample_rate, t.channels));
+        // The analyzer: the samples heard now, for as many bars as fit.
+        let bands = player_bar::analyzer_bands(ui.max_rect());
+        let mut heard = std::mem::take(&mut self.heard);
+        let rate = self
+            .player
+            .heard_samples(crate::ui::spectrum::N, &mut heard)
+            .unwrap_or(0);
+        self.spectrum
+            .feed((rate > 0).then_some(heard.as_slice()), rate, bands);
+        self.heard = heard;
         let now = NowPlaying {
             status: self.player.status,
             title: &title,
             artist: &artist,
+            bitrate,
+            sample_rate,
+            channels,
             position_ms: self.player.position_ms(),
             duration_ms: self.player.duration_ms(),
+            remaining: self.settings.time_remaining,
             volume: self.player.volume,
             mute: self.player.mute,
             shuffle: self.player.queue.shuffle(),
             repeat: self.player.queue.repeat,
             cover,
         };
-        for cmd in player_bar::show(ui, &now) {
+        for cmd in player_bar::show(ui, &now, &self.spectrum) {
             match cmd {
                 BarCmd::Previous => self.player.previous(),
                 BarCmd::PlayPause => self.player.toggle_pause(),
@@ -390,6 +412,10 @@ impl App {
                 }
                 BarCmd::Seek(ms) => self.player.seek(ms),
                 BarCmd::Info => self.info_request = self.playing_or_current_path(),
+                BarCmd::TimeMode => {
+                    self.settings.time_remaining = !self.settings.time_remaining;
+                    self.place_changed = Some(Instant::now());
+                }
             }
         }
     }
@@ -734,9 +760,9 @@ impl eframe::App for App {
         if self.player.poll().track {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
         }
-        if self.player.status == crate::player::Status::Playing {
-            // The position moves on: a few repaints a second.
-            ctx.request_repaint_after(Duration::from_millis(250));
+        if self.player.status == crate::player::Status::Playing || self.spectrum.active() {
+            // The analyzer moves: 50 frames a second.
+            ctx.request_repaint_after(Duration::from_millis(20));
         }
         self.remember_place();
     }
