@@ -68,3 +68,6 @@ jobs:
             dist/*_portable.zip
           fail_on_unmatched_files: true
           generate_release_notes: true
+          # A tag such as v0.2.0-beta is a prerelease, so that /releases/latest,
+          # which the update check asks, never names it.
+          prerelease: ${{ contains(github.ref_name, '-') }}
