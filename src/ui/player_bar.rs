@@ -199,20 +199,28 @@ fn full(
 
     // The seek bar, the length at its end.
     let seek_y = info.bottom() + 10.0;
-    let length_w = 44.0;
+    let length = (now.status != Status::Stopped && now.duration_ms > 0).then(|| {
+        ui.fonts_mut(|f| {
+            f.layout_no_wrap(
+                format::time(now.duration_ms),
+                FontId::proportional(12.0),
+                palette::text_weak(),
+            )
+        })
+    });
+    // Room for "4:05" at least, more for a length of hours.
+    let length_w = length.as_ref().map_or(0.0, |g| g.size().x + 8.0).max(44.0);
     let bar = Rect::from_min_max(
         pos2(player.left() + MARGIN, seek_y - 6.0),
         pos2(player.right() - MARGIN - length_w, seek_y + 6.0),
     );
     seek_bar(ui, painter, bar, now, cmds);
-    if now.status != Status::Stopped && now.duration_ms > 0 {
-        painter.text(
-            pos2(player.right() - MARGIN, seek_y),
-            Align2::RIGHT_CENTER,
-            format::time(now.duration_ms),
-            FontId::proportional(12.0),
-            palette::text_weak(),
+    if let Some(g) = length {
+        let at = pos2(
+            player.right() - MARGIN - g.size().x,
+            seek_y - g.size().y / 2.0,
         );
+        painter.galley(at, g, palette::text_weak());
     }
 
     // The lower row: the transport buttons on the left; shuffle, repeat
