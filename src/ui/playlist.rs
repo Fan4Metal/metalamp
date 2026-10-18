@@ -165,12 +165,13 @@ pub fn show(
     let side = (full.width() - 2.0 * COVER_PAD).min(COVER_MAX);
     let cover_h = side + COVER_PAD;
     let list_h = full.height() - HEADER - FOOTER;
-    let cover_rect = (*show_cover && side > 40.0 && list_h - cover_h >= COVER_MIN_LIST).then(|| {
-        Rect::from_center_size(
-            pos2(full.center().x, full.bottom() - FOOTER - cover_h / 2.0),
-            vec2(side, side),
-        )
-    });
+    let cover_rect =
+        (*show_cover && side > 40.0 && list_h - cover_h >= COVER_MIN_LIST).then(|| {
+            Rect::from_center_size(
+                pos2(full.center().x, full.bottom() - FOOTER - cover_h / 2.0),
+                vec2(side, side),
+            )
+        });
     let body = Rect::from_min_max(
         pos2(full.left(), header.bottom()),
         pos2(
@@ -184,7 +185,8 @@ pub fn show(
             Some(t) => {
                 let [w, h] = t.size();
                 let scale = side / w.max(h) as f32;
-                let fit = Rect::from_center_size(r.center(), vec2(w as f32 * scale, h as f32 * scale));
+                let fit =
+                    Rect::from_center_size(r.center(), vec2(w as f32 * scale, h as f32 * scale));
                 egui::Image::new(egui::load::SizedTexture::new(t.id(), fit.size()))
                     .corner_radius(6.0)
                     .paint_at(ui, fit);
@@ -214,10 +216,7 @@ pub fn show(
         egui::Popup::context_menu(&resp)
             .id(egui::Id::new("playlist_cover_menu"))
             .show(|ui| {
-                if ui
-                    .button(tr!("Hide the cover", "Скрыть обложку"))
-                    .clicked()
-                {
+                if ui.button(tr!("Hide the cover", "Скрыть обложку")).clicked() {
                     *show_cover = false;
                     ui.close();
                 }

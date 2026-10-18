@@ -178,8 +178,8 @@ impl InfoView {
                         // by its size of the frame before, so an area that
                         // only took the room left froze at the height the
                         // window had while the file was read.
-                        let room = (ctx.content_rect().height() - 2.0 * 20.0 - COVER - 60.0)
-                            .max(120.0);
+                        let room =
+                            (ctx.content_rect().height() - 2.0 * 20.0 - COVER - 60.0).max(120.0);
                         egui::ScrollArea::vertical()
                             .id_salt("file_info_body")
                             .min_scrolled_height(room)
@@ -376,7 +376,12 @@ fn body(ui: &mut Ui, d: &Details) {
         .num_columns(2)
         .spacing(vec2(12.0, 6.0))
         .show(ui, |ui| {
-            field(ui, &field_name(ItemKey::Comment), value(d, &[ItemKey::Comment]), true);
+            field(
+                ui,
+                &field_name(ItemKey::Comment),
+                value(d, &[ItemKey::Comment]),
+                true,
+            );
             ui.end_row();
             let shown: Vec<ItemKey> = LEFT
                 .iter()

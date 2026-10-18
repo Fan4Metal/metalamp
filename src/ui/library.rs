@@ -726,7 +726,12 @@ fn artists_pane(
         lv.focus = Pane::Artists;
     }
     let mut choose = resp.clicked.or(resp.double_clicked).or(resp.secondary);
-    match context_menu(resp.area.as_ref(), resp.secondary.is_some(), "artists", false) {
+    match context_menu(
+        resp.area.as_ref(),
+        resp.secondary.is_some(),
+        "artists",
+        false,
+    ) {
         Some(MenuChoice::Play) => lv.play_shown = true,
         Some(MenuChoice::Enqueue) => actions.push(LibraryAction::Enqueue(view.tracks.clone())),
         Some(MenuChoice::ShowInFolder) => {
@@ -855,7 +860,12 @@ fn albums_table(
         library,
         view,
         menu_album,
-        context_menu(resp.area.as_ref(), resp.secondary.is_some(), "albums", false),
+        context_menu(
+            resp.area.as_ref(),
+            resp.secondary.is_some(),
+            "albums",
+            false,
+        ),
         actions,
     );
     if keys_free

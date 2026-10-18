@@ -43,7 +43,11 @@ pub fn row(
     }
     let icon_rect =
         Rect::from_center_size(pos2(rect.left() + 18.0, rect.center().y), vec2(18.0, 18.0));
-    let icon_resp = ui.interact(icon_rect.expand(5.0), ui.id().with("app_icon"), Sense::click());
+    let icon_resp = ui.interact(
+        icon_rect.expand(5.0),
+        ui.id().with("app_icon"),
+        Sense::click(),
+    );
     if icon_resp.hovered() {
         ui.painter()
             .rect_filled(icon_rect.expand(5.0), 4.0, palette::HOVER);

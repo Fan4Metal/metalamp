@@ -273,7 +273,12 @@ pub fn paint(painter: &Painter, icon: Icon, c: Pos2, size: f32, color: Color32, 
             }
         }
         Icon::Image => {
-            painter.rect_stroke(rect(-6.0, -5.0, 12.0, 10.0), 1.5 * k, line, StrokeKind::Middle);
+            painter.rect_stroke(
+                rect(-6.0, -5.0, 12.0, 10.0),
+                1.5 * k,
+                line,
+                StrokeKind::Middle,
+            );
             painter.circle_filled(p(-2.6, -2.0), 1.25 * k, color);
             painter.add(polyline(&[
                 (-5.3, 4.3),

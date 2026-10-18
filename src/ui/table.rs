@@ -130,10 +130,8 @@ impl Table<'_> {
         let out_area = scroll.show_viewport(&mut child, |ui, viewport| {
             let height = rows as f32 * ROW_HEIGHT;
             let width = needed.max(viewport.width());
-            let (area_rect, area) = ui.allocate_exact_size(
-                vec2(width, height.max(viewport.height())),
-                Sense::click(),
-            );
+            let (area_rect, area) =
+                ui.allocate_exact_size(vec2(width, height.max(viewport.height())), Sense::click());
             let edges = column_edges(area_rect.left(), width, &widths);
             let first = (viewport.top() / ROW_HEIGHT).floor().max(0.0) as usize;
             let last = ((viewport.bottom() / ROW_HEIGHT).ceil() as usize).min(rows);

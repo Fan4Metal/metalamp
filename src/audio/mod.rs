@@ -673,6 +673,9 @@ mod tests {
         assert!(wait(&|e| matches!(e, Event::Started { id: 2 }), 5));
         std::thread::sleep(Duration::from_millis(800));
         let position = engine.position_ms();
-        assert!(position > 300, "the position stands at {position} ms: still paused");
+        assert!(
+            position > 300,
+            "the position stands at {position} ms: still paused"
+        );
     }
 }

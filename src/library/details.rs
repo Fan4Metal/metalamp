@@ -84,7 +84,11 @@ pub fn read(path: &Path) -> Result<Details, String> {
     let main = file.primary_tag().or_else(|| file.first_tag());
     let mut tags: Vec<String> = main
         .into_iter()
-        .chain(file.tags().iter().filter(|t| Some(t.tag_type()) != main.map(|m| m.tag_type())))
+        .chain(
+            file.tags()
+                .iter()
+                .filter(|t| Some(t.tag_type()) != main.map(|m| m.tag_type())),
+        )
         .map(|t| tag_name(t.tag_type(), &head))
         .collect();
     tags.dedup();
@@ -107,7 +111,11 @@ pub fn read(path: &Path) -> Result<Details, String> {
         })
         .map(|picture| {
             let picture = if picture.width().max(picture.height()) > COVER_SIDE {
-                picture.resize(COVER_SIDE, COVER_SIDE, image::imageops::FilterType::Triangle)
+                picture.resize(
+                    COVER_SIDE,
+                    COVER_SIDE,
+                    image::imageops::FilterType::Triangle,
+                )
             } else {
                 picture
             };

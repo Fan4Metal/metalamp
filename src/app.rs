@@ -314,7 +314,10 @@ impl App {
     fn info_path(&self) -> Option<PathBuf> {
         let entries = self.player.queue.entries();
         if self.playlist_view.focused
-            && let Some(e) = self.playlist_view.selected_entry().and_then(|i| entries.get(i))
+            && let Some(e) = self
+                .playlist_view
+                .selected_entry()
+                .and_then(|i| entries.get(i))
         {
             return Some(e.path.clone());
         }
