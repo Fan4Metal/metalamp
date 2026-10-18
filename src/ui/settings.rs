@@ -739,9 +739,10 @@ fn eq_head(
     let mine = presets
         .iter()
         .position(|p| p.bands == dsp.bands && p.preamp == dsp.preamp);
+    // A built-in preset sets the preamp to 0: one stands at it only so.
     let built_in = eq::PRESETS
         .iter()
-        .find(|(_, _, bands)| *bands == dsp.bands)
+        .find(|(_, _, bands)| *bands == dsp.bands && dsp.preamp == 0.0)
         .map(|(en, ru, _)| tr!(*en, *ru));
     ui.horizontal(|ui| {
         switch(ui, &mut dsp.eq).on_hover_text(tr!(
@@ -760,11 +761,14 @@ fn eq_head(
             .width(width)
             .show_ui(ui, |ui| {
                 for (en, ru, bands) in eq::PRESETS {
-                    let on = mine.is_none() && bands == dsp.bands;
+                    let on = mine.is_none() && bands == dsp.bands && dsp.preamp == 0.0;
                     if ui.selectable_label(on, tr!(en, ru)).clicked() {
                         dsp.bands = bands;
                         dsp.preamp = 0.0;
-                        dsp.eq = true;
+                        // Flat leaves the switch as it is: nothing to hear.
+                        if bands.iter().any(|&b| b != 0.0) {
+                            dsp.eq = true;
+                        }
                     }
                 }
                 if !presets.is_empty() {

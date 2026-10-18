@@ -14,9 +14,10 @@ const Q: f32 = 1.0;
 /// A band's gain is kept within this many decibels either way.
 pub const RANGE_DB: f32 = 12.0;
 
-/// Winamp's presets (its `winamp.q1`), in decibels of its ±12 dB scale;
-/// the names as they are shown and in Russian.
-pub const PRESETS: [(&str, &str, [f32; 10]); 17] = [
+/// Flat, then Winamp's presets (its `winamp.q1`), in decibels of its
+/// ±12 dB scale; the names as they are shown and in Russian.
+pub const PRESETS: [(&str, &str, [f32; 10]); 18] = [
+    ("Flat", "Ровный", [0.0; 10]),
     (
         "Classical",
         "Классика",
