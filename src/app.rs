@@ -682,11 +682,10 @@ impl App {
                 Some((u64::from(t.duration_ms) / 1000, title))
             });
             if let Some(path) = playlist_file() {
+                static FILE: crate::kept::Kept = crate::kept::Kept::new();
+                let number = FILE.ask();
                 let write = move || {
-                    let tmp = path.with_extension("m3u8.tmp");
-                    if let Err(e) =
-                        std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, &path))
-                    {
+                    if let Err(e) = FILE.write(number, &path, text.as_bytes()) {
                         log::warn!("cannot write the playlist: {e}");
                     }
                 };

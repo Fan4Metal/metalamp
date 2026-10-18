@@ -113,14 +113,13 @@ impl Loudness {
                 .map(|(p, m)| (p.to_string_lossy().into_owned(), [m.lufs, m.peak]))
                 .collect(),
         };
+        static FILE: crate::kept::Kept = crate::kept::Kept::new();
+        let number = FILE.ask();
         std::thread::spawn(move || {
-            if let Ok(bytes) = serde_json::to_vec(&index) {
-                let tmp = file.with_extension("json.tmp");
-                if std::fs::write(&tmp, bytes).is_ok()
-                    && let Err(e) = std::fs::rename(&tmp, &file)
-                {
-                    log::warn!("cannot write {}: {e}", file.display());
-                }
+            if let Ok(bytes) = serde_json::to_vec(&index)
+                && let Err(e) = FILE.write(number, &file, &bytes)
+            {
+                log::warn!("cannot write {}: {e}", file.display());
             }
         });
     }

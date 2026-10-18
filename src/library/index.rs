@@ -50,7 +50,17 @@ pub fn load() -> (Vec<Track>, bool) {
 }
 
 /// Writes the index (to a temporary file, then renamed over the old one).
-pub fn save(tracks: &[Track]) {
+/// The index file's writes.
+static WRITES: crate::kept::Kept = crate::kept::Kept::new();
+
+/// The number of a scan's saves, taken when the scan starts: a scan
+/// replaced while it saved does not write over the one after it.
+pub fn ask() -> u64 {
+    WRITES.ask()
+}
+
+/// Saves `tracks` as the scan numbered `number` (from [`ask`]) has them.
+pub fn save(tracks: &[Track], number: u64) {
     let Some(path) = path() else { return };
     #[derive(Serialize)]
     struct IndexRef<'a> {
@@ -61,14 +71,9 @@ pub fn save(tracks: &[Track]) {
         version: VERSION,
         tracks,
     };
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let tmp = path.with_extension("json.tmp");
     let result = serde_json::to_vec(&index)
         .map_err(std::io::Error::other)
-        .and_then(|bytes| std::fs::write(&tmp, bytes))
-        .and_then(|()| std::fs::rename(&tmp, &path));
+        .and_then(|bytes| WRITES.write(number, &path, &bytes));
     if let Err(e) = result {
         log::warn!("cannot write {}: {e}", path.display());
     }

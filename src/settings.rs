@@ -13,12 +13,10 @@ use crate::ui::table::Sort;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
-/// The number of the last save asked for, and of the last one written.
-static SAVES: AtomicU64 = AtomicU64::new(0);
-static WRITTEN: Mutex<u64> = Mutex::new(0);
+/// The settings file's writes.
+static FILE: crate::kept::Kept = crate::kept::Kept::new();
 
 /// Where the window was: its restored rectangle in pixels as Windows keeps
 /// it (`GetWindowPlacement().rcNormalPosition`: left, top, right, bottom in
@@ -376,36 +374,27 @@ impl Settings {
     }
 
     pub fn save(&self) {
-        self.save_numbered(SAVES.fetch_add(1, Ordering::SeqCst) + 1);
+        self.save_numbered(FILE.ask());
     }
 
     /// Saves a copy on a background thread. Saves are numbered when asked
     /// for, so one asked for later, here or in [`Settings::save`], wins even
     /// if this one finishes after it.
     pub fn save_in_background(&self) {
-        let number = SAVES.fetch_add(1, Ordering::SeqCst) + 1;
+        let number = FILE.ask();
         let settings = self.clone();
         std::thread::spawn(move || settings.save_numbered(number));
     }
 
-    /// Writes the file unless a later save was written already. One writer
-    /// at a time: they share the temporary file.
+    /// Writes the file unless a later save was written already.
     fn save_numbered(&self, number: u64) {
         let Some(path) = &location().file else {
             return;
         };
-        let mut written = WRITTEN.lock().unwrap_or_else(|e| e.into_inner());
-        if *written > number {
-            return;
-        }
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        if let Ok(bytes) = serde_json::to_vec_pretty(self) {
-            let tmp = path.with_extension("json.tmp");
-            if std::fs::write(&tmp, bytes).is_ok() && std::fs::rename(&tmp, path).is_ok() {
-                *written = number;
-            }
+        if let Ok(bytes) = serde_json::to_vec_pretty(self)
+            && let Err(e) = FILE.write(number, path, &bytes)
+        {
+            log::warn!("cannot write {}: {e}", path.display());
         }
     }
 }

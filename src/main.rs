@@ -19,6 +19,7 @@ mod format;
 mod frameless;
 mod icon;
 mod instance;
+mod kept;
 mod library;
 mod loudness;
 mod palette;

@@ -67,9 +67,10 @@ impl Scan {
         let cancel = Arc::new(AtomicBool::new(false));
         let (tx, rx) = channel();
         let stop = Arc::clone(&cancel);
+        let number = index::ask();
         let spawned = std::thread::Builder::new()
             .name("scan".into())
-            .spawn(move || run(folders, previous, load_index, &stop, &tx, &wake));
+            .spawn(move || run(folders, previous, load_index, number, &stop, &tx, &wake));
         if let Err(e) = spawned {
             log::warn!("cannot start the scan: {e}");
         }
@@ -94,6 +95,7 @@ fn run(
     folders: Vec<PathBuf>,
     previous: Option<Arc<Library>>,
     load_index: bool,
+    number: u64,
     cancel: &AtomicBool,
     tx: &Sender<ScanMsg>,
     wake: &Wake,
@@ -122,7 +124,7 @@ fn run(
     };
     if folders.is_empty() && !load_index {
         // The last folder removed: an empty library.
-        index::save(&[]);
+        index::save(&[], number);
         send(ScanMsg::Done(Scanned {
             library: Arc::new(Library::default()),
             read: 0,
@@ -151,30 +153,17 @@ fn run(
         .filter(|_| !read_all)
         .map(|l| l.tracks.iter().map(|t| (t.path.as_path(), t)).collect())
         .unwrap_or_default();
-    let (mut tracks, read) = read_tracks(
-        &found,
-        &known,
-        cancel,
-        &|done, total| send(ScanMsg::Progress { done, total }),
-        &|so_far| {
-            if !read_all {
-                send(ScanMsg::Loaded(Arc::new(Library::new(so_far.to_vec()))));
-            }
-        },
-    );
-    if cancel.load(Relaxed) {
-        return;
-    }
     // A folder that could not be read (a disk not plugged in, a network
     // share away) keeps its tracks as they were, rather than lose them
     // until it is read whole again.
+    let mut kept: Vec<Track> = Vec::new();
     if !unreadable.is_empty()
         && let Some(previous) = &previous
     {
         log::warn!("folders not read, their tracks kept: {unreadable:?}");
         let listed: std::collections::HashSet<&Path> =
-            tracks.iter().map(|t| t.path.as_path()).collect();
-        let kept: Vec<Track> = previous
+            found.iter().map(|f| f.path.as_path()).collect();
+        kept = previous
             .tracks
             .iter()
             .filter(|t| {
@@ -183,13 +172,32 @@ fn run(
             })
             .cloned()
             .collect();
-        tracks.extend(kept);
     }
+    let (mut tracks, read) = read_tracks(
+        &found,
+        &known,
+        cancel,
+        &|done, total| send(ScanMsg::Progress { done, total }),
+        &|so_far| {
+            // A long scan saves as it goes: one stopped by the end of the
+            // program goes on from there next time.
+            let mut saved = so_far.to_vec();
+            saved.extend(kept.iter().cloned());
+            index::save(&saved, number);
+            if !read_all {
+                send(ScanMsg::Loaded(Arc::new(Library::new(saved))));
+            }
+        },
+    );
+    if cancel.load(Relaxed) {
+        return;
+    }
+    tracks.extend(kept);
     // Fewer kept than known: files were deleted or their folder dropped.
     let removed = tracks.len() - read < known.len();
     let library = Arc::new(Library::new(tracks));
     if read > 0 || removed {
-        index::save(&library.tracks);
+        index::save(&library.tracks, number);
     }
     log::debug!(
         "scan: {} files, {read} read, in {} ms",
