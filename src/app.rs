@@ -138,6 +138,9 @@ impl App {
         let saved_playlist = load_playlist(&mut player, settings.playlist_current);
         // Files on the command line (Explorer's Open) play at once.
         let files = expand_playlists(files);
+        // The rest of an Explorer selection comes from the other starts
+        // as soon as the window listens: added to these, not over them.
+        let last_received = (!files.is_empty()).then(Instant::now);
         if !files.is_empty() {
             player.play_paths(files, 0);
         }
@@ -169,7 +172,7 @@ impl App {
             library_view: crate::ui::library::LibraryView::new(ctx),
             right_held: false,
             player,
-            last_received: None,
+            last_received,
             playlist_view: crate::ui::playlist::PlaylistView::default(),
             saved_playlist,
             file_info: crate::ui::info::InfoView::default(),
