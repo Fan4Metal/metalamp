@@ -105,8 +105,11 @@ fn run(
         }
     };
     let start = Instant::now();
+    let mut read_all = false;
     let previous = if load_index {
-        let library = Arc::new(Library::new(index::load()));
+        let (tracks, stale) = index::load();
+        read_all = stale;
+        let library = Arc::new(Library::new(tracks));
         log::debug!(
             "index: {} tracks in {} ms",
             library.tracks.len(),
@@ -135,8 +138,11 @@ fn run(
     if cancel.load(Relaxed) {
         return;
     }
+    // An index of an older version is shown while every file is read
+    // again, not replaced by the part read so far.
     let known: HashMap<&Path, &Track> = previous
         .as_deref()
+        .filter(|_| !read_all)
         .map(|l| l.tracks.iter().map(|t| (t.path.as_path(), t)).collect())
         .unwrap_or_default();
     let (tracks, read) = read_tracks(
@@ -144,7 +150,11 @@ fn run(
         &known,
         cancel,
         &|done, total| send(ScanMsg::Progress { done, total }),
-        &|so_far| send(ScanMsg::Loaded(Arc::new(Library::new(so_far.to_vec())))),
+        &|so_far| {
+            if !read_all {
+                send(ScanMsg::Loaded(Arc::new(Library::new(so_far.to_vec()))));
+            }
+        },
     );
     if cancel.load(Relaxed) {
         return;

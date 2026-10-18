@@ -302,11 +302,11 @@ pub(crate) fn in_folder(folder: &Path) -> Option<PathBuf> {
 fn embedded(path: &Path) -> Option<Vec<u8>> {
     use lofty::file::TaggedFileExt;
     use lofty::picture::PictureType;
-    let tagged = lofty::probe::Probe::open(path)
-        .ok()?
-        .options(lofty::config::ParseOptions::new().read_properties(false))
-        .read()
-        .ok()?;
+    let tagged = crate::library::tags::open(
+        path,
+        lofty::config::ParseOptions::new().read_properties(false),
+    )
+    .ok()?;
     let pictures: Vec<&lofty::picture::Picture> =
         tagged.tags().iter().flat_map(|t| t.pictures()).collect();
     pictures

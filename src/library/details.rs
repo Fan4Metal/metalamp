@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 use lofty::config::ParseOptions;
 use lofty::picture::{MimeType, PictureType};
 use lofty::prelude::*;
-use lofty::probe::Probe;
 use lofty::tag::{ItemValue, TagType};
 
 pub struct Details {
@@ -74,10 +73,7 @@ const ORDER: [ItemKey; 19] = [
 
 pub fn read(path: &Path) -> Result<Details, String> {
     let size = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
-    let file = Probe::open(path)
-        .map_err(|e| e.to_string())?
-        .options(ParseOptions::new().read_properties(true))
-        .read()
+    let file = super::tags::open(path, ParseOptions::new().read_properties(true))
         .map_err(|e| e.to_string())?;
     let props = file.properties();
     let head = crate::audio::mp3gap::read_head(path);

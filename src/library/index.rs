@@ -12,7 +12,10 @@ use super::Track;
 
 /// Raised when the meaning of a field changes: an index of another version
 /// is dropped and the library read again.
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
+/// Older versions whose tracks are shown until they are read again: 1
+/// took an MP3's later ID3v2 tags over its first (`tags::open`).
+const READ_AGAIN: [u32; 1] = [1];
 const FILE: &str = "library.json";
 
 #[derive(Serialize, Deserialize)]
@@ -25,21 +28,23 @@ fn path() -> Option<PathBuf> {
     crate::settings::data_dir().map(|d| d.join(FILE))
 }
 
-/// The tracks of the last scan; empty without an index or with one of
-/// another version.
-pub fn load() -> Vec<Track> {
+/// The tracks of the last scan, and whether every file must be read
+/// again (an index of a version in `READ_AGAIN`); none without an index
+/// or with one of another version.
+pub fn load() -> (Vec<Track>, bool) {
     let Some(path) = path() else {
-        return Vec::new();
+        return (Vec::new(), false);
     };
     let Ok(bytes) = std::fs::read(&path) else {
-        return Vec::new();
+        return (Vec::new(), false);
     };
     match serde_json::from_slice::<Index>(&bytes) {
-        Ok(index) if index.version == VERSION => index.tracks,
-        Ok(_) => Vec::new(),
+        Ok(index) if index.version == VERSION => (index.tracks, false),
+        Ok(index) if READ_AGAIN.contains(&index.version) => (index.tracks, true),
+        Ok(_) => (Vec::new(), false),
         Err(e) => {
             log::warn!("cannot read {}: {e}", path.display());
-            Vec::new()
+            (Vec::new(), false)
         }
     }
 }

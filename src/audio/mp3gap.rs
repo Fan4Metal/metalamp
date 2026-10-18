@@ -34,21 +34,38 @@ pub fn trim_of(info: &GapInfo) -> Option<Trim> {
     })
 }
 
-/// The start of `file`: its ID3v2 tag and 8 KB after it.
+/// The start of `file`: its ID3v2 tags and 8 KB after them.
 pub fn read_head(file: &std::path::Path) -> Vec<u8> {
     use std::io::Read;
     let Ok(mut f) = std::fs::File::open(file) else {
         return Vec::new();
     };
-    let mut head = vec![0u8; 10];
-    if f.read_exact(&mut head).is_err() {
-        return Vec::new();
-    }
-    let len = id3v2_len(&head).max(10);
-    let mut rest = Vec::new();
-    let _ = f.take((len - 10 + 8192) as u64).read_to_end(&mut rest);
-    head.extend(rest);
+    let end = leading_tags(&mut f).last().map_or(0, |t| t.end);
+    let mut head = Vec::new();
+    let _ = std::io::Seek::rewind(&mut f);
+    let _ = f.take(end + 8192).read_to_end(&mut head);
     head
+}
+
+/// Where the ID3v2 tags at the start of `file` lie, one after another
+/// (a tagger that wrote a new tag before an old one leaves both; at
+/// most 8).
+pub fn leading_tags(file: &mut (impl std::io::Read + std::io::Seek)) -> Vec<std::ops::Range<u64>> {
+    let mut tags = Vec::new();
+    let mut at = 0;
+    let mut header = [0u8; 10];
+    while tags.len() < 8
+        && file.seek(std::io::SeekFrom::Start(at)).is_ok()
+        && file.read_exact(&mut header).is_ok()
+    {
+        let len = id3v2_len(&header) as u64;
+        if len == 0 {
+            break;
+        }
+        tags.push(at..at + len);
+        at += len;
+    }
+    tags
 }
 
 /// What the header says, in samples per channel.
@@ -70,23 +87,40 @@ impl GapInfo {
 }
 
 /// The ID3v2 tag's length at the start of `data` (header and footer
-/// included), 0 without one.
+/// included), 0 without one (a version or a size that cannot be is none).
 pub fn id3v2_len(data: &[u8]) -> usize {
-    if data.len() < 10 || &data[..3] != b"ID3" {
+    if data.len() < 10
+        || &data[..3] != b"ID3"
+        || !(2..=4).contains(&data[3])
+        || data[6..10].iter().any(|&b| b >= 0x80)
+    {
         return 0;
     }
     let size = data[6..10]
         .iter()
-        .fold(0usize, |acc, &b| (acc << 7) | usize::from(b & 0x7f));
+        .fold(0usize, |acc, &b| (acc << 7) | usize::from(b));
     let footer = if data[5] & 0x10 != 0 { 10 } else { 0 };
     10 + size + footer
 }
 
-/// The gapless information of an MP3 whose start (past the ID3v2 tag,
-/// whose length is `id3v2_len`) is `data`; `None` without a Xing/Info
-/// header with a LAME tag.
+/// The length of all the ID3v2 tags one after another at the start of
+/// `data`.
+fn id3v2_tags_len(data: &[u8]) -> usize {
+    let mut at = 0;
+    for _ in 0..8 {
+        match data.get(at..).map(id3v2_len) {
+            Some(len) if len > 0 => at += len,
+            _ => break,
+        }
+    }
+    at
+}
+
+/// The gapless information of an MP3 whose start (past the ID3v2 tags,
+/// `id3v2_tags_len`) is `data`; `None` without a Xing/Info header with a
+/// LAME tag.
 pub fn parse(data: &[u8]) -> Option<GapInfo> {
-    let start = id3v2_len(data);
+    let start = id3v2_tags_len(data);
     let data = data.get(start..)?;
     // The first frame header: a sync, MPEG 1, 2 or 2.5, Layer III.
     let at = (0..data.len().saturating_sub(4)).find(|&i| {
@@ -251,5 +285,17 @@ mod tests {
             10 + 5 + 10
         );
         assert_eq!(id3v2_len(b"\xff\xfb\x90\x00"), 0);
+        assert_eq!(id3v2_len(b"ID3\x04\x00\x00\x00\x00\x81\x00rest"), 0);
+    }
+
+    #[test]
+    fn tags_one_after_another() {
+        let mut data = b"ID3\x03\x00\x00\x00\x00\x00\x02ab".to_vec();
+        data.extend(b"ID3\x04\x00\x00\x00\x00\x00\x01c");
+        data.extend(b"\xff\xfb\x90\x00");
+        assert_eq!(id3v2_tags_len(&data), 12 + 11);
+        let tags = leading_tags(&mut std::io::Cursor::new(&data));
+        assert_eq!(tags, [0..12, 12..23]);
+        assert!(leading_tags(&mut std::io::Cursor::new(b"\xff\xfb\x90\x00")).is_empty());
     }
 }

@@ -2,9 +2,13 @@
 //! taken from the folders, laid out as most collections are:
 //! `Artist\(Year) Album\NN - Title.mp3`.
 
+use std::fs::File;
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use lofty::config::ParseOptions;
+use lofty::error::FileParseError;
+use lofty::file::{FileType, TaggedFile};
 use lofty::prelude::*;
 use lofty::probe::Probe;
 
@@ -27,13 +31,97 @@ pub fn read(path: &Path, size: u64, mtime: u64) -> Track {
     track
 }
 
-fn read_tagged(path: &Path) -> Result<lofty::file::TaggedFile, lofty::error::FileParseError> {
+fn read_tagged(path: &Path) -> Result<TaggedFile, FileParseError> {
     // The whole ID3v2 tag is read anyway; its pictures only tell whether
     // the album's cover can come from the file (`covers.rs` reads it again
     // for the one track it needs).
-    Probe::open(path)?
-        .options(ParseOptions::new().read_properties(true))
-        .read()
+    open(path, ParseOptions::new().read_properties(true))
+}
+
+/// `path` read by lofty with `options`, an MP3 with only the first of the
+/// ID3v2 tags at its start: lofty puts the frames of the tags after it
+/// over its own (lofty-rs#87), while Winamp, Mp3tag and the other
+/// taggers read the first tag only, the one they write. A tagger that
+/// wrote a new tag in front of an old one leaves the old one's album
+/// behind it (an album that split in two).
+pub fn open(path: &Path, options: ParseOptions) -> Result<TaggedFile, FileParseError> {
+    let file_type = FileType::from_path(path);
+    let mut file = File::open(path)?;
+    let tags = if file_type == Some(FileType::Mpeg) {
+        crate::audio::mp3gap::leading_tags(&mut file)
+    } else {
+        Vec::new()
+    };
+    let (start, skipped) = match (tags.first(), tags.last()) {
+        (Some(first), Some(last)) if tags.len() > 1 => {
+            log::debug!(
+                "{}: {} ID3v2 tags, the first read",
+                path.display(),
+                tags.len()
+            );
+            (first.end, last.end - first.end)
+        }
+        _ => (0, 0),
+    };
+    let len = file.seek(SeekFrom::End(0))? - skipped;
+    let holed = Holed {
+        file,
+        start,
+        skipped,
+        len,
+        pos: 0,
+        real: None,
+    };
+    let probe = Probe::new(BufReader::new(holed));
+    let probe = match file_type {
+        Some(t) => probe.set_file_type(t),
+        None => probe.guess_file_type()?,
+    };
+    probe.options(options).read()
+}
+
+/// A file seen without `skipped` bytes from `start` (the ID3v2 tags
+/// after the first; none skipped for most files).
+struct Holed {
+    file: File,
+    start: u64,
+    skipped: u64,
+    /// The length seen.
+    len: u64,
+    /// The position seen, and the file's own when known.
+    pos: u64,
+    real: Option<u64>,
+}
+
+impl Read for Holed {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let (real, room) = if self.pos < self.start {
+            (self.pos, ((self.start - self.pos) as usize).min(buf.len()))
+        } else {
+            (self.pos + self.skipped, buf.len())
+        };
+        if self.real != Some(real) {
+            self.file.seek(SeekFrom::Start(real))?;
+        }
+        let n = self.file.read(&mut buf[..room])?;
+        self.pos += n as u64;
+        self.real = Some(real + n as u64);
+        Ok(n)
+    }
+}
+
+impl Seek for Holed {
+    fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
+        let pos = match to {
+            SeekFrom::Start(p) => Some(p),
+            SeekFrom::End(d) => self.len.checked_add_signed(d),
+            SeekFrom::Current(d) => self.pos.checked_add_signed(d),
+        };
+        self.pos = pos.ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "a seek before the start")
+        })?;
+        Ok(self.pos)
+    }
 }
 
 fn fill(track: &mut Track, file: &lofty::file::TaggedFile) {
@@ -142,6 +230,34 @@ fn split_year(folder: &str) -> (Option<u16>, &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hole_is_not_seen() {
+        let path = std::env::temp_dir().join(format!("metalamp-holed-{}", std::process::id()));
+        std::fs::write(&path, b"first|old tag|rest").unwrap();
+        let mut holed = Holed {
+            file: File::open(&path).unwrap(),
+            start: 6,
+            skipped: 8,
+            len: 18 - 8,
+            pos: 0,
+            real: None,
+        };
+        let mut all = String::new();
+        holed.read_to_string(&mut all).unwrap();
+        assert_eq!(all, "first|rest");
+        assert_eq!(holed.seek(SeekFrom::End(-4)).unwrap(), 6);
+        let mut tail = [0u8; 4];
+        holed.read_exact(&mut tail).unwrap();
+        assert_eq!(&tail, b"rest");
+        holed.seek(SeekFrom::Start(3)).unwrap();
+        let mut across = [0u8; 5];
+        holed.read_exact(&mut across).unwrap();
+        assert_eq!(&across, b"st|re");
+        assert!(holed.seek(SeekFrom::Current(-20)).is_err());
+        drop(holed);
+        let _ = std::fs::remove_file(path);
+    }
 
     #[test]
     fn numbers_and_years_from_names() {
