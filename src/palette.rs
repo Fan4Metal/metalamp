@@ -4,12 +4,12 @@
 //! then `apply`). Every colour of the interface comes from here as a
 //! function of the palette in use, not as literals scattered about.
 //!
-//! The default is the look MetalAMP had from the start: the graphite dark
-//! theme with the amber of the icon's bolt for the controls, Winamp's
-//! slate band for the selection and a light blue for the track playing
-//! (the amber there fought the covers). Other accents follow metalmpv's
-//! (blue, teal, green, orange, red, pink, purple, graphite), their shades
-//! mixed from their colour.
+//! The default is the graphite dark theme with the amber of the icon's
+//! bolt; the other accents are metalmpv's (blue, teal, green, orange,
+//! red, pink, purple, graphite). Every accent's shades (the hover, the
+//! selection's ground, the track playing, the spectrum) are mixed from its
+//! colour alike, so the look is of one hue (the slate selection and light
+//! blue track amber had at first looked out of place, the user found).
 
 use std::sync::RwLock;
 
@@ -290,19 +290,6 @@ impl Palette {
             p.spectrum_low = mix(base, black, 0.22);
             p.spectrum_high = mix(base, white, 0.45);
             p.spectrum_peak = mix(p.text, base, 0.1);
-            if accent == Accent::Amber {
-                // The look the app had from the start: Winamp's slate
-                // band and a light blue, which does not fight the covers.
-                p.selected_bg = if theme == Theme::Dark {
-                    hex(0x2b3442)
-                } else {
-                    mix(p.list_bg, hex(0x4a6a96), 0.3)
-                };
-                p.playing = hex(0x8fc3ff);
-                p.spectrum_low = hex(0xc27412);
-                p.spectrum_high = hex(0xffd66e);
-                p.spectrum_peak = hex(0xe8e3d6);
-            }
         } else {
             // On white the accent is a shade deeper, to be read.
             let deep = mix(base, black, 0.12);
@@ -313,10 +300,6 @@ impl Palette {
             p.spectrum_low = mix(base, black, 0.1);
             p.spectrum_high = mix(base, white, 0.25);
             p.spectrum_peak = mix(p.text, base, 0.3);
-            if accent == Accent::Amber {
-                p.playing = hex(0x1f5fb0);
-                p.selected_bg = hex(0xd3e1f3);
-            }
         }
         p.on_accent = if luminance(p.accent) > 0.32 {
             hex(0x1a1b1f)
@@ -477,13 +460,15 @@ mod tests {
     }
 
     #[test]
-    fn the_default_is_the_look_from_the_start() {
+    fn the_default_is_dark_amber_its_shades_amber_too() {
         let p = Palette::of(Theme::Dark, Accent::Amber);
         assert_eq!(p.accent, hex(0xf5a623));
-        assert_eq!(p.playing, hex(0x8fc3ff));
-        assert_eq!(p.selected_bg, hex(0x2b3442));
         assert_eq!(p.list_bg, hex(0x16171a));
         assert_eq!(p.on_accent, hex(0x1a1b1f));
+        // The selection and the track playing in the accent's own hue,
+        // as with every other accent (red over blue).
+        assert!(p.selected_bg.r() > p.selected_bg.b());
+        assert!(p.playing.r() > p.playing.b());
     }
 
     #[test]
