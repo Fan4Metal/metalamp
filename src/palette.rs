@@ -47,30 +47,45 @@ fn luminance(c: Color32) -> f32 {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Theme {
+    /// Black lists and panels (for OLED screens and dark rooms).
+    Black,
+    /// Dark with a blue cast.
+    Midnight,
     /// Graphite greys, as Winamp's media library.
     #[default]
     Dark,
-    /// Dark with a blue cast.
-    Midnight,
-    /// Black lists and panels (for OLED screens and dark rooms).
-    Black,
+    /// Softer greys with a cool cast, lighter than graphite.
+    Dimmed,
+    /// Warm paper.
+    Sepia,
     Light,
 }
 
 impl Theme {
-    pub const ALL: [Theme; 4] = [Theme::Dark, Theme::Midnight, Theme::Black, Theme::Light];
+    /// From the darkest to the lightest, as the list shows them (a test
+    /// holds the order).
+    pub const ALL: [Theme; 6] = [
+        Theme::Black,
+        Theme::Midnight,
+        Theme::Dark,
+        Theme::Dimmed,
+        Theme::Sepia,
+        Theme::Light,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
-            Theme::Dark => tr!("Dark", "Тёмная"),
-            Theme::Midnight => tr!("Midnight blue", "Тёмно-синяя"),
             Theme::Black => tr!("Black", "Чёрная"),
+            Theme::Midnight => tr!("Midnight blue", "Тёмно-синяя"),
+            Theme::Dark => tr!("Dark", "Тёмная"),
+            Theme::Dimmed => tr!("Dimmed", "Приглушённая"),
+            Theme::Sepia => tr!("Sepia", "Сепия"),
             Theme::Light => tr!("Light", "Светлая"),
         }
     }
 
     pub fn is_dark(self) -> bool {
-        self != Theme::Light
+        !matches!(self, Theme::Sepia | Theme::Light)
     }
 }
 
@@ -452,6 +467,52 @@ impl Palette {
                 error: hex(0xff8a80),
                 ..Palette::BLANK
             },
+            Theme::Dimmed => Palette {
+                dark: true,
+                title_bg: hex(0x25292f),
+                bar_bg: hex(0x2a2f36),
+                panel_bg: hex(0x30353d),
+                list_bg: hex(0x22272e),
+                list_stripe: hex(0x262b33),
+                header_bg: hex(0x343a43),
+                card_bg: hex(0x383e48),
+                line: hex(0x414852),
+                text: hex(0xd8dde3),
+                text_weak: hex(0x959ca6),
+                text_bright: hex(0xffffff),
+                hover: hex(0x333943),
+                pressed: hex(0x434a55),
+                track: hex(0x4a515c),
+                scroll_handle: hex(0x5a626e),
+                scroll_handle_hover: hex(0x737b88),
+                scroll_handle_drag: hex(0x8c94a0),
+                close_hover: hex(0xc42b1c),
+                error: hex(0xff8a80),
+                ..Palette::BLANK
+            },
+            Theme::Sepia => Palette {
+                dark: false,
+                title_bg: hex(0xe9e0cc),
+                bar_bg: hex(0xefe7d5),
+                panel_bg: hex(0xebe3d0),
+                list_bg: hex(0xf8f3e6),
+                list_stripe: hex(0xf2ecdc),
+                header_bg: hex(0xe4dac4),
+                card_bg: hex(0xdfd4bc),
+                line: hex(0xcfc3a8),
+                text: hex(0x3b3125),
+                text_weak: hex(0x6e6250),
+                text_bright: hex(0x1a140c),
+                hover: hex(0xe2d8c2),
+                pressed: hex(0xd6cab0),
+                track: hex(0xcbbea2),
+                scroll_handle: hex(0xb9ab8e),
+                scroll_handle_hover: hex(0xa29475),
+                scroll_handle_drag: hex(0x8a7c5f),
+                close_hover: hex(0xc42b1c),
+                error: hex(0xb3261e),
+                ..Palette::BLANK
+            },
             Theme::Light => Palette {
                 dark: false,
                 title_bg: hex(0xe6e8ec),
@@ -492,7 +553,7 @@ impl Palette {
             p.accent = deep;
             p.accent_hover = mix(deep, black, 0.12);
             p.playing = mix(base, black, 0.3);
-            p.selected_bg = mix(white, base, 0.2);
+            p.selected_bg = mix(p.list_bg, base, 0.2);
             p.spectrum_low = mix(base, black, 0.1);
             p.spectrum_high = mix(base, white, 0.25);
             p.spectrum_peak = mix(p.text, base, 0.3);
@@ -665,6 +726,22 @@ mod tests {
         // as with every other accent (red over blue).
         assert!(p.selected_bg.r() > p.selected_bg.b());
         assert!(p.playing.r() > p.playing.b());
+    }
+
+    #[test]
+    fn themes_go_from_the_darkest_to_the_lightest() {
+        let grounds = |t: Theme| {
+            let p = Palette::of(t, Accent::default());
+            assert_eq!(p.dark, t.is_dark(), "{t:?}");
+            [p.list_bg, p.panel_bg, p.bar_bg].map(luminance)
+        };
+        for pair in Theme::ALL.windows(2) {
+            let (a, b) = (grounds(pair[0]), grounds(pair[1]));
+            for i in 0..3 {
+                assert!(a[i] < b[i], "{:?} before {:?}", pair[0], pair[1]);
+            }
+        }
+        assert_eq!(Theme::default(), Theme::Dark);
     }
 
     #[test]

@@ -476,8 +476,8 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
             ui,
             tr!("Theme", "Тема"),
             Some(tr!(
-                "The grounds and the text: three dark themes and a light one.",
-                "Фон и текст: три тёмные темы и светлая."
+                "The grounds and the text, from the darkest to the lightest.",
+                "Фон и текст, от самой тёмной до самой светлой."
             )),
             CONTROL,
             |ui| {
