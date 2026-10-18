@@ -1,9 +1,11 @@
 //! User settings, stored as JSON (`%APPDATA%\MetalAMP\config\settings.json`,
 //! or [`PORTABLE_FILE`] next to the exe for a portable copy). Fields missing
-//! from the file (written by an earlier version) take their defaults, and
-//! unknown ones (a later version's) are ignored. The library index, the
-//! playlist and the cover cache live in the same folder ([`data_dir`]), in
-//! files of their own.
+//! from the file (written by an earlier version) take their defaults,
+//! unknown ones (a later version's) are ignored, and so is a field whose
+//! value cannot be read (a name a later version added, a typo): it takes
+//! its default and the rest are kept ([`Settings::from_json`]). The
+//! library index, the playlist and the cover cache live in the same
+//! folder ([`data_dir`]), in files of their own.
 
 use crate::i18n::LangChoice;
 use crate::queue::Repeat;
@@ -324,15 +326,53 @@ fn portable_file_in(dir: &Path) -> Option<PathBuf> {
 }
 
 impl Settings {
-    /// Reads the settings file; missing, empty or malformed files give
-    /// defaults.
+    /// Reads the settings file; a missing or empty one gives defaults. A
+    /// file that is not JSON at all (cut short) is kept as
+    /// `settings.json.bad` before the defaults are saved over it.
     pub fn load() -> Settings {
-        location()
-            .file
-            .as_ref()
-            .and_then(|path| std::fs::read(path).ok())
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default()
+        let Some(path) = &location().file else {
+            return Settings::default();
+        };
+        let Ok(bytes) = std::fs::read(path) else {
+            return Settings::default();
+        };
+        if bytes.iter().all(u8::is_ascii_whitespace) {
+            return Settings::default();
+        }
+        Settings::from_json(&bytes).unwrap_or_else(|| {
+            log::warn!("{} cannot be read; kept as .bad", path.display());
+            let _ = std::fs::rename(path, path.with_extension("json.bad"));
+            Settings::default()
+        })
+    }
+
+    /// The settings in `bytes`, each field read on its own: one that
+    /// cannot be read takes its default and costs no other. `None` when
+    /// `bytes` is not a JSON object.
+    pub fn from_json(bytes: &[u8]) -> Option<Settings> {
+        use serde_json::Value;
+        let Ok(Value::Object(file)) = serde_json::from_slice::<Value>(bytes) else {
+            return None;
+        };
+        let Ok(Value::Object(mut merged)) = serde_json::to_value(Settings::default()) else {
+            return None;
+        };
+        let reads = |m: &serde_json::Map<String, Value>| {
+            serde_json::from_value::<Settings>(Value::Object(m.clone())).is_ok()
+        };
+        for (key, value) in file {
+            // Unknown fields are left out; a known one is kept if the
+            // whole still reads with it.
+            let Some(default) = merged.get(&key).cloned() else {
+                continue;
+            };
+            merged.insert(key.clone(), value);
+            if !reads(&merged) {
+                log::warn!("settings: {key} cannot be read, the default taken");
+                merged.insert(key, default);
+            }
+        }
+        serde_json::from_value(Value::Object(merged)).ok()
     }
 
     pub fn save(&self) {
@@ -420,6 +460,31 @@ mod tests {
         assert_eq!(partial.language, LangChoice::En);
         assert!(!partial.check_updates);
         assert_eq!(partial.window, None);
+    }
+
+    #[test]
+    fn a_field_that_cannot_be_read_costs_no_other() {
+        let json = r#"{"theme":"ultraviolet","visualization":7,"media_keys":"later",
+            "repeat":"twice","album_view":null,"dsp":{"bands":[1,2]},
+            "library_folders":["D:\\Music"],"volume":35,"future":{"a":1}}"#;
+        let s = Settings::from_json(json.as_bytes()).unwrap();
+        assert_eq!(s.library_folders, vec![PathBuf::from(r"D:\Music")]);
+        assert_eq!(s.volume, 35);
+        let d = Settings::default();
+        assert_eq!(s.theme, d.theme);
+        assert_eq!(s.visualization, d.visualization);
+        assert_eq!(s.media_keys, d.media_keys);
+        assert_eq!(s.repeat, d.repeat);
+        assert_eq!(s.album_view, d.album_view);
+        assert_eq!(s.dsp, d.dsp);
+        assert_eq!(Settings::from_json(b"{\"volume\": 3"), None);
+        assert_eq!(Settings::from_json(b"[1]"), None);
+        let all = serde_json::to_vec(&Settings {
+            volume: 7,
+            ..Settings::default()
+        })
+        .unwrap();
+        assert_eq!(Settings::from_json(&all).unwrap().volume, 7);
     }
 
     #[test]
