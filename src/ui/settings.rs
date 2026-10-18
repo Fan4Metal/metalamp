@@ -196,6 +196,7 @@ impl SettingsDialog {
                     .clicked()
                 {
                     reset(settings, updates);
+                    self.naming = None;
                 }
                 close |= child(ui, close_rect)
                     .add_sized(
@@ -1502,7 +1503,6 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     }
     settings.language = d.language;
     settings.bar_layout = d.bar_layout;
-    settings.visualization = d.visualization;
     settings.theme = d.theme;
     settings.accent = d.accent;
     settings.selection = d.selection;
