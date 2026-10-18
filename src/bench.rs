@@ -48,7 +48,7 @@ pub fn run(args: &[String]) -> i32 {
 fn bench_scan(folders: &[PathBuf], out: &mut impl Write) {
     let cancel = AtomicBool::new(false);
     let t = Instant::now();
-    let found = scan::walk(folders, &cancel);
+    let found = scan::walk(folders, &cancel).found;
     let walk = t.elapsed();
     let t = Instant::now();
     let (tracks, read) = scan::read_tracks(&found, &HashMap::new(), &cancel, &|_, _| {}, &|_| {});

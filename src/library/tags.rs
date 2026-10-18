@@ -15,8 +15,10 @@ use lofty::probe::Probe;
 use super::Track;
 
 /// The track at `path`, of `size` bytes modified at `mtime`. A file lofty
-/// cannot read is still listed, with what its name and folders give.
-pub fn read(path: &Path, size: u64, mtime: u64) -> Track {
+/// cannot read is still listed, with what its name and folders give; one
+/// that cannot be opened or read now (gone, locked by a tagger, a network
+/// share away) is `None`, not kept with its names for good.
+pub fn read(path: &Path, size: u64, mtime: u64) -> Option<Track> {
     let mut track = Track {
         path: path.to_path_buf(),
         size,
@@ -25,10 +27,31 @@ pub fn read(path: &Path, size: u64, mtime: u64) -> Track {
     };
     match read_tagged(path) {
         Ok(file) => fill(&mut track, &file),
+        Err(e) if cannot_read(&e) => {
+            log::debug!("cannot read {}: {e}", path.display());
+            return None;
+        }
         Err(e) => log::debug!("no tags in {}: {e}", path.display()),
     }
     fill_from_names(&mut track);
-    track
+    Some(track)
+}
+
+/// `e` comes of the file not being there or not readable now, not of what
+/// it holds (an end too soon, data that makes no sense).
+fn cannot_read(e: &FileParseError) -> bool {
+    use std::io::ErrorKind;
+    let mut source = std::error::Error::source(e);
+    while let Some(s) = source {
+        if let Some(io) = s.downcast_ref::<std::io::Error>() {
+            return !matches!(
+                io.kind(),
+                ErrorKind::UnexpectedEof | ErrorKind::InvalidData | ErrorKind::InvalidInput
+            );
+        }
+        source = s.source();
+    }
+    false
 }
 
 fn read_tagged(path: &Path) -> Result<TaggedFile, FileParseError> {
@@ -291,13 +314,33 @@ mod tests {
         assert_eq!(t.artist, "Ария");
     }
 
+    #[test]
+    fn a_file_gone_is_none_and_one_without_tags_is_named() {
+        let dir = std::env::temp_dir().join(format!("metalamp_tags_{}", std::process::id()));
+        let album = dir.join("Artist").join("(1999) Album");
+        std::fs::create_dir_all(&album).unwrap();
+        let junk = album.join("03 - Song.mp3");
+        std::fs::write(&junk, b"not an mp3 at all").unwrap();
+        let t = read(&junk, 17, 1).expect("a file that opens is listed");
+        assert_eq!(t.title, "Song");
+        assert_eq!(t.album, "Album");
+        assert!(read(&album.join("gone.mp3"), 1, 1).is_none());
+        let walked = super::super::scan::walk(
+            &[dir.clone(), dir.join("not there")],
+            &std::sync::atomic::AtomicBool::new(false),
+        );
+        assert_eq!(walked.found.len(), 1);
+        assert_eq!(walked.unreadable, vec![dir.join("not there")]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// A real file of the user's library (`METALAMP_SAMPLE`): its tags read.
     #[test]
     #[ignore = "needs METALAMP_SAMPLE, an MP3 with tags"]
     fn reads_a_real_file() {
         let path = std::env::var("METALAMP_SAMPLE").expect("METALAMP_SAMPLE");
         let size = std::fs::metadata(&path).unwrap().len();
-        let t = read(Path::new(&path), size, 0);
+        let t = read(Path::new(&path), size, 0).expect("the file reads");
         println!("{t:#?}");
         assert!(!t.title.is_empty());
         assert!(t.duration_ms > 0);

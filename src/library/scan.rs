@@ -134,7 +134,7 @@ fn run(
         return;
     }
     let started = Instant::now();
-    let found = walk(&folders, cancel);
+    let Walked { found, unreadable } = walk(&folders, cancel);
     if cancel.load(Relaxed) {
         return;
     }
@@ -145,7 +145,7 @@ fn run(
         .filter(|_| !read_all)
         .map(|l| l.tracks.iter().map(|t| (t.path.as_path(), t)).collect())
         .unwrap_or_default();
-    let (tracks, read) = read_tracks(
+    let (mut tracks, read) = read_tracks(
         &found,
         &known,
         cancel,
@@ -158,6 +158,26 @@ fn run(
     );
     if cancel.load(Relaxed) {
         return;
+    }
+    // A folder that could not be read (a disk not plugged in, a network
+    // share away) keeps its tracks as they were, rather than lose them
+    // until it is read whole again.
+    if !unreadable.is_empty()
+        && let Some(previous) = &previous
+    {
+        log::warn!("folders not read, their tracks kept: {unreadable:?}");
+        let listed: std::collections::HashSet<&Path> =
+            tracks.iter().map(|t| t.path.as_path()).collect();
+        let kept: Vec<Track> = previous
+            .tracks
+            .iter()
+            .filter(|t| {
+                !listed.contains(t.path.as_path())
+                    && unreadable.iter().any(|u| t.path.starts_with(u))
+            })
+            .cloned()
+            .collect();
+        tracks.extend(kept);
     }
     // Fewer kept than known: files were deleted or their folder dropped.
     let removed = tracks.len() - read < known.len();
@@ -177,44 +197,70 @@ fn run(
     }));
 }
 
+/// What [`walk`] found.
+pub struct Walked {
+    /// The files of supported types.
+    pub found: Vec<Found>,
+    /// The folders (a library folder itself among them) and files that
+    /// could not be read: what the index holds under them is kept.
+    pub unreadable: Vec<PathBuf>,
+}
+
 /// The files of supported types under `folders`, with their sizes and
 /// modification times. A folder listed inside another is walked once.
-pub fn walk(folders: &[PathBuf], cancel: &AtomicBool) -> Vec<Found> {
+pub fn walk(folders: &[PathBuf], cancel: &AtomicBool) -> Walked {
     let mut seen = std::collections::HashSet::new();
-    let mut found = Vec::new();
+    let mut walked = Walked {
+        found: Vec::new(),
+        unreadable: Vec::new(),
+    };
     for folder in folders {
         for entry in walkdir::WalkDir::new(folder).follow_links(false) {
             if cancel.load(Relaxed) {
-                return found;
+                return walked;
             }
-            let Ok(entry) = entry else { continue };
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(e) => {
+                    if let Some(path) = e.path() {
+                        walked.unreadable.push(path.to_path_buf());
+                    }
+                    continue;
+                }
+            };
             if !entry.file_type().is_file() || !crate::filetypes::is_audio(entry.path()) {
                 continue;
             }
             if !seen.insert(entry.path().to_path_buf()) {
                 continue;
             }
-            let Ok(meta) = entry.metadata() else { continue };
+            let Ok(meta) = entry.metadata() else {
+                walked.unreadable.push(entry.into_path());
+                continue;
+            };
             let mtime = meta
                 .modified()
                 .ok()
                 .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                 .map_or(0, |d| d.as_secs());
-            found.push(Found {
+            walked.found.push(Found {
                 path: entry.into_path(),
                 size: meta.len(),
                 mtime,
             });
         }
     }
-    found
+    walked
 }
 
 /// The tracks of `found`: those `known` with the same size and time as
 /// they are, the others read anew (on up to eight threads: more only queue
 /// on the disk). Also how many were read. `progress` hears of the reads at
 /// most ten times a second; when there are more than [`CHUNK`] to read,
-/// `partial` gets the tracks so far after each chunk.
+/// `partial` gets the tracks so far after each chunk. A file that cannot be
+/// opened now (locked, gone, its share away) keeps what was `known` of it,
+/// with its old size and time, so that the next scan reads it again; one
+/// not known is left out until then.
 pub fn read_tracks(
     found: &[Found],
     known: &HashMap<&Path, &Track>,
@@ -248,7 +294,8 @@ pub fn read_tracks(
         if cancel.load(Relaxed) {
             return None;
         }
-        let track = tags::read(&f.path, f.size, f.mtime);
+        let track = tags::read(&f.path, f.size, f.mtime)
+            .or_else(|| known.get(f.path.as_path()).map(|t| (*t).clone()));
         let n = done.fetch_add(1, Relaxed) + 1;
         if let Ok(mut last) = last_report.try_lock()
             && last.elapsed() >= Duration::from_millis(100)
@@ -256,7 +303,7 @@ pub fn read_tracks(
             *last = Instant::now();
             progress(n, total);
         }
-        Some(track)
+        track
     };
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
