@@ -31,6 +31,7 @@ pub struct Measured {
 
 pub struct Loudness {
     known: HashMap<PathBuf, Measured>,
+    /// Being measured, or failed to be (not tried again in this run).
     pending: HashSet<PathBuf>,
     asks: Sender<PathBuf>,
     answers: Receiver<(PathBuf, Option<Measured>)>,
@@ -89,8 +90,10 @@ impl Loudness {
     pub fn poll(&mut self) -> Vec<(PathBuf, Measured)> {
         let mut out = Vec::new();
         for (path, measured) in self.answers.try_iter() {
-            self.pending.remove(&path);
+            // One that could not be measured stays pending: it is not
+            // decoded again each time it is played.
             if let Some(m) = measured {
+                self.pending.remove(&path);
                 self.known.insert(path.clone(), m);
                 out.push((path, m));
             }
