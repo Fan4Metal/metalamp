@@ -521,6 +521,8 @@ pub fn show(
             FontId::proportional(14.0),
             palette::text_weak(),
         );
+        // No artists' pane for letters to go to.
+        lv.artists_rect = None;
         ui.advance_cursor_after_rect(full);
         return (actions, changed);
     }
