@@ -162,11 +162,22 @@ fn main() -> eframe::Result {
         centered: settings.window.is_none(),
         ..Default::default()
     };
-    eframe::run_native(
+    let result = eframe::run_native(
         APP_ID,
         options,
         Box::new(|cc| Ok(Box::new(app::App::new(cc, settings, scan, wake, files)))),
-    )
+    );
+    // No window and no console: say why (most often no OpenGL 2, as in a
+    // virtual machine without a display driver).
+    if let Err(e) = &result {
+        log::error!("{e}");
+        let text = tr!(
+            format!("{APP_NAME} cannot open its window: OpenGL 2.0 or later is needed.\n\n{e}"),
+            format!("{APP_NAME} не может открыть окно: нужен OpenGL 2.0 или новее.\n\n{e}")
+        );
+        win::error_box(APP_NAME, &text);
+    }
+    result
 }
 
 /// An argument as a path: Explorer passes a drive's root as `"C:\"`, which
