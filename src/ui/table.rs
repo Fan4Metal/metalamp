@@ -1,6 +1,7 @@
 //! A table of the media library: a header whose columns sort
 //! when clicked (again: the other way) and change width when their right
-//! edge is dragged, rows of one height painted only where they are seen
+//! edge is dragged (a double click there fits the column to its widest
+//! text, as Windows' lists do), rows of one height painted only where they are seen
 //! (`ScrollArea::show_viewport`: thousands of rows cost what a screenful
 //! does), stripes, the selection, the row playing. Columns wider together
 //! than the table scroll sideways, the header with them. The caller keeps
@@ -210,14 +211,17 @@ impl Table<'_> {
         // The header after the rows: it moves with this frame's sideways
         // scroll.
         let left = full.left() - out_area.state.offset.x;
+        let painter = ui.painter().clone();
+        let columns = self.columns;
         let (sorted, resized) = header_row(
             ui,
             self.id,
             header,
             (left, width),
-            self.columns,
+            columns,
             self.widths,
             self.sort,
+            &mut |i| fit_width(&painter, &columns[i].title, rows, &mut |row| cell(row, i)),
         );
         out.sorted = sorted;
         out.resized = resized;
@@ -228,10 +232,12 @@ impl Table<'_> {
 
 /// The header of a table in `header`: the columns' titles, a click sorts
 /// by one (again: the other way), a column's right edge dragged changes
-/// its width. The columns start at `span.0` and take `span.1` (wider than
-/// `header` when the table scrolls sideways; what is outside is cut).
-/// Whether the sort and whether a width changed. Also over the album grid,
-/// which sorts by the same columns.
+/// its width, a double click on it gives the column the width `fit` says
+/// (`fit_width`: its widest text). The columns start at `span.0` and take
+/// `span.1` (wider than `header` when the table scrolls sideways; what is
+/// outside is cut). Whether the sort and whether a width changed. Also
+/// over the album grid, which sorts by the same columns.
+#[allow(clippy::too_many_arguments)]
 pub fn header_row(
     ui: &mut Ui,
     id: egui::Id,
@@ -240,6 +246,7 @@ pub fn header_row(
     columns: &[Column],
     widths: &mut Vec<f32>,
     sort: &mut Option<Sort>,
+    fit: &mut dyn FnMut(usize) -> f32,
 ) -> (bool, bool) {
     let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(header));
     ui.set_clip_rect(header.intersect(ui.clip_rect()));
@@ -309,21 +316,51 @@ pub fn header_row(
             ],
             egui::Stroke::new(1.0, palette::line()),
         );
-        // The right edge resizes the column (not the last one).
-        if i + 1 < n {
-            let grip = Rect::from_center_size(pos2(right, r.center().y), vec2(8.0, r.height()));
-            let g = ui.interact(grip, id.with(("grip", i)), Sense::drag());
-            if g.hovered() || g.dragged() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-            }
-            if g.dragged() {
-                let w = &mut widths[i];
-                *w = (*w + g.drag_delta().x).max(MIN_WIDTH);
-                resized = true;
-            }
+    }
+    // The right edges resize the columns (not the last one's): after all
+    // the titles, so that the half of an edge over the next title is the
+    // edge's and a double click there does not sort by that column.
+    for (i, &(_, right)) in edges.iter().enumerate().take(n.saturating_sub(1)) {
+        let grip =
+            Rect::from_center_size(pos2(right, header.center().y), vec2(8.0, header.height()));
+        let g = ui.interact(grip, id.with(("grip", i)), Sense::click_and_drag());
+        if g.hovered() || g.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+        if g.dragged() {
+            let w = &mut widths[i];
+            *w = (*w + g.drag_delta().x).max(MIN_WIDTH);
+            resized = true;
+        }
+        if crate::ui::double_clicked(&g) {
+            widths[i] = fit(i).max(MIN_WIDTH).round();
+            resized = true;
         }
     }
     (sorted, resized)
+}
+
+/// The width that shows a column whole: its widest cell of `rows`
+/// (`cell(row)`) and its title with room for the sort's triangle, with the
+/// cells' padding. Every row is measured, not only those in sight, as
+/// Windows does.
+pub fn fit_width(
+    painter: &egui::Painter,
+    title: &str,
+    rows: usize,
+    cell: &mut dyn FnMut(usize) -> String,
+) -> f32 {
+    let width = |text: String, size: f32| {
+        painter
+            .layout_no_wrap(text, FontId::proportional(size), egui::Color32::WHITE)
+            .size()
+            .x
+    };
+    let widest = (0..rows)
+        .map(|row| width(cell(row), FONT_SIZE))
+        .fold(0.0, f32::max);
+    let title = width(title.to_owned(), FONT_SIZE - 0.5) + 12.0;
+    widest.max(title) + 2.0 * PAD + 2.0
 }
 
 /// The visible part of the scroll area's content.

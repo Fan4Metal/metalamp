@@ -983,35 +983,7 @@ fn albums_table(
     }
     .show(
         &mut ui,
-        &mut |row, col| {
-            if row == 0 {
-                return if col == 0 {
-                    tr!(
-                        format!("All ({} albums)", view.albums.len()),
-                        format!(
-                            "Все ({})",
-                            crate::i18n::count(
-                                view.albums.len() as u64,
-                                ["album", "albums"],
-                                ["альбом", "альбома", "альбомов"]
-                            )
-                        )
-                    )
-                } else {
-                    String::new()
-                };
-            }
-            let a = &library.albums[view.albums[row - 1] as usize];
-            match col {
-                0 => shown_name(&a.artist, unknown_artist()),
-                1 => shown_name(&a.title, unknown_album()),
-                2 => year(a.year),
-                3 => a.tracks.len().to_string(),
-                4 => a.genre.clone(),
-                5 => format::time(a.length_ms),
-                _ => format::size(a.size),
-            }
-        },
+        &mut |row, col| album_cell(library, view, row, col),
         &|row| (row == current, false),
     );
     if resp.focused {
@@ -1102,6 +1074,37 @@ fn play_albums(library: &Library, view: &View, album: Option<AlbumId>) -> Librar
     LibraryAction::Play { tracks, start: 0 }
 }
 
+/// The albums table's cell of `row` (0: "All") and `col`.
+fn album_cell(library: &Library, view: &View, row: usize, col: usize) -> String {
+    if row == 0 {
+        return if col == 0 {
+            tr!(
+                format!("All ({} albums)", view.albums.len()),
+                format!(
+                    "Все ({})",
+                    crate::i18n::count(
+                        view.albums.len() as u64,
+                        ["album", "albums"],
+                        ["альбом", "альбома", "альбомов"]
+                    )
+                )
+            )
+        } else {
+            String::new()
+        };
+    }
+    let a = &library.albums[view.albums[row - 1] as usize];
+    match col {
+        0 => shown_name(&a.artist, unknown_artist()),
+        1 => shown_name(&a.title, unknown_album()),
+        2 => year(a.year),
+        3 => a.tracks.len().to_string(),
+        4 => a.genre.clone(),
+        5 => format::time(a.length_ms),
+        _ => format::size(a.size),
+    }
+}
+
 fn year(y: u16) -> String {
     if y == 0 { String::new() } else { y.to_string() }
 }
@@ -1124,6 +1127,8 @@ fn albums_grid(
     let columns = album_columns();
     let mut w = widths(settings, "albums", &ALBUM_WIDTHS);
     let mut sort = settings.sorts.get("albums").copied();
+    // The edges fit the columns to the albums' table's texts.
+    let painter = ui.painter().clone();
     let (sorted, resized) = table::header_row(
         ui,
         egui::Id::new("albums"),
@@ -1132,6 +1137,14 @@ fn albums_grid(
         &columns,
         &mut w,
         &mut sort,
+        &mut |i| {
+            table::fit_width(
+                &painter,
+                &columns[i].title,
+                view.albums.len() + 1,
+                &mut |row| album_cell(library, view, row, i),
+            )
+        },
     );
     if sorted {
         store_sort(settings, "albums", sort);
