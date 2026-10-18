@@ -233,6 +233,16 @@ impl LibraryView {
                 .is_none_or(|l| l.order == egui::Order::Background)
     }
 
+    /// The track selected last in the tracks' table, if the view is of
+    /// `library` (a scan may have swapped it since the view was built:
+    /// the ids would name other tracks).
+    pub fn selected_track_of(&self, library: &Arc<Library>) -> Option<TrackId> {
+        self.key
+            .as_ref()
+            .filter(|k| k.library == Arc::as_ptr(library) as usize)?;
+        self.selected_track()
+    }
+
     /// The track selected last in the tracks' table, if any.
     pub fn selected_track(&self) -> Option<TrackId> {
         let row = self

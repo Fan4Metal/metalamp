@@ -352,7 +352,7 @@ impl App {
         {
             return Some(e.path.clone());
         }
-        if let Some(t) = self.library_view.selected_track() {
+        if let Some(t) = self.library_view.selected_track_of(&self.library) {
             return self.library.tracks.get(t as usize).map(|t| t.path.clone());
         }
         self.player
