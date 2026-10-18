@@ -814,13 +814,19 @@ fn pane_ui(ui: &mut Ui, rect: Rect, name: &str) -> Ui {
     ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt(name))
 }
 
+/// The widths of table `name`'s columns as saved: those of a version with
+/// fewer or more columns kept as far as they go, the rest the defaults; a
+/// width that makes no sense (hand-edited) the column's least.
 fn widths(settings: &mut Settings, name: &str, default: &[f32]) -> Vec<f32> {
-    settings
-        .columns
-        .get(name)
-        .filter(|w| w.len() == default.len())
-        .cloned()
-        .unwrap_or_else(|| default.to_vec())
+    let saved = settings.columns.get(name).map_or(&[][..], Vec::as_slice);
+    default
+        .iter()
+        .enumerate()
+        .map(|(i, &d)| match saved.get(i) {
+            Some(&w) if w.is_finite() => w.max(table::MIN_WIDTH),
+            _ => d,
+        })
+        .collect()
 }
 
 /// Rows a screen holds in a table of `rect`.

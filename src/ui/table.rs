@@ -16,7 +16,7 @@ pub const ROW_HEIGHT: f32 = 20.0;
 pub const HEADER_HEIGHT: f32 = 22.0;
 const FONT_SIZE: f32 = 13.0;
 const PAD: f32 = 6.0;
-const MIN_WIDTH: f32 = 30.0;
+pub const MIN_WIDTH: f32 = 30.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Align {
