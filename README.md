@@ -93,7 +93,7 @@ The playlist on the right (`Alt+E` shows or hides it) lists "Artist – Title" w
 | `Ctrl+Right`, `B` | Next track |
 | `Ctrl+Left`, `Z` | Previous track (the start of the current one after its first 3 seconds) |
 | `Shift+Right` / `Shift+Left`, or `Right` / `Left` with the pointer over the player bar | 5 seconds forward / back |
-| `Ctrl+Up` / `Ctrl+Down` | Volume up / down |
+| `Ctrl+Up` / `Ctrl+Down`, or `Up` / `Down` with the pointer over the player bar | Volume up / down |
 | `M` | Mute |
 | `R` | Repeat: off, the playlist, the track |
 | `S` | Shuffle |

@@ -31,8 +31,8 @@ pub struct App {
     visual: crate::ui::visual::Visualizer,
     heard: Vec<f32>,
     /// The title row and the player bar, as the frame before laid them
-    /// out: with the pointer there the arrows seek (the keys are read
-    /// before the panels are laid out).
+    /// out: with the pointer there the arrows seek and set the volume
+    /// (the keys are read before the panels are laid out).
     player_area: egui::Rect,
     about: AboutDialog,
     updates: Updates,
@@ -453,8 +453,9 @@ impl App {
 
     /// The player's keys, when no text field takes them: Space, Z X C V B
     /// (Winamp's), Ctrl+arrows, Shift+arrows, M, R, S; the letters not
-    /// while `letters` (they go to an artist); Left and Right seek while
-    /// `over_player` (else they move in the library's panes).
+    /// while `letters` (they go to an artist); while `over_player` the
+    /// arrows seek and set the volume (else they move in the library's
+    /// panes).
     fn player_keys(&mut self, ctx: &egui::Context, letters: bool, over_player: bool) {
         if ctx.memory(|m| m.focused().is_some()) {
             return;
@@ -493,10 +494,12 @@ impl App {
             }
         }
         let mut volume = None;
-        if pressed(Modifiers::COMMAND, Key::ArrowUp) {
+        let up = |m| over_player && ctx.input_mut(|i| i.consume_key(m, Key::ArrowUp));
+        let down = |m| over_player && ctx.input_mut(|i| i.consume_key(m, Key::ArrowDown));
+        if pressed(Modifiers::COMMAND, Key::ArrowUp) || up(Modifiers::NONE) {
             volume = Some(self.player.volume.saturating_add(5).min(100));
         }
-        if pressed(Modifiers::COMMAND, Key::ArrowDown) {
+        if pressed(Modifiers::COMMAND, Key::ArrowDown) || down(Modifiers::NONE) {
             volume = Some(self.player.volume.saturating_sub(5));
         }
         if let Some(v) = volume {
