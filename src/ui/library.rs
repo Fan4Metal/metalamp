@@ -9,7 +9,7 @@
 //! the choice or a sort changed (a few milliseconds for 5000 tracks): the
 //! panes then only paint the rows in sight.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -113,6 +113,9 @@ pub struct LibraryView {
     /// Selected rows of the tracks' table, and where a Shift range starts.
     selected: BTreeSet<usize>,
     anchor: Option<usize>,
+    /// Shift+arrows: the row the range grows from and the row the keys
+    /// left it at (the anchor then; a click elsewhere starts anew).
+    shift_range: Option<(usize, usize)>,
     /// The pane the arrow keys move in.
     pub focus: Pane,
     pub covers: Covers,
@@ -205,6 +208,7 @@ impl LibraryView {
             key: None,
             selected: BTreeSet::new(),
             anchor: None,
+            shift_range: None,
             focus: Pane::Artists,
             covers: Covers::new(ctx),
             focus_search: false,
@@ -269,10 +273,25 @@ impl LibraryView {
         if view.album_row.is_none() {
             self.album = None;
         }
-        if !same_tracks {
+        if same_tracks {
+            // Another sort: the same tracks in another order, and the
+            // selection goes with them.
+            if let Some(old) = &self.view {
+                let row_of: HashMap<TrackId, usize> = view
+                    .tracks
+                    .iter()
+                    .enumerate()
+                    .map(|(r, &t)| (t, r))
+                    .collect();
+                let moved = |r: usize| old.tracks.get(r).and_then(|t| row_of.get(t)).copied();
+                self.selected = self.selected.iter().filter_map(|&r| moved(r)).collect();
+                self.anchor = self.anchor.and_then(moved);
+            }
+        } else {
             self.selected.clear();
             self.anchor = None;
         }
+        self.shift_range = None;
         self.view = Some(view);
         self.key = Some(ViewKey {
             artist: self.artist.clone(),
@@ -1500,8 +1519,12 @@ fn tracks_pane(
                 Modifiers::NONE
             };
             if m.shift {
-                // Shift+arrows grow the range from where it started.
-                let start = *lv.selected.first().unwrap_or(&row);
+                // Shift+arrows grow the range from where it started, also
+                // back over it.
+                let start = match lv.shift_range {
+                    Some((start, end)) if lv.anchor == Some(end) => start,
+                    _ => from.unwrap_or(row),
+                };
                 let (lo, hi) = if start <= row {
                     (start, row)
                 } else {
@@ -1509,6 +1532,7 @@ fn tracks_pane(
                 };
                 lv.selected = (lo..=hi).collect();
                 lv.anchor = Some(row);
+                lv.shift_range = Some((start, row));
             } else {
                 table::click_select(&mut lv.selected, &mut lv.anchor, row, m);
             }
