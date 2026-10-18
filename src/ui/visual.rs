@@ -10,7 +10,8 @@
 //! spectrogram count the frames heard since the frame before (the tap's
 //! `end`), so they roll with the sound, whatever the frame rate; paused,
 //! they stand; stopped, they roll silence until they are empty. Off, the
-//! display stays empty and the app repaints only as the time needs.
+//! display shows the app icon and the name, and the app repaints only as
+//! the time needs.
 
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -61,6 +62,8 @@ pub struct Visualizer {
     idle: f32,
     last: Instant,
     shown: Visual,
+    /// The app icon shown while off.
+    icon: Option<egui::TextureHandle>,
 }
 
 impl Default for Visualizer {
@@ -85,6 +88,7 @@ impl Visualizer {
             idle: 0.0,
             last: Instant::now(),
             shown: Visual::default(),
+            icon: None,
         }
     }
 
@@ -98,6 +102,7 @@ impl Visualizer {
             // Another one: the last one's state goes.
             *self = Visualizer {
                 gram_texture: self.gram_texture.take(),
+                icon: self.icon.take(),
                 shown: visual,
                 last: now,
                 ..Visualizer::new()
@@ -236,7 +241,64 @@ impl Visualizer {
             Visual::Waveform => self.paint_wave(painter, rect),
             Visual::Spectrogram => self.paint_gram(painter, rect),
             Visual::Scope => self.paint_scope(painter, rect),
-            Visual::Off => {}
+            Visual::Off => self.paint_logo(painter, rect),
+        }
+    }
+
+    /// Off: the app icon and the name in the middle of the display,
+    /// "AMP" in the accent, over a faint glow of it; the icon alone when
+    /// the name does not fit.
+    fn paint_logo(&mut self, painter: &Painter, rect: Rect) {
+        let side = (rect.height() * 0.62).clamp(16.0, 64.0);
+        let size = (side * 0.52).max(12.0);
+        let mut job = egui::text::LayoutJob::default();
+        let (name, amp) = crate::APP_NAME.split_at(crate::APP_NAME.len() - 3);
+        for (text, colour) in [(name, palette::text_bright()), (amp, palette::accent())] {
+            job.append(
+                text,
+                0.0,
+                egui::TextFormat::simple(egui::FontId::proportional(size), colour),
+            );
+        }
+        let galley = painter.layout_job(job);
+        let gap = side * 0.22;
+        let with_name = side + gap + galley.size().x <= rect.width() - 16.0;
+        let width = if with_name {
+            side + gap + galley.size().x
+        } else {
+            side
+        };
+        let left = rect.center().x - width / 2.0;
+        // The glow: the accent fading out from behind the logo to the
+        // display's ends.
+        let glow = palette::accent().gamma_multiply(0.10);
+        let clear = glow.gamma_multiply(0.0);
+        let mut mesh = Mesh::default();
+        let (cx, half) = (rect.center().x, (width * 0.9).max(rect.height()));
+        for (x0, x1, c0, c1) in [(cx - half, cx, clear, glow), (cx, cx + half, glow, clear)] {
+            let (x0, x1) = (x0.max(rect.left()), x1.min(rect.right()));
+            let i = mesh.vertices.len() as u32;
+            mesh.colored_vertex(pos2(x0, rect.top()), c0);
+            mesh.colored_vertex(pos2(x1, rect.top()), c1);
+            mesh.colored_vertex(pos2(x1, rect.bottom()), c1);
+            mesh.colored_vertex(pos2(x0, rect.bottom()), c0);
+            mesh.add_triangle(i, i + 1, i + 2);
+            mesh.add_triangle(i, i + 2, i + 3);
+        }
+        painter.add(mesh);
+        let icon = crate::ui::app_icon(painter.ctx(), side, &mut self.icon);
+        let icon_rect = Rect::from_min_size(
+            pos2(left, rect.center().y - side / 2.0),
+            egui::vec2(side, side),
+        );
+        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+        painter.image(icon.id(), icon_rect, uv, Color32::WHITE);
+        if with_name {
+            let pos = pos2(
+                icon_rect.right() + gap,
+                rect.center().y - galley.size().y / 2.0,
+            );
+            painter.galley(pos, galley, palette::text_bright());
         }
     }
 
