@@ -513,13 +513,19 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
             ACCENTS_WIDTH,
             |ui| {
                 let look = settings.look();
-                tints(ui, &mut settings.selection, look.accent, |t| {
-                    Palette::of(palette::Look {
-                        selection: t,
-                        ..look
-                    })
-                    .selected_bg
-                });
+                tints(
+                    ui,
+                    &mut settings.selection,
+                    &Tint::SELECTION,
+                    look.accent,
+                    |t| {
+                        Palette::of(palette::Look {
+                            selection: t,
+                            ..look
+                        })
+                        .selected_bg
+                    },
+                );
             },
         );
         divider(ui);
@@ -527,15 +533,19 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
             ui,
             tr!("Track playing", "Играющий трек"),
             Some(tr!(
-                "Its text in the lists and the playlist: mixed from the colour above, from one of its own, or one's own colour as it is.",
-                "Его текст в списках и плейлисте: из цвета выше, своего оттенка или своего цвета как есть."
+                "Its text in the lists and the playlist: mixed from the colour above, the brightest, a shade of its own, or one's own colour as it is.",
+                "Его текст в списках и плейлисте: из цвета выше, самый яркий, свой оттенок или свой цвет как есть."
             )),
             ACCENTS_WIDTH,
             |ui| {
                 let look = settings.look();
-                tints(ui, &mut settings.playing, look.accent, |t| {
-                    Palette::of(palette::Look { playing: t, ..look }).playing
-                });
+                tints(
+                    ui,
+                    &mut settings.playing,
+                    &Tint::PLAYING,
+                    look.accent,
+                    |t| Palette::of(palette::Look { playing: t, ..look }).playing,
+                );
             },
         );
         divider(ui);
@@ -1140,7 +1150,13 @@ fn custom([r, g, b]: [u8; 3]) -> Accent {
 /// theme, the chosen one ringed; the first, mixed from the accent, with
 /// the accent's dot in it; last the user's own colour, as for the accent,
 /// its picker starting from the shade in use.
-fn tints(ui: &mut Ui, tint: &mut Tint, accent: Accent, colour_of: impl Fn(Tint) -> Color32) {
+fn tints(
+    ui: &mut Ui,
+    tint: &mut Tint,
+    offered: &[Tint],
+    accent: Accent,
+    colour_of: impl Fn(Tint) -> Color32,
+) {
     ui.spacing_mut().item_spacing.x = 5.0;
     let mut own = match *tint {
         Tint::Custom(c) => Accent::Custom(c),
@@ -1155,7 +1171,7 @@ fn tints(ui: &mut Ui, tint: &mut Tint, accent: Accent, colour_of: impl Fn(Tint) 
     {
         *tint = Tint::Custom(c);
     }
-    for s in Tint::ALL.into_iter().rev() {
+    for &s in offered.iter().rev() {
         let (rect, response) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
         let response = response.on_hover_text(s.label());
         let fill = colour_of(s);

@@ -234,6 +234,9 @@ impl Accent {
 pub enum Tint {
     #[default]
     Accent,
+    /// The theme's brightest text (white on a dark ground, black on a
+    /// light one): the track playing read best. Not a selection's.
+    Bright,
     Grey,
     Slate,
     Blue,
@@ -257,7 +260,18 @@ impl From<Tint> for String {
 
 impl Tint {
     /// The ready ones (not the user's own).
-    pub const ALL: [Tint; 6] = [
+    pub const ALL: [Tint; 7] = [
+        Tint::Accent,
+        Tint::Bright,
+        Tint::Grey,
+        Tint::Slate,
+        Tint::Blue,
+        Tint::Teal,
+        Tint::Purple,
+    ];
+    /// Those offered for the selection's ground and for the track
+    /// playing.
+    pub const SELECTION: [Tint; 6] = [
         Tint::Accent,
         Tint::Grey,
         Tint::Slate,
@@ -265,10 +279,12 @@ impl Tint {
         Tint::Teal,
         Tint::Purple,
     ];
+    pub const PLAYING: [Tint; 7] = Tint::ALL;
 
     pub fn name(self) -> String {
         let name = match self {
             Tint::Accent => "accent",
+            Tint::Bright => "bright",
             Tint::Grey => "grey",
             Tint::Slate => "slate",
             Tint::Blue => "blue",
@@ -289,6 +305,7 @@ impl Tint {
     pub fn label(self) -> &'static str {
         match self {
             Tint::Accent => tr!("Of the colour above", "Из цвета выше"),
+            Tint::Bright => tr!("Bright", "Яркий"),
             Tint::Grey => tr!("Grey", "Серый"),
             Tint::Slate => tr!("Slate", "Сланцевый"),
             Tint::Blue => tr!("Blue", "Синий"),
@@ -302,7 +319,7 @@ impl Tint {
     /// user's own is not mixed).
     fn base(self) -> Option<Color32> {
         Some(hex(match self {
-            Tint::Accent | Tint::Custom(_) => return None,
+            Tint::Accent | Tint::Bright | Tint::Custom(_) => return None,
             Tint::Grey => 0x8b919c,
             Tint::Slate => 0x5a7aa6,
             Tint::Blue => 0x2f7cf0,
@@ -738,6 +755,8 @@ impl Palette {
         // The track playing's text, as the accent's is mixed.
         if let Tint::Custom(c) = playing {
             p.playing = hex(c & 0xffffff);
+        } else if playing == Tint::Bright {
+            p.playing = p.text_bright;
         } else if let Some(base) = playing.base() {
             p.playing = if p.dark {
                 mix(base, white, 0.45)
@@ -954,7 +973,7 @@ mod tests {
     fn every_selection_can_be_read() {
         let own = [0xffffff, 0x000000, 0x777777, 0xffd700, 0x2b3442, 0x00ff00];
         for theme in Theme::ALL {
-            for selection in Tint::ALL.into_iter().chain(own.map(Tint::Custom)) {
+            for selection in Tint::SELECTION.into_iter().chain(own.map(Tint::Custom)) {
                 let p = Palette::of(Look {
                     theme,
                     accent: Accent::Amber,
@@ -1013,7 +1032,7 @@ mod tests {
     #[test]
     fn the_track_playing_can_be_read() {
         for theme in Theme::ALL {
-            for playing in Tint::ALL {
+            for playing in Tint::PLAYING {
                 let p = Palette::of(Look {
                     theme,
                     playing,
@@ -1032,6 +1051,16 @@ mod tests {
             ..Look::default()
         };
         assert_eq!(Palette::of(own).playing, hex(0x8fc3ff));
+        let bright = |theme| {
+            Palette::of(Look {
+                theme,
+                playing: Tint::Bright,
+                ..Look::default()
+            })
+            .playing
+        };
+        assert_eq!(bright(Theme::Dark), Color32::WHITE);
+        assert_eq!(bright(Theme::Light), Color32::BLACK);
     }
 
     #[test]
