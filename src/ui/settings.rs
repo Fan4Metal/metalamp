@@ -945,15 +945,18 @@ fn name_row(
     saved
 }
 
-/// A gain for a label: `+4`, `−3.5`, `0`.
+/// A gain for a label: `+4`, `−3.5` (a minus sign, not a hyphen; `−3,5`
+/// in Russian), `0`.
 fn gain_text(gain: f32) -> String {
-    if gain == 0.0 {
+    let text = if gain == 0.0 {
         "0".to_owned()
     } else if gain.fract() == 0.0 {
         format!("{gain:+.0}")
     } else {
         format!("{gain:+.1}")
-    }
+    };
+    let text = text.replace('-', "\u{2212}");
+    tr!(text.clone(), text.replace('.', ","))
 }
 
 /// The bands as metalmpv's: the preamp's column, a scale of ±12 dB, then
