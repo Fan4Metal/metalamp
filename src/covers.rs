@@ -170,6 +170,51 @@ impl Covers {
     }
 }
 
+/// Thumbnails in the cache of albums `library` no longer has (an album
+/// retagged gets a new key, so its old thumbnail stays behind), deleted on
+/// a thread of their own. An empty library deletes nothing: it may be one
+/// not read yet.
+pub fn prune(library: Arc<Library>) {
+    if library.albums.is_empty() {
+        return;
+    }
+    let Some(dir) = crate::settings::data_dir().map(|d| d.join("covers")) else {
+        return;
+    };
+    let spawned = std::thread::Builder::new()
+        .name("covers prune".into())
+        .spawn(move || {
+            let kept: HashSet<String> = library
+                .albums
+                .iter()
+                .map(|a| format!("{:016x}", key_of(&library, a)))
+                .collect();
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                return;
+            };
+            let mut removed = 0;
+            for entry in entries.filter_map(Result::ok) {
+                let path = entry.path();
+                let ours = path.extension().is_some_and(|e| e == "jpg" || e == "none");
+                let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned());
+                if ours
+                    && let Some(stem) = stem
+                    && stem.len() == 16
+                    && !kept.contains(&stem)
+                    && std::fs::remove_file(&path).is_ok()
+                {
+                    removed += 1;
+                }
+            }
+            if removed > 0 {
+                log::debug!("covers: {removed} thumbnails of albums gone deleted");
+            }
+        });
+    if let Err(e) = spawned {
+        log::warn!("cannot start pruning the covers: {e}");
+    }
+}
+
 /// The album's key in the cache: its artist and title, and its first
 /// file's path and time (a retagged or replaced file gets a new cover).
 fn key_of(library: &Library, album: &Album) -> CoverKey {

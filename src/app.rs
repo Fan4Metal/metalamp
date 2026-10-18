@@ -199,6 +199,9 @@ impl App {
                         scanned.read,
                         scanned.took.as_millis()
                     );
+                    if scanned.read > 0 {
+                        crate::covers::prune(Arc::clone(&scanned.library));
+                    }
                     self.library = scanned.library;
                     self.loaded = true;
                     finished = true;
