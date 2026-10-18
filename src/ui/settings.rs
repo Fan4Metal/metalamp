@@ -162,7 +162,7 @@ impl SettingsDialog {
                         ne: 0,
                         se: 0,
                     },
-                    palette::title_bg(),
+                    palette::sidebar_bg(),
                 );
                 ui.painter().text(
                     sidebar.left_top() + vec2(20.0, 20.0),

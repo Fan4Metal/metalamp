@@ -449,6 +449,9 @@ pub struct Palette {
     pub dark: bool,
     /// The title row.
     pub title_bg: Color32,
+    /// The settings window's column of pages (the title row's ground
+    /// unless the theme says otherwise).
+    pub sidebar_bg: Color32,
     /// The player bar under the title row.
     pub bar_bg: Color32,
     /// Panels around the lists.
@@ -464,6 +467,10 @@ pub struct Palette {
     /// Lines between parts.
     pub line: Color32,
     pub text: Color32,
+    /// The rows of the lists and tables (`text` unless the theme says
+    /// otherwise), and the column headers (`text_weak` unless so).
+    pub list_text: Color32,
+    pub header_text: Color32,
     pub text_weak: Color32,
     pub text_bright: Color32,
     /// A hovered flat button's or row's background.
@@ -570,16 +577,21 @@ impl Palette {
             Theme::Steel => Palette {
                 dark: true,
                 title_bg: hex(0x343946),
+                sidebar_bg: hex(0x1f2223),
                 bar_bg: hex(0x1a1b1c),
                 panel_bg: hex(0x333738),
                 list_bg: hex(0x08090a),
                 list_stripe: hex(0x0d0e0f),
                 header_bg: hex(0x494c4d),
-                card_bg: hex(0x3b3f40),
-                line: hex(0x1f2223),
-                text: hex(0x93afb9),
-                text_weak: hex(0x6a7f85),
-                text_bright: hex(0xdcdcdc),
+                card_bg: hex(0x26292a),
+                line: hex(0x404446),
+                // Winamp's: steel blue in the lists, light grey around
+                // them and on the column headers.
+                text: hex(0xd2d2d2),
+                list_text: hex(0x93afb9),
+                header_text: hex(0xd2d2d2),
+                text_weak: hex(0x9a9fa1),
+                text_bright: hex(0xf0f0f0),
                 hover: hex(0x1c1f24),
                 pressed: hex(0x2a2e39),
                 track: hex(0x3a3e40),
@@ -660,6 +672,16 @@ impl Palette {
                 ..Palette::BLANK
             },
         };
+        // What a theme leaves out follows the others.
+        if p.sidebar_bg == Color32::TRANSPARENT {
+            p.sidebar_bg = p.title_bg;
+        }
+        if p.list_text == Color32::TRANSPARENT {
+            p.list_text = p.text;
+        }
+        if p.header_text == Color32::TRANSPARENT {
+            p.header_text = p.text_weak;
+        }
         let base = accent.base();
         let (white, black) = (Color32::WHITE, Color32::BLACK);
         if p.dark {
@@ -717,6 +739,7 @@ impl Palette {
     const BLANK: Palette = Palette {
         dark: true,
         title_bg: Color32::BLACK,
+        sidebar_bg: Color32::TRANSPARENT,
         bar_bg: Color32::BLACK,
         panel_bg: Color32::BLACK,
         list_bg: Color32::BLACK,
@@ -725,6 +748,8 @@ impl Palette {
         card_bg: Color32::BLACK,
         line: Color32::BLACK,
         text: Color32::WHITE,
+        list_text: Color32::TRANSPARENT,
+        header_text: Color32::TRANSPARENT,
         text_weak: Color32::WHITE,
         text_bright: Color32::WHITE,
         hover: Color32::BLACK,
@@ -781,6 +806,9 @@ macro_rules! colours {
 
 colours!(
     title_bg,
+    sidebar_bg,
+    list_text,
+    header_text,
     bar_bg,
     panel_bg,
     list_bg,
@@ -1002,7 +1030,22 @@ mod tests {
                 let p = Palette::of(theme, accent, Selection::Accent);
                 let what = format!("{theme:?} {accent:?}");
                 assert!(contrast(p.text, p.list_bg) >= 7.0, "{what}: text");
+                assert!(contrast(p.list_text, p.list_bg) >= 7.0, "{what}: lists");
                 assert!(contrast(p.text_weak, p.list_bg) >= 4.0, "{what}: weak text");
+                // The settings' cards and the column headers too.
+                assert!(contrast(p.text, p.card_bg) >= 7.0, "{what}: text on a card");
+                assert!(
+                    contrast(p.text_weak, p.card_bg) >= 3.5,
+                    "{what}: weak text on a card"
+                );
+                assert!(
+                    contrast(p.text_weak, p.panel_bg) >= 3.5,
+                    "{what}: weak text on a panel"
+                );
+                assert!(
+                    contrast(p.header_text, p.header_bg) >= 4.0,
+                    "{what}: headers"
+                );
                 assert!(contrast(p.text, p.selected_bg) >= 4.5, "{what}: selected");
                 assert!(contrast(p.playing, p.list_bg) >= 3.0, "{what}: playing");
                 assert!(

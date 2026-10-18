@@ -1313,7 +1313,7 @@ fn albums_grid(
                     if selected {
                         palette::selected_text()
                     } else {
-                        palette::text()
+                        palette::list_text()
                     },
                 );
                 let g2 = line(second, 11.5, palette::text_weak());
@@ -1321,7 +1321,7 @@ fn albums_grid(
                 painter.galley(
                     pos2(cell.center().x - g1.size().x / 2.0, y),
                     g1,
-                    palette::text(),
+                    palette::list_text(),
                 );
                 painter.galley(
                     pos2(cell.center().x - g2.size().x / 2.0, y + 17.0),

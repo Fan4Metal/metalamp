@@ -280,7 +280,7 @@ pub fn show(
             } else if selected {
                 palette::selected_text()
             } else {
-                palette::text()
+                palette::list_text()
             };
             let (text, length) = &lines[i];
             let length = length

@@ -159,7 +159,7 @@ impl Table<'_> {
                 } else if selected {
                     palette::selected_text()
                 } else {
-                    palette::text()
+                    palette::list_text()
                 };
                 for (i, col) in self.columns.iter().enumerate() {
                     let (left, right) = edges[i];
@@ -288,14 +288,20 @@ pub fn header_row(
             };
             painter.add(egui::Shape::convex_polygon(
                 vec![a, b, tip],
-                palette::text_weak(),
+                palette::header_text(),
                 egui::Stroke::NONE,
             ));
             text_right -= 12.0;
         }
         let clip = Rect::from_min_max(clip.min, pos2(text_right.max(clip.left()), clip.bottom()))
             .intersect(header);
-        cell_text(&painter, clip, &col.title, col.align, palette::text_weak());
+        cell_text(
+            &painter,
+            clip,
+            &col.title,
+            col.align,
+            palette::header_text(),
+        );
         painter.line_segment(
             [
                 pos2(right - 0.5, r.top() + 4.0),
