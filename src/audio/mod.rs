@@ -312,21 +312,30 @@ impl Player<'_> {
 
     fn handle(&mut self, cmd: Cmd) {
         match cmd {
-            Cmd::Play { id, path, gain } => match Decoder::open(&path) {
-                Ok(decoder) => self.begin(
-                    Open {
-                        id,
-                        path,
-                        decoder,
-                        gain,
-                    },
-                    0,
-                ),
-                Err(e) => self.send(Event::Failed {
-                    id,
-                    message: mf::describe(&e),
-                }),
-            },
+            Cmd::Play { id, path, gain } => {
+                // What was preloaded came after the track played so far;
+                // the one after this is preloaded anew once it starts.
+                self.next = None;
+                match Decoder::open(&path) {
+                    Ok(decoder) => self.begin(
+                        Open {
+                            id,
+                            path,
+                            decoder,
+                            gain,
+                        },
+                        0,
+                    ),
+                    Err(e) => {
+                        // Not the track before going on meanwhile.
+                        self.stop();
+                        self.send(Event::Failed {
+                            id,
+                            message: mf::describe(&e),
+                        });
+                    }
+                }
+            }
             Cmd::Preload(None) => self.next = None,
             Cmd::Preload(Some((id, path, gain))) => {
                 if self.next.as_ref().is_some_and(|n| n.id == id) {
@@ -339,7 +348,15 @@ impl Player<'_> {
                             path,
                             decoder,
                             gain,
-                        })
+                        });
+                        // The track decoded to its end before the next was
+                        // known (a short one, one with nothing in it, an
+                        // entry added at the end): it goes on now.
+                        if self.eos {
+                            self.eos = false;
+                            self.drained_since = None;
+                            self.track_decoded();
+                        }
                     }
                     Err(e) => {
                         self.next = None;
@@ -599,6 +616,8 @@ impl Player<'_> {
                     self.begin(next, 0);
                 } else {
                     self.decoding = None;
+                    self.next = None;
+                    self.vis().clear();
                     self.segments.clear();
                     self.heard_id = None;
                     self.eos = false;
