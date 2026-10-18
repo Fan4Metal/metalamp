@@ -88,7 +88,9 @@ impl Covers {
     }
 
     /// Takes the worker's results as textures; drops those shown longest
-    /// ago past the limit.
+    /// ago past the limit, but none shown in the frame before: with more
+    /// covers in sight than the limit (a large screen, small covers) they
+    /// would be dropped and made again every frame.
     pub fn poll(&mut self, ctx: &egui::Context) {
         let frame = ctx.cumulative_frame_nr();
         for found in self.rx.try_iter() {
@@ -112,7 +114,12 @@ impl Covers {
             let mut by_age: Vec<(u64, CoverKey)> =
                 self.textures.iter().map(|(k, (_, f))| (*f, *k)).collect();
             by_age.sort_unstable();
-            for (_, key) in by_age.iter().take(self.textures.len() - MAX_TEXTURES) {
+            let in_sight = frame.saturating_sub(1);
+            for (_, key) in by_age
+                .iter()
+                .take(self.textures.len() - MAX_TEXTURES)
+                .take_while(|(shown, _)| *shown < in_sight)
+            {
                 self.textures.remove(key);
             }
         }
