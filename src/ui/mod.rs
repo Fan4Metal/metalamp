@@ -17,6 +17,7 @@ pub mod start;
 pub mod status;
 pub mod table;
 pub mod title;
+pub mod visual;
 
 use egui::{Response, TextureHandle, TextureOptions, Ui};
 use icons::Icon;

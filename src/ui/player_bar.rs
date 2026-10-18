@@ -16,9 +16,9 @@ use crate::format;
 use crate::palette;
 use crate::player::Status;
 use crate::queue::Repeat;
-use crate::settings::BarLayout;
+use crate::settings::{BarLayout, Visual};
 use crate::ui::icons::{self, Icon};
-use crate::ui::spectrum::Analyzer;
+use crate::ui::visual::Visualizer;
 
 /// The bar's height in each layout.
 pub fn height(layout: BarLayout) -> f32 {
@@ -52,11 +52,14 @@ pub enum BarCmd {
     Info,
     /// The time clicked: the time played or the time left.
     TimeMode,
+    /// The display clicked, or one chosen in its menu.
+    Visual(Visual),
 }
 
 /// What the bar shows.
 pub struct NowPlaying<'a> {
     pub layout: BarLayout,
+    pub visual: Visual,
     pub status: Status,
     pub title: &'a str,
     pub artist: &'a str,
@@ -82,7 +85,7 @@ impl NowPlaying<'_> {
     }
 }
 
-pub fn show(ui: &mut Ui, now: &NowPlaying<'_>, spectrum: &Analyzer) -> Vec<BarCmd> {
+pub fn show(ui: &mut Ui, now: &NowPlaying<'_>, visual: &mut Visualizer) -> Vec<BarCmd> {
     let mut cmds = Vec::new();
     let rect = ui.max_rect();
     let painter = ui.painter().clone();
@@ -94,7 +97,7 @@ pub fn show(ui: &mut Ui, now: &NowPlaying<'_>, spectrum: &Analyzer) -> Vec<BarCm
     // The free space drags the window, as the title row does.
     crate::frameless::drag_area(ui, rect, ui.id().with("bar_drag"), Sense::hover());
     match now.layout {
-        BarLayout::Winamp => winamp(ui, &painter, rect, now, spectrum, &mut cmds),
+        BarLayout::Winamp => winamp(ui, &painter, rect, now, visual, &mut cmds),
         BarLayout::Classic => classic(ui, &painter, rect, now, &mut cmds),
     }
     cmds
@@ -105,7 +108,7 @@ fn winamp(
     painter: &egui::Painter,
     rect: Rect,
     now: &NowPlaying<'_>,
-    spectrum: &Analyzer,
+    visual: &mut Visualizer,
     cmds: &mut Vec<BarCmd>,
 ) {
     let player = Rect::from_min_size(
@@ -216,7 +219,8 @@ fn winamp(
     transport(ui, painter, player.left() + MARGIN, cy, now, cmds);
     volume_and_toggles(ui, painter, player.right() - MARGIN, cy, now, cmds);
 
-    // The analyzer: a dark display in the room on the right.
+    // The visualization: a dark display in the room on the right; a click
+    // goes on to the next one, the right button lists them.
     if let Some(display) = analyzer_rect(rect) {
         painter.rect(
             display,
@@ -225,7 +229,29 @@ fn winamp(
             egui::Stroke::new(1.0, palette::line()),
             egui::StrokeKind::Inside,
         );
-        spectrum.paint(painter, display.shrink(4.0));
+        visual.paint(painter, display.shrink(4.0));
+        let response = ui
+            .interact(display, ui.id().with("visual"), Sense::click())
+            .on_hover_text(format!(
+                "{}. {}",
+                now.visual.label(),
+                tr!(
+                    "A click: the next one; the right button: the list",
+                    "Щелчок: следующая; правая кнопка: список"
+                )
+            ));
+        if response.clicked() {
+            cmds.push(BarCmd::Visual(now.visual.next()));
+        }
+        egui::Popup::context_menu(&response).show(|ui| {
+            ui.set_min_width(160.0);
+            for v in Visual::ALL {
+                if ui.selectable_label(v == now.visual, v.label()).clicked() {
+                    cmds.push(BarCmd::Visual(v));
+                    ui.close();
+                }
+            }
+        });
     }
 }
 
@@ -293,14 +319,12 @@ pub fn analyzer_rect(rect: Rect) -> Option<Rect> {
     (display.width() >= 60.0).then_some(display)
 }
 
-/// How many bars the analyzer in a bar of `rect` holds (none in the
-/// classic layout).
-pub fn analyzer_bands(layout: BarLayout, rect: Rect) -> usize {
+/// The size of the visualization in a bar of `rect` (none in the classic
+/// layout).
+pub fn visual_size(layout: BarLayout, rect: Rect) -> Option<egui::Vec2> {
     match layout {
-        BarLayout::Winamp => {
-            analyzer_rect(rect).map_or(0, |r| Analyzer::bands_for(r.shrink(4.0).width()))
-        }
-        BarLayout::Classic => 0,
+        BarLayout::Winamp => analyzer_rect(rect).map(|r| r.shrink(4.0).size()),
+        BarLayout::Classic => None,
     }
 }
 

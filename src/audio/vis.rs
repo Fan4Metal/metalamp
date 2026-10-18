@@ -7,6 +7,15 @@
 /// the window asked for at any rate up to 192 kHz.
 const CAP: usize = 1 << 18;
 
+/// What `Tap::latest` gave: the sample rate, and the frame index (the
+/// device's count) past the last frame, so a caller can tell how many
+/// frames are new since it last asked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Heard {
+    pub rate: u32,
+    pub end: u64,
+}
+
 pub struct Tap {
     buf: Vec<f32>,
     /// The frame index (the device's count) past the last sample pushed.
@@ -62,9 +71,10 @@ impl Tap {
         self.heard = 0;
     }
 
-    /// The `n` frames heard last into `out`, and the sample rate; `None`
-    /// when fewer than `n` were heard since the device started.
-    pub fn latest(&self, n: usize, out: &mut Vec<f32>) -> Option<u32> {
+    /// The `n` frames heard last into `out`, the sample rate and where
+    /// they end; `None` when fewer than `n` were heard since the device
+    /// started.
+    pub fn latest(&self, n: usize, out: &mut Vec<f32>) -> Option<Heard> {
         let end = self.heard.min(self.end);
         let oldest = self.end - self.filled;
         if end < oldest + n as u64 {
@@ -72,7 +82,10 @@ impl Tap {
         }
         out.clear();
         out.extend((end - n as u64..end).map(|i| self.buf[(i % CAP as u64) as usize]));
-        Some(self.rate)
+        Some(Heard {
+            rate: self.rate,
+            end,
+        })
     }
 }
 
@@ -90,7 +103,13 @@ mod tests {
         // Nothing heard yet.
         assert_eq!(tap.latest(4, &mut out), None);
         tap.set_heard(50, 44100);
-        assert_eq!(tap.latest(4, &mut out), Some(44100));
+        assert_eq!(
+            tap.latest(4, &mut out),
+            Some(Heard {
+                rate: 44100,
+                end: 50
+            })
+        );
         assert_eq!(out, [46.0, 47.0, 48.0, 49.0]);
         // The clock cannot be past what was written.
         tap.set_heard(1000, 44100);
@@ -99,7 +118,7 @@ mod tests {
         // A new count drops the old frames.
         tap.push(&[7.0, 7.0], 2, 0);
         tap.set_heard(1, 44100);
-        assert_eq!(tap.latest(1, &mut out), Some(44100));
+        assert_eq!(tap.latest(1, &mut out).map(|h| h.rate), Some(44100));
         assert_eq!(out, [7.0]);
         assert_eq!(tap.latest(2, &mut out), None);
         tap.clear();
@@ -114,10 +133,10 @@ mod tests {
         tap.push(&[-1.0, -2.0], 1, CAP as u64);
         tap.set_heard(CAP as u64 + 2, 48000);
         let mut out = Vec::new();
-        assert_eq!(tap.latest(3, &mut out), Some(48000));
+        assert_eq!(tap.latest(3, &mut out).map(|h| h.rate), Some(48000));
         assert_eq!(out, [(CAP - 1) as f32, -1.0, -2.0]);
         // Only CAP frames are kept.
         assert_eq!(tap.latest(CAP + 1, &mut out), None);
-        assert_eq!(tap.latest(CAP, &mut out), Some(48000));
+        assert_eq!(tap.latest(CAP, &mut out).map(|h| h.rate), Some(48000));
     }
 }

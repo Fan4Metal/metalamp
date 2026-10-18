@@ -132,9 +132,9 @@ impl Engine {
 
     /// The gain of what is heard, taken at the audio thread's next turn
     /// (within 10 ms while playing).
-    /// The `n` frames heard last into `out`, for the analyzer, and their
-    /// sample rate; `None` while nothing is heard.
-    pub fn heard_samples(&self, n: usize, out: &mut Vec<f32>) -> Option<u32> {
+    /// The `n` frames heard last into `out`, for the visualizations, their
+    /// sample rate and where they end; `None` while nothing is heard.
+    pub fn heard_samples(&self, n: usize, out: &mut Vec<f32>) -> Option<vis::Heard> {
         self.shared
             .vis
             .lock()

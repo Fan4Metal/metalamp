@@ -117,7 +117,7 @@ impl Analyzer {
     }
 
     /// The bands' levels, 0 to 1, of `samples` at `rate`.
-    fn levels(&mut self, samples: &[f32], rate: u32, bands: usize) -> Vec<f32> {
+    pub fn levels(&mut self, samples: &[f32], rate: u32, bands: usize) -> Vec<f32> {
         for ((re, im), (s, w)) in self
             .re
             .iter_mut()

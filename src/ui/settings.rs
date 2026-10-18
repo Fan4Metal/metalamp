@@ -507,8 +507,8 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
             ui,
             tr!("Player bar", "Панель плеера"),
             Some(tr!(
-                "The time in large digits and a spectrum analyzer on the right; or the compact bar of one row.",
-                "Крупное время и анализатор спектра справа; или компактная панель в одну строку."
+                "The time in large digits and a visualization on the right (the right button on it chooses one); or the compact bar of one row.",
+                "Крупное время и визуализация справа (правая кнопка на ней — выбор); или компактная панель в одну строку."
             )),
             CONTROL,
             |ui| {
@@ -1399,6 +1399,7 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     }
     settings.language = d.language;
     settings.bar_layout = d.bar_layout;
+    settings.visualization = d.visualization;
     settings.theme = d.theme;
     settings.accent = d.accent;
     settings.media_keys = d.media_keys;

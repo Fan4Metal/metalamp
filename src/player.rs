@@ -265,8 +265,9 @@ impl Player {
         self.engine.send(Cmd::Device(device.to_owned()));
     }
 
-    /// The `n` frames heard last, for the analyzer, and their sample rate.
-    pub fn heard_samples(&self, n: usize, out: &mut Vec<f32>) -> Option<u32> {
+    /// The `n` frames heard last, for the visualizations, their sample
+    /// rate and where they end.
+    pub fn heard_samples(&self, n: usize, out: &mut Vec<f32>) -> Option<crate::audio::vis::Heard> {
         self.engine.heard_samples(n, out)
     }
 

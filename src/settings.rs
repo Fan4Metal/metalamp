@@ -70,6 +70,8 @@ pub struct Settings {
     /// The player bar's time counts down to the track's end.
     pub time_remaining: bool,
     pub bar_layout: BarLayout,
+    /// What the bar's display shows.
+    pub visualization: Visual,
     /// The output device's endpoint id (empty: Windows' default) and its
     /// name, shown while it is not present.
     pub output_device: String,
@@ -137,9 +139,48 @@ impl BarLayout {
 
     pub fn label(self) -> &'static str {
         match self {
-            BarLayout::Winamp => tr!("With a spectrum", "Со спектром"),
+            BarLayout::Winamp => tr!("With a visualization", "С визуализацией"),
             BarLayout::Classic => tr!("Compact", "Компактная"),
         }
+    }
+}
+
+/// What the display on the right of the player bar shows (`ui::visual`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Visual {
+    /// Bars over log-spaced bands with falling peaks.
+    #[default]
+    Spectrum,
+    /// The sound's peaks rolling from the right.
+    Waveform,
+    /// The wave itself.
+    Scope,
+    /// The spectrum's bands as colours rolling from the right.
+    Spectrogram,
+}
+
+impl Visual {
+    pub const ALL: [Visual; 4] = [
+        Visual::Spectrum,
+        Visual::Waveform,
+        Visual::Scope,
+        Visual::Spectrogram,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Visual::Spectrum => tr!("Spectrum", "Спектр"),
+            Visual::Waveform => tr!("Waveform", "Волна"),
+            Visual::Scope => tr!("Oscilloscope", "Осциллограф"),
+            Visual::Spectrogram => tr!("Spectrogram", "Спектрограмма"),
+        }
+    }
+
+    /// The one a click on the display goes on to.
+    pub fn next(self) -> Visual {
+        let i = Visual::ALL.iter().position(|&v| v == self).unwrap_or(0);
+        Visual::ALL[(i + 1) % Visual::ALL.len()]
     }
 }
 
@@ -175,6 +216,7 @@ impl Default for Settings {
             playlist_current: None,
             time_remaining: false,
             bar_layout: BarLayout::default(),
+            visualization: Visual::default(),
             output_device: String::new(),
             output_device_name: String::new(),
             dsp: Default::default(),
