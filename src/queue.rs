@@ -229,10 +229,12 @@ impl Queue {
         }
     }
 
+    /// Shuffle on or off. The entries stay where they are, so the
+    /// revision does not change (the playlist's selection stays, and the
+    /// list is not written again).
     pub fn set_shuffle(&mut self, on: bool) {
         self.shuffle = on;
         self.reshuffle();
-        self.revision += 1;
     }
 
     /// The order of play's length, its entry at place `p`, and the place

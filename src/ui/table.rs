@@ -385,7 +385,8 @@ fn viewport_rect(ui: &Ui) -> Rect {
 }
 
 /// Left and right of each column: the given widths, the last column to
-/// the table's right edge (at least its own width).
+/// the table's right edge (`total` past `left`; the callers make it room
+/// for every width), never narrower than `MIN_WIDTH`.
 fn column_edges(left: f32, total: f32, widths: &[f32]) -> Vec<(f32, f32)> {
     let mut x = left;
     let n = widths.len();
