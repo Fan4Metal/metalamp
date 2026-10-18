@@ -7,6 +7,7 @@
 //! click on it opens the file info).
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use egui::{Align2, FontId, Key, Modifiers, Rect, Sense, TextureHandle, Ui, pos2, vec2};
 
@@ -37,6 +38,50 @@ pub struct PlaylistView {
     scroll_to: Option<usize>,
     /// The playlist's revision the selection belongs to.
     revision: u64,
+    /// The rows as last built.
+    rows: Option<Arc<Rows>>,
+}
+
+/// The rows' text and what the search leaves, built again only when the
+/// playlist, the library or the search changed: for every entry each
+/// frame, it was a lookup and a string or two (a long list at 50 frames
+/// a second while playing).
+struct Rows {
+    /// The playlist's revision, the library's address and the search.
+    key: (u64, usize, String),
+    /// Each entry's "Artist – Title" and length.
+    lines: Vec<(String, Option<u32>)>,
+    /// The entries the search leaves.
+    shown: Vec<usize>,
+    /// The length of them all, in ms.
+    total: u64,
+}
+
+impl Rows {
+    fn of(key: (u64, usize, String), player: &Player, library: &Library) -> Rows {
+        let words = crate::library::query_words(&key.2);
+        let lines: Vec<(String, Option<u32>)> = player
+            .queue
+            .entries()
+            .iter()
+            .map(|e| describe(library, &e.path))
+            .collect();
+        let shown = (0..lines.len())
+            .filter(|&i| {
+                words.is_empty() || {
+                    let text = crate::library::search_form(&lines[i].0);
+                    words.iter().all(|w| text.contains(w.as_str()))
+                }
+            })
+            .collect();
+        let total = lines.iter().filter_map(|l| l.1).map(u64::from).sum();
+        Rows {
+            key,
+            lines,
+            shown,
+            total,
+        }
+    }
 }
 
 impl PlaylistView {
@@ -145,19 +190,21 @@ pub fn show(
     }
 
     // The rows the search leaves, as indices into the playlist.
-    let words = crate::library::query_words(&pv.query);
-    let entries = player.queue.entries();
-    let count = entries.len();
-    let lines: Vec<(String, Option<u32>)> =
-        entries.iter().map(|e| describe(library, &e.path)).collect();
-    let shown: Vec<usize> = (0..entries.len())
-        .filter(|&i| {
-            words.is_empty() || {
-                let text = crate::library::search_form(&lines[i].0);
-                words.iter().all(|w| text.contains(w.as_str()))
-            }
-        })
-        .collect();
+    let key = (
+        player.queue.revision,
+        std::ptr::from_ref(library) as usize,
+        pv.query.clone(),
+    );
+    if pv.rows.as_ref().is_none_or(|r| r.key != key) {
+        pv.rows = Some(Arc::new(Rows::of(key, player, library)));
+    }
+    let Some(rows) = pv.rows.clone() else {
+        return actions;
+    };
+    let (lines, shown) = (&rows.lines, &rows.shown);
+    let count = lines.len();
+    // Rows are dragged only in the whole list.
+    let whole = rows.key.2.trim().is_empty();
     let current = player.queue.current();
     let playing = player
         .playing
@@ -324,7 +371,7 @@ pub fn show(
             if resp.secondary_clicked() {
                 secondary_row = Some(i);
             }
-            if resp.drag_started() && words.is_empty() {
+            if resp.drag_started() && whole {
                 if !pv.selected.contains(&i) {
                     table::click_select(&mut pv.selected, &mut pv.anchor, i, Modifiers::NONE);
                 }
@@ -454,7 +501,7 @@ pub fn show(
     // The total, in the last FOOTER points (the cover may sit between
     // the list and it).
     let footer = Rect::from_min_max(pos2(full.left(), full.bottom() - FOOTER), full.max);
-    let total: u64 = lines.iter().filter_map(|l| l.1).map(u64::from).sum();
+    let total = rows.total;
     let text = format!(
         "{} [{}]",
         crate::i18n::count(

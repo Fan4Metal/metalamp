@@ -199,12 +199,14 @@ impl Queue {
         {
             return Some(i);
         }
-        let order = self.play_order();
-        let pos = from.and_then(|i| order.iter().position(|&o| o == i));
-        match pos {
-            None => order.first().copied(),
-            Some(p) if p + 1 < order.len() => Some(order[p + 1]),
-            Some(_) if self.repeat == Repeat::All => order.first().copied(),
+        let len = self.order_len();
+        if len == 0 {
+            return None;
+        }
+        match from.and_then(|i| self.order_pos(i)) {
+            None => Some(self.order_at(0)),
+            Some(p) if p + 1 < len => Some(self.order_at(p + 1)),
+            Some(_) if self.repeat == Repeat::All => Some(self.order_at(0)),
             Some(_) => None,
         }
     }
@@ -215,13 +217,15 @@ impl Queue {
         if n == 0 {
             return None;
         }
-        let order = self.play_order();
-        let pos = from.and_then(|i| order.iter().position(|&o| o == i));
-        match pos {
-            Some(p) if p > 0 => Some(order[p - 1]),
-            Some(_) if self.repeat == Repeat::All => order.last().copied(),
-            Some(p) => Some(order[p]),
-            None => order.first().copied(),
+        let len = self.order_len();
+        if len == 0 {
+            return None;
+        }
+        match from.and_then(|i| self.order_pos(i)) {
+            Some(p) if p > 0 => Some(self.order_at(p - 1)),
+            Some(_) if self.repeat == Repeat::All => Some(self.order_at(len - 1)),
+            Some(p) => Some(self.order_at(p)),
+            None => Some(self.order_at(0)),
         }
     }
 
@@ -229,6 +233,29 @@ impl Queue {
         self.shuffle = on;
         self.reshuffle();
         self.revision += 1;
+    }
+
+    /// The order of play's length, its entry at place `p`, and the place
+    /// of entry `i` in it; no list made (the taskbar and the media
+    /// controls ask for the next and the previous every frame).
+    fn order_len(&self) -> usize {
+        if self.shuffle {
+            self.order.len()
+        } else {
+            self.entries.len()
+        }
+    }
+
+    fn order_at(&self, p: usize) -> usize {
+        if self.shuffle { self.order[p] } else { p }
+    }
+
+    fn order_pos(&self, i: usize) -> Option<usize> {
+        if self.shuffle {
+            self.order.iter().position(|&o| o == i)
+        } else {
+            (i < self.entries.len()).then_some(i)
+        }
     }
 
     /// The indices in the order of play.
