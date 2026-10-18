@@ -1,4 +1,4 @@
-//! The spectrum analyzer on the right of the player bar, as Winamp's:
+//! The spectrum analyzer on the right of the player bar:
 //! bars over log-spaced bands with peaks that hold and fall. The samples
 //! heard now (`audio::vis::Tap`) go through a Hann window and a radix-2
 //! FFT of `N` points; a band's level is the loudest bin in it, in

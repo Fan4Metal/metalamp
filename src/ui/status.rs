@@ -1,5 +1,4 @@
-//! The status line at the window's bottom, as Winamp's media library has
-//! it: how many tracks, how long and how large, and the scan's progress.
+//! The status line at the window's bottom: how many tracks, how long and how large, and the scan's progress.
 
 use egui::{Align, Layout, RichText, Ui};
 
@@ -17,7 +16,7 @@ pub fn show(ui: &mut Ui, app: &App) {
     );
     ui.horizontal_centered(|ui| {
         ui.add_space(10.0);
-        // What the library view shows, as Winamp's status line does, with
+        // What the library view shows, with
         // the time its query took; the whole library until a view exists.
         let (tracks, length, bytes, took) = match &app.library_view.view {
             Some(v) => (v.tracks.len() as u64, v.length_ms, v.bytes, Some(v.took)),

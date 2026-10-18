@@ -1,5 +1,5 @@
 //! The media library: the tracks of the music folders with their tags,
-//! grouped into artists and albums as Winamp's media library shows them.
+//! grouped into artists and albums.
 //!
 //! The scan (`scan.rs`) reads the tags (`tags.rs`) and builds a
 //! [`Library`] on its own thread; the UI only swaps in the new `Arc`. The
@@ -82,7 +82,7 @@ pub struct Album {
     /// The folder of its first track.
     pub folder: PathBuf,
     /// Lower-case artist and title: tracks are one album when these match,
-    /// as in Winamp's media library, whatever their years (a compilation's
+    /// whatever their years (a compilation's
     /// tracks often carry the years of their first release).
     pub key: String,
 }

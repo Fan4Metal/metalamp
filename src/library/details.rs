@@ -17,7 +17,7 @@ pub struct Details {
     /// The tags in the file (`ID3v2.3`, `ID3v1`, `APE`, …), the one whose
     /// fields are shown first.
     pub tags: Vec<String>,
-    /// That tag's fields: those of Winamp's File Info window in its order,
+    /// That tag's fields: the usual ones in their usual order (`ORDER`),
     /// then the rest as they come. A key given more than once keeps every
     /// value, joined with "; "; the track and disc numbers carry their
     /// totals ("3/10").
@@ -48,7 +48,7 @@ pub struct Picture {
     pub bytes: usize,
 }
 
-/// The fields in the order of Winamp's File Info window (ID3v2 page).
+/// The fields in the order players and taggers show them (ID3v2).
 const ORDER: [ItemKey; 19] = [
     ItemKey::TrackNumber,
     ItemKey::DiscNumber,
@@ -257,7 +257,7 @@ mod tests {
     }
 
     #[test]
-    fn fields_in_winamps_order_then_the_rest() {
+    fn fields_in_their_order_then_the_rest() {
         let mut tag = lofty::tag::Tag::new(TagType::Id3v2);
         tag.insert_text(ItemKey::Composer, "Холстинин".into());
         tag.insert_text(ItemKey::TrackTitle, "Патриот".into());

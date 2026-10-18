@@ -1,4 +1,4 @@
-//! A table as Winamp's media library has them: a header whose columns sort
+//! A table of the media library: a header whose columns sort
 //! when clicked (again: the other way) and change width when their right
 //! edge is dragged, rows of one height painted only where they are seen
 //! (`ScrollArea::show_viewport`: thousands of rows cost what a screenful

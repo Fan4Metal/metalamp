@@ -1,5 +1,4 @@
-//! The settings window (F5 as metalmpv's, Ctrl+P as Winamp's
-//! Preferences, or the gear in the library's bar), after metalmpv's: one surface without inner
+//! The settings window (F5 as metalmpv's, Ctrl+P, or the gear in the library's bar), after metalmpv's: one surface without inner
 //! frames, the categories in a darker column on the left with Reset and
 //! Close under them, the page of the chosen category on the right in
 //! cards of rows (the name and a hint on the left, the control on the
@@ -772,7 +771,7 @@ fn tool(ui: &mut Ui, tip: &str, enabled: bool, icon: Icon) -> Response {
     response.on_hover_text(tip)
 }
 
-/// The equalizer's switch, Winamp's presets and the user's own in one
+/// The equalizer's switch, the built-in presets and the user's own in one
 /// list (the one the sliders stand at named; "Custom" otherwise), and
 /// beside it saving the sliders as one's own and deleting one's own; the
 /// name is typed in a row under it (metalmpv's equalizer head).

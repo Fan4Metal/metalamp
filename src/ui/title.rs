@@ -2,8 +2,7 @@
 //! icon (a click: About, as F1) and the title on the left, a newer
 //! release's button, then minimise, maximise and close on the right. Its
 //! free area drags the window; a double click maximises it or brings it
-//! back. The family's "i" button is left out: the row is bare, as
-//! Winamp's.
+//! back. The family's "i" button is left out: the row is bare.
 
 use egui::{Align2, FontId, Rect, Sense, TextureHandle, Ui, pos2, vec2};
 

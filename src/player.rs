@@ -221,7 +221,7 @@ impl Player {
             self.queue.repeat = Repeat::Off;
         }
         let next = self.queue.after(current).or_else(|| {
-            // The end: round to the start, as Winamp's Next does.
+            // The end: round to the start.
             self.queue.after(None)
         });
         self.queue.repeat = repeat;

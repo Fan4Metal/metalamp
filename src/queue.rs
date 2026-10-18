@@ -252,7 +252,7 @@ impl Queue {
 
     /// The list as an M3U8 playlist: `#EXTM3U`, then for each entry its
     /// `#EXTINF` line (seconds and "Artist - Title", from `describe`) and
-    /// its path. UTF-8 without a BOM, CRLF as Winamp writes it.
+    /// its path. UTF-8 without a BOM, CRLF, as players write it.
     pub fn m3u8(&self, describe: &dyn Fn(&Path) -> Option<(u64, String)>) -> String {
         let mut out = String::from("#EXTM3U\r\n");
         for e in &self.entries {

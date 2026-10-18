@@ -1,8 +1,8 @@
-//! The file info window, as Winamp's File Info (I, Alt+3): a click on the
+//! The file info window (I, Alt+3): a click on the
 //! player bar's cover opens it for the track heard, I, Alt+3 or the context
 //! menus of the tracks and the playlist for the track selected. The path
 //! cover, the title, the artist and the album on top with the audio
-//! properties as chips; the tag's fields in Winamp's order in two columns
+//! properties as chips; the tag's fields in their usual order in two columns
 //! (empty ones as a dash), the tag's other fields under them; the file's
 //! path and the rest. Shown, not edited; the text can be selected and
 //! copied. The cross, Esc, Enter or a click outside closes it. The file is
@@ -25,7 +25,7 @@ const WIDTH: f32 = 720.0;
 /// The cover's side in the window, in points.
 const COVER: f32 = 150.0;
 
-/// The fields of Winamp's ID3v2 page, left column, then right column; a
+/// The usual ID3v2 fields, left column, then right column; a
 /// field shown for the first of its keys the tag has.
 const LEFT: [&[ItemKey]; 8] = [
     &[ItemKey::TrackNumber],
@@ -499,7 +499,7 @@ fn value<'a>(d: &'a Details, keys: &[ItemKey]) -> &'a str {
         .unwrap_or("")
 }
 
-/// A field's name as Winamp's File Info window has it; fields it lacks by
+/// A field's name as players and taggers show it; the others by
 /// lofty's name for them, in words.
 fn field_name(key: ItemKey) -> String {
     let name = match key {

@@ -40,7 +40,7 @@ fn read_tagged(path: &Path) -> Result<TaggedFile, FileParseError> {
 
 /// `path` read by lofty with `options`, an MP3 with only the first of the
 /// ID3v2 tags at its start: lofty puts the frames of the tags after it
-/// over its own (lofty-rs#87), while Winamp, Mp3tag and the other
+/// over its own (lofty-rs#87), while players, Mp3tag and the other
 /// taggers read the first tag only, the one they write. A tagger that
 /// wrote a new tag in front of an old one leaves the old one's album
 /// behind it (an album that split in two).

@@ -70,7 +70,8 @@ pub enum Theme {
     /// Graphite greys.
     #[default]
     Dark,
-    /// Winamp's Modern skin: black lists, steel-blue text, a steel frame.
+    /// Black lists with steel-blue text, light grey text around them, a
+    /// steel frame.
     Steel,
     /// Softer greys with a cool cast, lighter than graphite.
     Dimmed,
@@ -608,7 +609,6 @@ impl Palette {
                 error: hex(0xff8a80),
                 ..Palette::BLANK
             },
-            // Taken from a screenshot of Winamp's media library.
             Theme::Steel => Palette {
                 dark: true,
                 title_bg: hex(0x343946),
@@ -620,8 +620,8 @@ impl Palette {
                 header_bg: hex(0x494c4d),
                 card_bg: hex(0x26292a),
                 line: hex(0x404446),
-                // Winamp's: steel blue in the lists, light grey around
-                // them and on the column headers.
+                // Steel blue in the lists, light grey around them and on
+                // the column headers.
                 text: hex(0xd2d2d2),
                 list_text: hex(0x93afb9),
                 header_text: hex(0xd2d2d2),

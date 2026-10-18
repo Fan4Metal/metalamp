@@ -1,4 +1,4 @@
-//! MetalAMP: a fast audio player for Windows with a Winamp-style media library.
+//! MetalAMP: a fast audio player for Windows built around a media library.
 
 // The release build is a GUI program without a console; the debug build
 // keeps it, so `eprintln!`, logs and panics are seen while developing.

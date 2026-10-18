@@ -78,7 +78,7 @@ pub struct Settings {
     pub output_device_name: String,
     /// The sound processing (`audio::dsp`).
     pub dsp: crate::audio::dsp::DspSettings,
-    /// The user's equalizer presets (Winamp's are built in).
+    /// The user's equalizer presets (the classic ones are built in).
     pub eq_presets: Vec<EqPreset>,
     /// When the media keys are the player's.
     pub media_keys: MediaKeys,
@@ -141,20 +141,21 @@ pub struct EqPreset {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BarLayout {
-    /// As Winamp's main window: the time in large digits, a spectrum
-    /// analyzer on the right.
-    #[default]
-    Winamp,
     /// The compact bar of one row.
     Classic,
+    /// The time in large digits, a visualization on the right. An
+    /// unknown value (an older name) reads as this one, so it is last.
+    #[default]
+    #[serde(other)]
+    Full,
 }
 
 impl BarLayout {
-    pub const ALL: [BarLayout; 2] = [BarLayout::Winamp, BarLayout::Classic];
+    pub const ALL: [BarLayout; 2] = [BarLayout::Full, BarLayout::Classic];
 
     pub fn label(self) -> &'static str {
         match self {
-            BarLayout::Winamp => tr!("With a visualization", "С визуализацией"),
+            BarLayout::Full => tr!("With a visualization", "С визуализацией"),
             BarLayout::Classic => tr!("Compact", "Компактная"),
         }
     }
@@ -372,6 +373,15 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_older_bar_layout_reads_as_the_full_one() {
+        let read = |v: &str| serde_json::from_str::<BarLayout>(&format!("\"{v}\"")).unwrap();
+        assert_eq!(read("full"), BarLayout::Full);
+        assert_eq!(read("classic"), BarLayout::Classic);
+        assert_eq!(read("an older name"), BarLayout::Full);
+        assert_eq!(serde_json::to_string(&BarLayout::Full).unwrap(), "\"full\"");
+    }
 
     #[test]
     fn portable_file_only_when_present_and_writable() {

@@ -1,5 +1,5 @@
 //! The player bar under the title row, in one of two layouts
-//! (`BarLayout`, a setting). `Winamp`, laid out as Winamp's main window:
+//! (`BarLayout`, a setting). `Full`:
 //! the player on the left (`PLAYER_WIDTH`), the spectrum analyzer in the
 //! room on the right. The player: the time played (a click: the time
 //! left) in large digits, the cover, the title, the artist and album, the
@@ -23,12 +23,12 @@ use crate::ui::visual::Visualizer;
 /// The bar's height in each layout.
 pub fn height(layout: BarLayout) -> f32 {
     match layout {
-        BarLayout::Winamp => 118.0,
+        BarLayout::Full => 118.0,
         BarLayout::Classic => 76.0,
     }
 }
 
-/// The player's part on the left of the Winamp layout; the analyzer takes
+/// The player's part on the left of the full layout; the analyzer takes
 /// the rest.
 pub const PLAYER_WIDTH: f32 = 520.0;
 const MARGIN: f32 = 14.0;
@@ -97,13 +97,13 @@ pub fn show(ui: &mut Ui, now: &NowPlaying<'_>, visual: &mut Visualizer) -> Vec<B
     // The free space drags the window, as the title row does.
     crate::frameless::drag_area(ui, rect, ui.id().with("bar_drag"), Sense::hover());
     match now.layout {
-        BarLayout::Winamp => winamp(ui, &painter, rect, now, visual, &mut cmds),
+        BarLayout::Full => full(ui, &painter, rect, now, visual, &mut cmds),
         BarLayout::Classic => classic(ui, &painter, rect, now, &mut cmds),
     }
     cmds
 }
 
-fn winamp(
+fn full(
     ui: &mut Ui,
     painter: &egui::Painter,
     rect: Rect,
@@ -258,7 +258,7 @@ fn winamp(
     }
 }
 
-/// The bar before the Winamp layout: one row, the seek bar under it.
+/// The bar before the full layout: one row, the seek bar under it.
 fn classic(
     ui: &mut Ui,
     painter: &egui::Painter,
@@ -312,7 +312,7 @@ fn classic(
     }
 }
 
-/// Where the analyzer's display sits in a bar of `rect` in the Winamp
+/// Where the analyzer's display sits in a bar of `rect` in the full
 /// layout; `None` when the window is too narrow for it.
 pub fn analyzer_rect(rect: Rect) -> Option<Rect> {
     let display = Rect::from_min_max(
@@ -326,7 +326,7 @@ pub fn analyzer_rect(rect: Rect) -> Option<Rect> {
 /// layout).
 pub fn visual_size(layout: BarLayout, rect: Rect) -> Option<egui::Vec2> {
     match layout {
-        BarLayout::Winamp => analyzer_rect(rect).map(|r| r.shrink(4.0).size()),
+        BarLayout::Full => analyzer_rect(rect).map(|r| r.shrink(4.0).size()),
         BarLayout::Classic => None,
     }
 }

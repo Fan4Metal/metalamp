@@ -1,10 +1,10 @@
-//! The ten-band graphic equalizer with Winamp's bands (60 Hz to 16 kHz)
+//! The ten-band graphic equalizer (60 Hz to 16 kHz, the classic bands)
 //! and its preamp: a peaking filter per band and channel, a band at 0 dB
 //! left out.
 
 use super::biquad::{Biquad, Coeffs, db_to_gain};
 
-/// Winamp's bands, in hertz.
+/// The bands, in hertz.
 pub const BANDS: [f32; 10] = [
     60.0, 170.0, 310.0, 600.0, 1000.0, 3000.0, 6000.0, 12000.0, 14000.0, 16000.0,
 ];
@@ -14,7 +14,7 @@ const Q: f32 = 1.0;
 /// A band's gain is kept within this many decibels either way.
 pub const RANGE_DB: f32 = 12.0;
 
-/// Flat, then Winamp's presets (its `winamp.q1`), in decibels of its
+/// Flat, then the classic presets of ten-band players, in decibels of a
 /// ±12 dB scale; the names as they are shown and in Russian.
 pub const PRESETS: [(&str, &str, [f32; 10]); 18] = [
     ("Flat", "Ровный", [0.0; 10]),

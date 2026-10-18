@@ -1,4 +1,4 @@
-//! The media library view, as Winamp's: a search field over three panes,
+//! The media library view: a search field over three panes,
 //! the artists on the left ("All" first), the albums at the top right (a
 //! grid of covers or a table), the tracks under them. Choosing an artist
 //! narrows the albums, an album the tracks; the search narrows all three
@@ -84,7 +84,7 @@ pub struct View {
     /// The sums of `tracks`, for the status line.
     pub length_ms: u64,
     pub bytes: u64,
-    /// How long building the view took, shown as Winamp shows its query's.
+    /// How long building the view took, shown in the status line.
     pub took: Duration,
     /// The chosen artist's and album's rows in `artists` and `albums`.
     pub artist_row: Option<usize>,
@@ -1507,7 +1507,7 @@ fn tracks_pane(
     if let Some(row) = resp.double_clicked {
         lv.selected = std::iter::once(row).collect();
         lv.anchor = Some(row);
-        // Winamp's way: the whole table goes to the playlist, from this
+        // The whole table goes to the playlist, from this
         // track on.
         actions.push(LibraryAction::Play {
             tracks: view.tracks.clone(),

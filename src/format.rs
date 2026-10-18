@@ -16,7 +16,7 @@ pub fn time(ms: u64) -> String {
     }
 }
 
-/// The length of many tracks, as Winamp's status line shows it:
+/// The length of many tracks, as the status line shows it:
 /// `16:40:20`, `15 days+16:40:20` / `15 дн.+16:40:20`.
 pub fn long_duration_in(lang: Lang, ms: u64) -> String {
     let s = ms / 1000;

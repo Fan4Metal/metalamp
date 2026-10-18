@@ -451,8 +451,8 @@ impl App {
         }
     }
 
-    /// The player's keys, when no text field takes them: Space, Z X C V B
-    /// (Winamp's), Ctrl+arrows, Shift+arrows, M, R, S; the letters not
+    /// The player's keys, when no text field takes them: Space, Z X C V B,
+    /// Ctrl+arrows, Shift+arrows, M, R, S; the letters not
     /// while `letters` (they go to an artist); while `over_player` the
     /// arrows seek and set the volume (else they move in the library's
     /// panes).
@@ -522,7 +522,7 @@ impl App {
         }
     }
 
-    /// The window's title: the track heard, as Winamp shows it.
+    /// The window's title: the track heard, then the program's name.
     fn window_title(&self) -> String {
         let (title, _, track) = self.now_playing();
         if self.player.status == crate::player::Status::Stopped || title.is_empty() {
@@ -903,7 +903,7 @@ impl eframe::App for App {
         }
         // The visualization moves: 50 frames a second; without one (off,
         // or the compact bar) only the time and the seek bar move.
-        let shown = self.settings.bar_layout == crate::settings::BarLayout::Winamp
+        let shown = self.settings.bar_layout == crate::settings::BarLayout::Full
             && self.settings.visualization != crate::settings::Visual::Off;
         if shown && (self.player.status == crate::player::Status::Playing || self.visual.active()) {
             ctx.request_repaint_after(Duration::from_millis(20));
@@ -924,7 +924,7 @@ impl eframe::App for App {
         self.uncloak(&ctx);
         // A modal takes the keys while it is open.
         let modal = self.about.open || self.file_info.open || self.settings_dialog.open;
-        // The file info: Alt+3 as Winamp's, or I (not while typing).
+        // The file info: Alt+3, or I (not while typing).
         let typing = ctx.memory(|m| m.focused().is_some());
         // Letters typed over the artists' pane go to an artist, not to
         // the keys below.
@@ -945,7 +945,7 @@ impl eframe::App for App {
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F1)) {
                 self.about.toggle();
             }
-            // F5 as metalmpv's, Ctrl+P as Winamp's Preferences.
+            // F5 as metalmpv's, or Ctrl+P.
             if ctx.input_mut(|i| {
                 i.consume_key(Modifiers::NONE, Key::F5) || i.consume_key(Modifiers::COMMAND, Key::P)
             }) {
@@ -992,7 +992,7 @@ impl eframe::App for App {
             .rect;
         self.player_area = title_rect.union(bar_rect);
         // The wheel anywhere over the title row and the player bar steps
-        // the volume by 5, as over Winamp's main window.
+        // the volume by 5.
         if !modal
             && ctx
                 .pointer_hover_pos()

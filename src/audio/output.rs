@@ -1,7 +1,7 @@
 //! Where the samples go. [`Output`] is what the audio thread needs of a
 //! device; [`Wasapi`] is the built-in one, a shared WASAPI stream on the
 //! default device or the one chosen in the settings (qrec's
-//! `playback::run`). A Winamp output plugin (`out_*.dll`, TODO.md) would
+//! `playback::run`). An output plugin (`out_*.dll`, TODO.md) would
 //! be another implementation. `list_devices` names the devices for the
 //! settings window.
 

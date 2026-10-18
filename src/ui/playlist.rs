@@ -1,4 +1,4 @@
-//! The playlist on the right, as Winamp's: a search field over the list,
+//! The playlist on the right: a search field over the list,
 //! "N. Artist – Title" and the length of each, the entry playing in the
 //! accent, the total at the bottom. Rows are selected as in the tables
 //! (Ctrl, Shift), dragged to another place, removed with Delete; a double
