@@ -31,7 +31,7 @@ MetalAMP is an audio player for Windows built around a media library in the mann
 - **File info** as Winamp's: every field of a track's tag, its cover and its audio properties, in a window opened by a click on the player's cover or `I` (see [File info](#file-info)).
 - **One window**: files opened from Explorer go to the window already open.
 - **File associations** with an icon for each type, offered by the installer.
-- **English or Russian interface**: it follows the language of Windows and can be changed in the About window (`F1`, or a click on the icon in the title row).
+- **English or Russian interface**: it follows the language of Windows and can be changed in the settings window (`Ctrl+P`).
 - **Portable**: the [portable archive](#installation) keeps its settings, the library index and the covers next to the program.
 - **Privacy**: no network access beyond the optional update check (see [Update check and privacy](#update-check-and-privacy)).
 
@@ -69,9 +69,13 @@ A click on the cover in the player bar opens the file info window of the track p
 
 ### Playback
 
-The player bar is laid out as Winamp's main window. On the left: the time played in large digits (a click switches it to the time left, and back), the cover, the title, the artist and album, the bit rate, sample rate and channels; the seek bar with the length at its end; Previous, Play/Pause, Stop and Next; shuffle, repeat (off, the playlist, the track) and the volume with a mute button. On the right, in the room left, a spectrum analyzer of the sound heard, with peaks that hold and fall. The mouse wheel anywhere over the title row and the player bar changes the volume in steps of 5 %.
+The player bar, in its default layout, is laid out as Winamp's main window. On the left: the time played in large digits (a click switches it to the time left, and back), the cover, the title, the artist and album, the bit rate, sample rate and channels; the seek bar with the length at its end; Previous, Play/Pause, Stop and Next; shuffle, repeat (off, the playlist, the track) and the volume with a mute button. On the right, in the room left, a spectrum analyzer of the sound heard, with peaks that hold and fall. The mouse wheel anywhere over the title row and the player bar changes the volume in steps of 5 %. The settings window offers the compact bar of one row instead: the buttons, the cover and the names, shuffle, repeat and the volume, with the seek bar and the times under them.
 
 Media Foundation, the media framework of Windows, decodes the files, and the WASAPI shared mode plays them on the default device; a change of the default device or a device unplugged is followed without stopping. The track after the current one is opened in advance, so tracks of one format follow each other without a pause. An MP3 encoder adds silence before the music and after it; MetalAMP reads how much from the file's LAME tag and leaves it out, so an album recorded without pauses plays as one piece.
+
+### Settings
+
+The settings window (`Ctrl+P`, as Winamp's Preferences, or the gear in the library's bar) holds the interface language, the layout of the player bar, the sound output device (Windows' default, which follows the device chosen in Windows, or one of the devices present; a chosen device that is absent when a track starts is replaced by the default one until it is back) and the update check. **Reset** puts them back to their defaults.
 
 ### The playlist
 
@@ -102,12 +106,13 @@ The playlist on the right (`Alt+E` shows or hides it) lists "Artist – Title" w
 | `Enter` | Play the selection |
 | `Delete` | Remove from the playlist |
 | `F1` | About (also a click on the icon in the title row) |
+| `Ctrl+P` | Settings (also the gear in the library's bar) |
 
 The media keys of keyboards and headsets work while the window is in front.
 
 ## Update check and privacy
 
-The update check is optional and off by default. With **Check for updates at start-up (once a day)** enabled in the About window, the program asks the GitHub Releases API (`api.github.com`) for the latest release at most once a day; **Check now** in the same window asks at once. The request carries nothing but the program version in its `User-Agent` header, and nothing is downloaded or installed: when a newer release exists, a button with its version appears in the title row and opens the release page in the browser. Otherwise the program does not access the network.
+The update check is optional and off by default. With **Check at start-up** enabled on the Updates page of the settings window, the program asks the GitHub Releases API (`api.github.com`) for the latest release at most once a day; **Check now** in the same window asks at once. The request carries nothing but the program version in its `User-Agent` header, and nothing is downloaded or installed: when a newer release exists, a button with its version appears in the title row and opens the release page in the browser. Otherwise the program does not access the network.
 
 ## Building
 

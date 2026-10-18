@@ -52,8 +52,9 @@ impl Player {
         mute: bool,
         repeat: Repeat,
         shuffle: bool,
+        device: String,
     ) -> Player {
-        let engine = Engine::start(ctx.clone());
+        let engine = Engine::start(ctx.clone(), device);
         engine.set_gain(audio::gain_of(volume, mute));
         let mut queue = Queue::default();
         queue.repeat = repeat;
@@ -204,6 +205,11 @@ impl Player {
 
     pub fn position_ms(&self) -> u64 {
         self.engine.position_ms()
+    }
+
+    /// Play on `device` (its id; empty: the default) from now on.
+    pub fn set_device(&self, device: &str) {
+        self.engine.send(Cmd::Device(device.to_owned()));
     }
 
     /// The `n` frames heard last, for the analyzer, and their sample rate.

@@ -1,15 +1,18 @@
 //! Where the samples go. [`Output`] is what the audio thread needs of a
 //! device; [`Wasapi`] is the built-in one, a shared WASAPI stream on the
-//! default device (qrec's `playback::run`). A Winamp output plugin
-//! (`out_*.dll`, TODO.md) would be another implementation.
+//! default device or the one chosen in the settings (qrec's
+//! `playback::run`). A Winamp output plugin (`out_*.dll`, TODO.md) would
+//! be another implementation. `list_devices` names the devices for the
+//! settings window.
 
 use windows::Win32::Media::Audio::{
     AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
-    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, IAudioClient, IAudioClock, IAudioRenderClient,
-    IAudioStreamVolume, IMMDeviceEnumerator, MMDeviceEnumerator, WAVEFORMATEX, eConsole, eRender,
+    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, DEVICE_STATE_ACTIVE, IAudioClient, IAudioClock,
+    IAudioRenderClient, IAudioStreamVolume, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
+    WAVEFORMATEX, eConsole, eRender,
 };
-use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, CoTaskMemFree};
-use windows::core::Result;
+use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, CoTaskMemFree, STGM_READ};
+use windows::core::{HSTRING, Result};
 
 /// A device that plays interleaved float samples of one format.
 pub trait Output {
@@ -31,8 +34,70 @@ pub trait Output {
     fn heard(&mut self) -> Result<u64>;
     /// Frames the device holds ahead of what is heard.
     fn buffer_frames(&self) -> u32;
-    /// The default device is no longer the one this plays on.
+    /// The device this plays on is no longer the one wanted: the default
+    /// one changed, or the chosen one came back after the default one
+    /// stood in for it.
     fn device_changed(&mut self) -> bool;
+}
+
+/// An output device as Windows lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Device {
+    /// The endpoint's id, kept in the settings.
+    pub id: String,
+    /// What Windows calls it ("Speakers (Realtek(R) Audio)").
+    pub name: String,
+}
+
+/// The active output devices, on a thread of their own with COM (the
+/// caller's may have none); empty when they cannot be listed.
+pub fn list_devices() -> Vec<Device> {
+    std::thread::spawn(|| {
+        let _com = super::mf::com_init_mta();
+        devices().unwrap_or_else(|e| {
+            log::warn!("cannot list the sound devices: {}", super::mf::describe(&e));
+            Vec::new()
+        })
+    })
+    .join()
+    .unwrap_or_default()
+}
+
+fn devices() -> Result<Vec<Device>> {
+    use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
+    use windows::Win32::System::Com::StructuredStorage::PropVariantClear;
+    use windows::Win32::System::Variant::VT_LPWSTR;
+    let enumerator: IMMDeviceEnumerator =
+        unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)? };
+    let collection = unsafe { enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)? };
+    let count = unsafe { collection.GetCount()? };
+    let mut out = Vec::with_capacity(count as usize);
+    for i in 0..count {
+        let Ok(device) = (unsafe { collection.Item(i) }) else {
+            continue;
+        };
+        let id = device_id(&device);
+        if id.is_empty() {
+            continue;
+        }
+        let name = unsafe {
+            device.OpenPropertyStore(STGM_READ).and_then(|store| {
+                let mut value = store.GetValue(&PKEY_Device_FriendlyName)?;
+                let inner = &value.Anonymous.Anonymous;
+                let name = if inner.vt == VT_LPWSTR {
+                    inner.Anonymous.pwszVal.to_string().unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                let _ = PropVariantClear(&mut value);
+                Ok(name)
+            })
+        }
+        .unwrap_or_default();
+        let name = if name.is_empty() { id.clone() } else { name };
+        out.push(Device { id, name });
+    }
+    Ok(out)
 }
 
 const WAVE_FORMAT_IEEE_FLOAT: u16 = 3;
@@ -48,7 +113,10 @@ pub struct Wasapi {
     size: u32,
     rate: u32,
     channels: usize,
+    /// The id of the device this plays on, and of the one wanted (empty:
+    /// the default).
     device: String,
+    wanted: String,
     enumerator: IMMDeviceEnumerator,
     /// The stream's own volume, applied by the audio engine where it
     /// mixes, so within its 10 ms period; not the session's, which Windows
@@ -62,12 +130,22 @@ pub struct Wasapi {
 unsafe impl Send for Wasapi {}
 
 impl Wasapi {
-    /// A stream of `rate` and `channels` on the default device; the audio
-    /// engine converts it to the device's mix format.
-    pub fn open(rate: u32, channels: u16) -> Result<Wasapi> {
+    /// A stream of `rate` and `channels` on the device `wanted` (its id;
+    /// empty, or one not present: the default device); the audio engine
+    /// converts it to the device's mix format.
+    pub fn open(rate: u32, channels: u16, wanted: &str) -> Result<Wasapi> {
         let enumerator: IMMDeviceEnumerator =
             unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)? };
-        let device = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole)? };
+        let chosen = (!wanted.is_empty())
+            .then(|| unsafe { enumerator.GetDevice(&HSTRING::from(wanted)) }.ok())
+            .flatten();
+        if !wanted.is_empty() && chosen.is_none() {
+            log::warn!("sound device {wanted} is not present: the default one plays");
+        }
+        let device = match chosen {
+            Some(d) => d,
+            None => unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole)? },
+        };
         let id = device_id(&device);
         let client: IAudioClient = unsafe { device.Activate(CLSCTX_ALL, None)? };
         let format = WAVEFORMATEX {
@@ -95,6 +173,7 @@ impl Wasapi {
             rate,
             channels: usize::from(channels),
             device: id,
+            wanted: wanted.to_owned(),
             enumerator,
             volume,
             gain: None,
@@ -102,7 +181,7 @@ impl Wasapi {
     }
 }
 
-fn device_id(device: &windows::Win32::Media::Audio::IMMDevice) -> String {
+fn device_id(device: &IMMDevice) -> String {
     unsafe {
         match device.GetId() {
             Ok(id) => {
@@ -177,9 +256,22 @@ impl Output for Wasapi {
     }
 
     fn device_changed(&mut self) -> bool {
-        match unsafe { self.enumerator.GetDefaultAudioEndpoint(eRender, eConsole) } {
-            Ok(device) => device_id(&device) != self.device,
-            Err(_) => false,
+        if self.wanted.is_empty() {
+            match unsafe { self.enumerator.GetDefaultAudioEndpoint(eRender, eConsole) } {
+                Ok(device) => device_id(&device) != self.device,
+                Err(_) => false,
+            }
+        } else if self.wanted == self.device {
+            // The chosen device plays; its going away shows as an error.
+            false
+        } else {
+            // The default stands in: back to the chosen one once it is
+            // present again.
+            unsafe {
+                self.enumerator
+                    .GetDevice(&HSTRING::from(self.wanted.as_str()))
+            }
+            .is_ok()
         }
     }
 }

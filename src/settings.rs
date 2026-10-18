@@ -31,11 +31,11 @@ pub struct WindowPlace {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// Interface language, chosen in About.
+    /// Interface language, chosen in the settings window.
     #[serde(with = "lang_name")]
     pub language: LangChoice,
     /// Check for a newer release at start-up, at most once a day; off
-    /// until turned on in About.
+    /// until turned on in the settings window.
     pub check_updates: bool,
     /// Unix seconds of the last update check that got an answer.
     pub last_update_check: u64,
@@ -66,6 +66,34 @@ pub struct Settings {
     pub playlist_current: Option<usize>,
     /// The player bar's time counts down to the track's end.
     pub time_remaining: bool,
+    pub bar_layout: BarLayout,
+    /// The output device's endpoint id (empty: Windows' default) and its
+    /// name, shown while it is not present.
+    pub output_device: String,
+    pub output_device_name: String,
+}
+
+/// The player bar's layout.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BarLayout {
+    /// As Winamp's main window: the time in large digits, a spectrum
+    /// analyzer on the right.
+    #[default]
+    Winamp,
+    /// The compact bar of one row.
+    Classic,
+}
+
+impl BarLayout {
+    pub const ALL: [BarLayout; 2] = [BarLayout::Winamp, BarLayout::Classic];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BarLayout::Winamp => tr!("Winamp's, with a spectrum", "Как Winamp, со спектром"),
+            BarLayout::Classic => tr!("Compact", "Компактная"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,6 +126,9 @@ impl Default for Settings {
             playlist_cover: true,
             playlist_current: None,
             time_remaining: false,
+            bar_layout: BarLayout::default(),
+            output_device: String::new(),
+            output_device_name: String::new(),
         }
     }
 }

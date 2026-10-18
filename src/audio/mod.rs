@@ -47,6 +47,8 @@ pub enum Cmd {
     Stop,
     /// To this time (milliseconds) of the track heard.
     Seek(u64),
+    /// Play on this device (its id; empty: the default) from now on.
+    Device(String),
 }
 
 /// What the audio thread tells the UI.
@@ -81,7 +83,7 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn start(ctx: egui::Context) -> Engine {
+    pub fn start(ctx: egui::Context, device: String) -> Engine {
         let (tx, rx) = channel();
         let (etx, events) = channel();
         let shared = Arc::new(Shared::default());
@@ -89,7 +91,7 @@ impl Engine {
         let worker = Arc::clone(&shared);
         let thread = std::thread::Builder::new()
             .name("audio".into())
-            .spawn(move || run(&rx, &etx, &worker, &ctx))
+            .spawn(move || run(&rx, &etx, &worker, &ctx, device))
             .map_err(|e| log::error!("cannot start the audio thread: {e}"))
             .ok();
         Engine {
@@ -192,9 +194,17 @@ struct Player<'a> {
     format_change: bool,
     drained_since: Option<Instant>,
     checked_device: Instant,
+    /// The device wanted (its id; empty: the default).
+    device: String,
 }
 
-fn run(rx: &Receiver<Cmd>, events: &Sender<Event>, shared: &Shared, ctx: &egui::Context) {
+fn run(
+    rx: &Receiver<Cmd>,
+    events: &Sender<Event>,
+    shared: &Shared,
+    ctx: &egui::Context,
+    device: String,
+) {
     let _com = mf::com_init_mta();
     // Before anything holding MF objects, so it is dropped after them.
     let _mf = match mf::Mf::start() {
@@ -223,6 +233,7 @@ fn run(rx: &Receiver<Cmd>, events: &Sender<Event>, shared: &Shared, ctx: &egui::
         format_change: false,
         drained_since: None,
         checked_device: Instant::now(),
+        device,
     };
     loop {
         let busy = p.decoding.is_some() && !p.paused;
@@ -311,6 +322,14 @@ impl Player<'_> {
             }
             Cmd::Stop => self.stop(),
             Cmd::Seek(ms) => self.seek(ms),
+            Cmd::Device(device) => {
+                if self.device != device {
+                    self.device = device;
+                    if self.out.is_some() {
+                        self.recover();
+                    }
+                }
+            }
         }
     }
 
@@ -342,7 +361,7 @@ impl Player<'_> {
         }
         if self.out.is_none() || self.format != format {
             self.out = None;
-            match Wasapi::open(format.0, format.1) {
+            match Wasapi::open(format.0, format.1, &self.device) {
                 Ok(out) => {
                     self.out = Some(Box::new(out));
                     self.format = format;
@@ -510,7 +529,7 @@ impl Player<'_> {
         if self.checked_device.elapsed() >= Duration::from_secs(1) {
             self.checked_device = Instant::now();
             if self.out.as_mut().is_some_and(|o| o.device_changed()) {
-                log::info!("the default sound device changed");
+                log::info!("the sound device changed");
                 self.recover();
             }
         }
@@ -630,7 +649,7 @@ mod tests {
             .nth(1)
             .cloned()
             .expect("a second file in the folder");
-        let engine = Engine::start(egui::Context::default());
+        let engine = Engine::start(egui::Context::default(), String::new());
         engine.set_gain(0.05);
         let wait = |what: &dyn Fn(&Event) -> bool, secs: u64| {
             let until = Instant::now() + Duration::from_secs(secs);
@@ -670,7 +689,7 @@ mod tests {
     fn play_while_paused_plays() {
         use std::time::Instant;
         let file = PathBuf::from(std::env::var("METALAMP_SAMPLE").expect("METALAMP_SAMPLE"));
-        let engine = Engine::start(egui::Context::default());
+        let engine = Engine::start(egui::Context::default(), String::new());
         engine.set_gain(0.05);
         let wait = |what: &dyn Fn(&Event) -> bool, secs: u64| {
             let until = Instant::now() + Duration::from_secs(secs);

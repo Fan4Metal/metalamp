@@ -10,6 +10,7 @@ pub mod info;
 pub mod library;
 pub mod player_bar;
 pub mod playlist;
+pub mod settings;
 pub mod spectrum;
 pub mod start;
 pub mod status;
@@ -93,6 +94,13 @@ pub fn update_button(ui: &mut Ui, tag: &str) -> Response {
         );
     }
     response
+}
+
+/// The size of a modal of `wanted` points, cut to the window less
+/// `margin` on each side.
+pub fn modal_size(ctx: &egui::Context, wanted: egui::Vec2, margin: f32) -> egui::Vec2 {
+    let room = ctx.content_rect().size() - egui::vec2(2.0 * margin, 2.0 * margin);
+    wanted.min(room).max(egui::vec2(200.0, 160.0))
 }
 
 /// A cross that closes a dialog; true when clicked.

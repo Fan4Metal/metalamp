@@ -1,0 +1,641 @@
+//! The settings window (Ctrl+P, as Winamp's Preferences, or the gear in
+//! the library's bar), after metalmpv's: one surface without inner
+//! frames, the categories in a darker column on the left with Reset and
+//! Close under them, the page of the chosen category on the right in
+//! cards of rows (the name and a hint on the left, the control on the
+//! right). The language and the update check live here, not in About.
+
+use egui::{
+    Align, Align2, Color32, CornerRadius, FontId, Layout, Margin, Rect, Response, RichText, Sense,
+    Stroke, Ui, pos2, vec2,
+};
+
+use crate::audio::output::Device;
+use crate::i18n::LangChoice;
+use crate::palette;
+use crate::settings::{BarLayout, Settings};
+use crate::update::{Status, Updates, release_url, version_of};
+
+/// The size of the window's content in points.
+const SIZE: egui::Vec2 = vec2(720.0, 440.0);
+/// The width of the category column.
+const SIDEBAR_WIDTH: f32 = 180.0;
+/// The corner radius of the window.
+const RADIUS: u8 = 10;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Page {
+    #[default]
+    General,
+    Sound,
+    Updates,
+}
+
+impl Page {
+    const ALL: [Page; 3] = [Page::General, Page::Sound, Page::Updates];
+
+    fn title(self) -> &'static str {
+        match self {
+            Page::General => tr!("General", "Общие"),
+            Page::Sound => tr!("Sound", "Звук"),
+            Page::Updates => tr!("Updates", "Обновления"),
+        }
+    }
+
+    /// The line under the page's title.
+    fn summary(self) -> &'static str {
+        match self {
+            Page::General => tr!(
+                "The language and the layout of the player bar.",
+                "Язык и вид панели плеера."
+            ),
+            Page::Sound => tr!(
+                "The device the sound goes to.",
+                "Устройство, на которое выводится звук."
+            ),
+            Page::Updates => tr!(
+                "Asking GitHub whether a newer version is out.",
+                "Проверка выхода новой версии на GitHub."
+            ),
+        }
+    }
+}
+
+/// What changed in the window this frame and has to be applied.
+#[derive(Default)]
+pub struct Changed {
+    /// The output device (`settings.output_device`).
+    pub device: bool,
+    /// Anything to save.
+    pub any: bool,
+}
+
+#[derive(Default)]
+pub struct SettingsDialog {
+    pub open: bool,
+    /// Opened this frame: the key that opened it must not close it.
+    fresh: bool,
+    /// The category shown; kept while the program runs.
+    page: Page,
+    /// The output devices, listed when the window opens.
+    devices: Vec<Device>,
+}
+
+impl SettingsDialog {
+    pub fn toggle(&mut self) {
+        self.open = !self.open;
+        self.fresh = self.open;
+        if self.open {
+            self.devices = crate::audio::output::list_devices();
+        }
+    }
+
+    /// Draws the window while it is open, editing `settings` and `updates`
+    /// in place (the language is applied at once).
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        settings: &mut Settings,
+        updates: &mut Updates,
+    ) -> Changed {
+        let mut changed = Changed::default();
+        if !self.open {
+            return changed;
+        }
+        let fresh = std::mem::take(&mut self.fresh);
+        let before = settings.clone();
+        let mut close = false;
+        let modal = egui::Modal::new(egui::Id::new("settings"))
+            .frame(
+                egui::Frame::popup(&ctx.style_of(egui::Theme::Dark))
+                    .fill(palette::PANEL_BG)
+                    .corner_radius(RADIUS)
+                    .inner_margin(Margin::ZERO),
+            )
+            .show(ctx, |ui| {
+                round_widgets(ui);
+                // Smaller in a small window, so Close and the cross stay
+                // on the screen.
+                let size = super::modal_size(ctx, SIZE, 12.0);
+                let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+
+                // The category column, flush with the window's left edge.
+                let sidebar = Rect::from_min_size(rect.min, vec2(SIDEBAR_WIDTH, rect.height()));
+                let inner = RADIUS - 1;
+                ui.painter().rect_filled(
+                    sidebar,
+                    CornerRadius {
+                        nw: inner,
+                        sw: inner,
+                        ne: 0,
+                        se: 0,
+                    },
+                    palette::TITLE_BG,
+                );
+                ui.painter().text(
+                    sidebar.left_top() + vec2(20.0, 20.0),
+                    Align2::LEFT_TOP,
+                    tr!("Settings", "Настройки"),
+                    FontId::proportional(18.0),
+                    palette::TEXT_BRIGHT,
+                );
+                let list = Rect::from_min_max(
+                    sidebar.left_top() + vec2(10.0, 62.0),
+                    sidebar.right_bottom() - vec2(10.0, 100.0),
+                );
+                self.categories(ui, list);
+
+                const BUTTON: f32 = 30.0;
+                let close_rect = Rect::from_min_size(
+                    pos2(sidebar.left() + 12.0, sidebar.bottom() - 14.0 - BUTTON),
+                    vec2(SIDEBAR_WIDTH - 24.0, BUTTON),
+                );
+                let reset_rect = close_rect.translate(vec2(0.0, -BUTTON - 8.0));
+                if child(ui, reset_rect)
+                    .add_sized(
+                        reset_rect.size(),
+                        egui::Button::new(tr!("Reset", "Сбросить")),
+                    )
+                    .on_hover_text(tr!(
+                        "Put the settings of this window back to their defaults",
+                        "Вернуть настройкам этого окна значения по умолчанию"
+                    ))
+                    .clicked()
+                {
+                    reset(settings, updates);
+                }
+                close |= child(ui, close_rect)
+                    .add_sized(
+                        close_rect.size(),
+                        egui::Button::new(tr!("Close", "Закрыть")),
+                    )
+                    .clicked();
+
+                // The page.
+                let page = Rect::from_min_max(pos2(sidebar.right(), rect.top()), rect.max);
+                let cross = Rect::from_min_size(
+                    pos2(page.right() - 14.0 - 24.0, page.top() + 14.0),
+                    vec2(24.0, 24.0),
+                );
+                close |= super::close_cross(&mut child(ui, cross));
+                // The scroll bar takes the right margin, next to the cards.
+                let content = Rect::from_min_max(
+                    page.left_top() + vec2(28.0, 18.0),
+                    page.right_bottom() - vec2(10.0, 0.0),
+                );
+                let mut ui = child(ui, content);
+                ui.label(
+                    RichText::new(self.page.title())
+                        .size(20.0)
+                        .strong()
+                        .color(palette::TEXT_BRIGHT),
+                );
+                ui.add_space(2.0);
+                ui.label(RichText::new(self.page.summary()).color(palette::TEXT_WEAK));
+                ui.add_space(4.0);
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(&mut ui, |ui| {
+                        egui::Frame::new()
+                            .inner_margin(Margin {
+                                left: 0,
+                                right: 18,
+                                top: 0,
+                                bottom: 18,
+                            })
+                            .show(ui, |ui| match self.page {
+                                Page::General => general(ui, settings),
+                                Page::Sound => sound(ui, settings, &self.devices),
+                                Page::Updates => updates_page(ui, updates),
+                            });
+                    });
+            });
+        if close
+            || (!fresh
+                && (ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+                    || modal.should_close()))
+        {
+            self.open = false;
+        }
+        changed.device = settings.output_device != before.output_device;
+        changed.any = *settings != before;
+        changed
+    }
+
+    /// The list of categories in `rect`.
+    fn categories(&mut self, ui: &mut Ui, rect: Rect) {
+        let mut list = child(ui, rect);
+        list.spacing_mut().item_spacing.y = 2.0;
+        for page in Page::ALL {
+            self.category(&mut list, page);
+        }
+    }
+
+    /// One row of the categories.
+    fn category(&mut self, ui: &mut Ui, page: Page) {
+        let (row, response) =
+            ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
+        let selected = self.page == page;
+        let fill = if selected {
+            Color32::from_white_alpha(14)
+        } else if response.hovered() {
+            Color32::from_white_alpha(7)
+        } else {
+            Color32::TRANSPARENT
+        };
+        ui.painter().rect_filled(row, 6.0, fill);
+        if selected {
+            // A short accent bar at the left edge marks the page.
+            let bar =
+                Rect::from_center_size(pos2(row.left() + 3.0, row.center().y), vec2(3.0, 16.0));
+            ui.painter().rect_filled(bar, 1.5, palette::ACCENT);
+        }
+        let color = if selected {
+            palette::TEXT_BRIGHT
+        } else {
+            palette::TEXT
+        };
+        ui.painter().text(
+            pos2(row.left() + 16.0, row.center().y),
+            Align2::LEFT_CENTER,
+            page.title(),
+            FontId::proportional(14.0),
+            color,
+        );
+        if response.clicked() {
+            self.page = page;
+        }
+    }
+}
+
+/// Rounder buttons, lists and fields in the window.
+fn round_widgets(ui: &mut Ui) {
+    let w = &mut ui.style_mut().visuals.widgets;
+    for v in [
+        &mut w.noninteractive,
+        &mut w.inactive,
+        &mut w.hovered,
+        &mut w.active,
+        &mut w.open,
+    ] {
+        v.corner_radius = CornerRadius::same(5);
+    }
+    ui.spacing_mut().button_padding = vec2(10.0, 4.0);
+}
+
+/// A part of the window in `rect`, laid out from the top.
+fn child(ui: &mut Ui, rect: Rect) -> Ui {
+    ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(Layout::top_down(Align::Min)),
+    )
+}
+
+/// A card: a lighter rounded ground without a frame.
+fn card(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    egui::Frame::new()
+        .fill(palette::CARD_BG)
+        .corner_radius(8.0)
+        .inner_margin(Margin::symmetric(16, 4))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add(ui);
+        });
+}
+
+/// A titled group of settings: the title over a card.
+fn section(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
+    ui.add_space(16.0);
+    ui.label(RichText::new(title).strong().color(palette::TEXT_BRIGHT));
+    ui.add_space(4.0);
+    card(ui, add);
+}
+
+/// A line between the rows of a card.
+fn divider(ui: &mut Ui) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+    ui.painter().hline(
+        rect.x_range(),
+        rect.center().y,
+        Stroke::new(1.0, palette::LINE),
+    );
+}
+
+/// A row of a card: the name with an optional hint under it on the left,
+/// what `control` adds right-aligned in `control_width` points on the
+/// right, centred vertically.
+fn row<R>(
+    ui: &mut Ui,
+    title: &str,
+    hint: Option<&str>,
+    control_width: f32,
+    control: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    const PAD: f32 = 8.0;
+    let width = ui.available_width();
+    let text_width = (width - control_width - 24.0).max(80.0);
+    let title = ui.painter().layout(
+        title.to_owned(),
+        FontId::proportional(14.0),
+        palette::TEXT,
+        text_width,
+    );
+    let hint = hint.map(|h| {
+        ui.painter().layout(
+            h.to_owned(),
+            FontId::proportional(12.5),
+            palette::TEXT_WEAK,
+            text_width,
+        )
+    });
+    let text_height = title.size().y + hint.as_ref().map_or(0.0, |h| 2.0 + h.size().y);
+    let height = text_height.max(ui.spacing().interact_size.y) + 2.0 * PAD;
+    let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+    let mut y = rect.center().y - text_height / 2.0;
+    let title_height = title.size().y;
+    ui.painter()
+        .galley(pos2(rect.left(), y), title, palette::TEXT);
+    y += title_height + 2.0;
+    if let Some(hint) = hint {
+        ui.painter()
+            .galley(pos2(rect.left(), y), hint, palette::TEXT_WEAK);
+    }
+    let control_rect = Rect::from_min_max(pos2(rect.right() - control_width, rect.top()), rect.max);
+    let mut ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(control_rect)
+            .layout(Layout::right_to_left(Align::Center)),
+    );
+    control(&mut ui)
+}
+
+/// An on/off switch: a pill with a knob that slides.
+fn switch(ui: &mut Ui, on: &mut bool) -> Response {
+    let size = vec2(40.0, 20.0);
+    let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *on, "")
+    });
+    if ui.is_rect_visible(rect) {
+        let t = ui.ctx().animate_bool(response.id, *on);
+        let hovered = response.hovered();
+        let radius = rect.height() / 2.0;
+        let painter = ui.painter();
+        if *on {
+            let fill = if hovered {
+                palette::ACCENT_HOVER
+            } else {
+                palette::ACCENT
+            };
+            painter.rect_filled(rect, radius, fill);
+        } else {
+            painter.rect_filled(rect, radius, palette::TRACK);
+        }
+        let knob = if *on || hovered {
+            palette::TEXT_BRIGHT
+        } else {
+            palette::TEXT_WEAK
+        };
+        let x = egui::lerp(rect.left() + radius..=rect.right() - radius, t);
+        painter.circle_filled(pos2(x, rect.center().y), radius - 4.0 + t, knob);
+    }
+    response
+}
+
+const CONTROL: f32 = 250.0;
+
+fn general(ui: &mut Ui, settings: &mut Settings) {
+    section(ui, tr!("Interface", "Интерфейс"), |ui| {
+        row(
+            ui,
+            tr!("Language", "Язык"),
+            Some(tr!(
+                "\"As in Windows\" follows the language of Windows.",
+                "«Как в Windows» следует языку Windows."
+            )),
+            CONTROL,
+            |ui| {
+                let mut choice = settings.language;
+                egui::ComboBox::from_id_salt("settings_language")
+                    .selected_text(choice.label())
+                    .width(CONTROL - 10.0)
+                    .show_ui(ui, |ui| {
+                        for c in LangChoice::ALL {
+                            ui.selectable_value(&mut choice, c, c.label());
+                        }
+                    });
+                if choice != settings.language {
+                    settings.language = choice;
+                    crate::i18n::set_lang(choice.resolve());
+                }
+            },
+        );
+        divider(ui);
+        row(
+            ui,
+            tr!("Player bar", "Панель плеера"),
+            Some(tr!(
+                "As Winamp's main window, with the time in large digits and a spectrum analyzer; or the compact bar of one row.",
+                "Как главное окно Winamp, с крупным временем и анализатором спектра; или компактная панель в одну строку."
+            )),
+            CONTROL,
+            |ui| {
+                egui::ComboBox::from_id_salt("settings_bar")
+                    .selected_text(settings.bar_layout.label())
+                    .width(CONTROL - 10.0)
+                    .show_ui(ui, |ui| {
+                        for l in BarLayout::ALL {
+                            ui.selectable_value(&mut settings.bar_layout, l, l.label());
+                        }
+                    });
+            },
+        );
+    });
+}
+
+fn sound(ui: &mut Ui, settings: &mut Settings, devices: &[Device]) {
+    section(ui, tr!("Output", "Вывод"), |ui| {
+        row(
+            ui,
+            tr!("Device", "Устройство"),
+            Some(tr!(
+                "Windows' default device follows the one chosen in Windows. A device that is not present when a track starts is replaced by the default one until it is back.",
+                "Устройство Windows по умолчанию следует выбранному в Windows. Устройство, которого нет при запуске трека, подменяется устройством по умолчанию, пока оно не вернётся."
+            )),
+            CONTROL,
+            |ui| {
+                let system = tr!("Windows' default", "Устройство Windows по умолчанию");
+                let name = if settings.output_device.is_empty() {
+                    system.to_owned()
+                } else {
+                    devices
+                        .iter()
+                        .find(|d| d.id == settings.output_device)
+                        .map_or_else(
+                            || {
+                                tr!(
+                                    format!("{} (not present)", settings.output_device_name),
+                                    format!("{} (нет)", settings.output_device_name)
+                                )
+                            },
+                            |d| d.name.clone(),
+                        )
+                };
+                let chars = ((CONTROL - 30.0) / 7.5) as usize;
+                egui::ComboBox::from_id_salt("settings_device")
+                    .selected_text(shorten(&name, chars))
+                    .width(CONTROL - 10.0)
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .selectable_label(settings.output_device.is_empty(), system)
+                            .clicked()
+                        {
+                            settings.output_device.clear();
+                            settings.output_device_name.clear();
+                        }
+                        for d in devices {
+                            if ui
+                                .selectable_label(settings.output_device == d.id, &d.name)
+                                .clicked()
+                            {
+                                settings.output_device = d.id.clone();
+                                settings.output_device_name = d.name.clone();
+                            }
+                        }
+                    });
+            },
+        );
+    });
+}
+
+/// `text` cut to `chars` with an ellipsis.
+fn shorten(text: &str, chars: usize) -> String {
+    if text.chars().count() <= chars {
+        return text.to_owned();
+    }
+    let mut s: String = text.chars().take(chars.saturating_sub(1)).collect();
+    s.push('…');
+    s
+}
+
+fn updates_page(ui: &mut Ui, updates: &mut Updates) {
+    section(
+        ui,
+        tr!("Update check", "Проверка обновлений"),
+        |ui| {
+            let enabled = row(
+                ui,
+                tr!("Check at start-up", "Проверять при запуске"),
+                Some(tr!("Once a day.", "Раз в сутки.")),
+                50.0,
+                |ui| switch(ui, &mut updates.enabled),
+            );
+            if enabled.changed() && updates.enabled {
+                updates.start_if_due(ui.ctx());
+            }
+            divider(ui);
+            let installed = tr!(
+                format!("Installed version: {}", crate::VERSION),
+                format!("Установленная версия: {}", crate::VERSION)
+            );
+            let checking = updates.status == Status::Checking;
+            let check = row(ui, &installed, None, 160.0, |ui| {
+                ui.add_enabled(
+                    !checking,
+                    egui::Button::new(tr!("Check now", "Проверить сейчас")),
+                )
+                .clicked()
+            });
+            if check {
+                updates.start(ui.ctx());
+            }
+            if updates.status != Status::Unknown {
+                ui.add_space(2.0);
+                update_status(ui, updates);
+                ui.add_space(8.0);
+            }
+        },
+    );
+    section(
+        ui,
+        tr!("Privacy", "Конфиденциальность"),
+        |ui| {
+            ui.add_space(8.0);
+            ui.label(RichText::new(tr!(
+                "Only api.github.com is asked, with the program's version in the request; nothing is downloaded or installed. A newer version shows a button in the title row that opens its release page.",
+                "Запрос уходит только к api.github.com и содержит лишь версию программы; ничего не скачивается и не устанавливается. О новой версии сообщает кнопка в строке заголовка, открывающая страницу выпуска."
+            )).color(palette::TEXT_WEAK));
+            ui.add_space(8.0);
+        },
+    );
+}
+
+/// The outcome of the last check, if any.
+fn update_status(ui: &mut Ui, updates: &Updates) {
+    match &updates.status {
+        Status::Unknown => {}
+        Status::Checking => {
+            ui.horizontal(|ui| {
+                ui.add(egui::Spinner::new());
+                ui.weak(tr!("Checking…", "Проверка…"));
+            });
+        }
+        Status::UpToDate => {
+            ui.weak(tr!(
+                "This is the latest version",
+                "Установлена последняя версия"
+            ));
+        }
+        Status::Newer(tag) => {
+            let version = version_of(tag);
+            let url = release_url(tag);
+            if ui
+                .link(tr!(
+                    format!("Version {version} is available"),
+                    format!("Доступна версия {version}")
+                ))
+                .on_hover_text(url.as_str())
+                .clicked()
+                && !crate::win::shell_open(&url)
+            {
+                log::warn!("could not open {url}");
+            }
+        }
+        Status::Failed(e) => {
+            ui.weak(tr!(
+                "Could not check for updates",
+                "Не удалось проверить обновления"
+            ))
+            .on_hover_text(e);
+        }
+    }
+}
+
+/// The settings of this window back to their defaults.
+fn reset(settings: &mut Settings, updates: &mut Updates) {
+    let d = Settings::default();
+    if settings.language != d.language {
+        crate::i18n::set_lang(d.language.resolve());
+    }
+    settings.language = d.language;
+    settings.bar_layout = d.bar_layout;
+    settings.output_device = d.output_device;
+    settings.output_device_name = d.output_device_name;
+    updates.enabled = d.check_updates;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shortens_with_an_ellipsis() {
+        assert_eq!(shorten("Speakers", 10), "Speakers");
+        assert_eq!(shorten("Speakers (Realtek)", 10), "Speakers …");
+    }
+}

@@ -1,11 +1,8 @@
 //! The About dialog: icon, name, version, a short description, the author,
-//! the homepage, the license, where the settings are kept, the interface
-//! language and the update check. The same in every app of the family.
+//! the homepage, the license, where the settings are kept. The language
+//! and the update check are in the settings window (as metalmpv's).
 
-use egui::{Key, TextureHandle, Ui};
-
-use crate::i18n::LangChoice;
-use crate::update::{Status, Updates, release_url, version_of};
+use egui::{Key, TextureHandle};
 
 const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
 const LICENSE: &str = env!("CARGO_PKG_LICENSE");
@@ -13,16 +10,12 @@ const LICENSE: &str = env!("CARGO_PKG_LICENSE");
 const AUTHORS: &str = env!("CARGO_PKG_AUTHORS");
 /// Displayed icon size in points.
 const ICON: f32 = 64.0;
-/// Width of the language list, enough for its longest entry.
-const LANG_WIDTH: f32 = 220.0;
 
 #[derive(Default)]
 pub struct AboutDialog {
     pub open: bool,
     /// Opened this frame: the key that opened it must not close it.
     pub fresh: bool,
-    /// Interface language (kept in the settings).
-    pub lang: LangChoice,
     icon: Option<TextureHandle>,
 }
 
@@ -33,9 +26,8 @@ impl AboutDialog {
     }
 
     /// Draws the dialog while it is open; closes it on the cross, Esc,
-    /// Enter or a click outside. A language picked in it is applied at
-    /// once and left in `lang` for the settings.
-    pub fn show(&mut self, ctx: &egui::Context, updates: &mut Updates) {
+    /// Enter or a click outside.
+    pub fn show(&mut self, ctx: &egui::Context) {
         if !self.open {
             return;
         }
@@ -108,33 +100,7 @@ impl AboutDialog {
                         .on_hover_text(tr!("Settings are not saved", "Настройки не сохраняются")),
                 };
                 ui.add_space(8.0);
-                ui.separator();
-                ui.add_space(4.0);
-                // The label over the list, both centred; a fixed width
-                // keeps the list from jumping when the language changes.
-                ui.weak(tr!("Interface language", "Язык интерфейса"));
-                let mut choice = self.lang;
-                // A combo box lays itself out left to right, ignoring the
-                // centring: indented by hand (`width` is its outer width).
-                ui.horizontal(|ui| {
-                    ui.add_space(((ui.available_width() - LANG_WIDTH) / 2.0).max(0.0));
-                    egui::ComboBox::from_id_salt("language")
-                        .selected_text(choice.label())
-                        .width(LANG_WIDTH)
-                        .show_ui(ui, |ui| {
-                            for c in LangChoice::ALL {
-                                ui.selectable_value(&mut choice, c, c.label());
-                            }
-                        });
-                });
-                if choice != self.lang {
-                    self.lang = choice;
-                    crate::i18n::set_lang(choice.resolve());
-                }
-                ui.add_space(8.0);
-                ui.separator();
-                ui.add_space(4.0);
-                update_section(ui, updates);
+                ui.weak(tr!("Settings: Ctrl+P", "Настройки: Ctrl+P"));
                 ui.add_space(4.0);
             });
             closed
@@ -145,72 +111,6 @@ impl AboutDialog {
                     || modal.should_close()));
         if closed {
             self.open = false;
-        }
-    }
-}
-
-/// The update check: the start-up option, a button to check now and the
-/// outcome.
-fn update_section(ui: &mut Ui, updates: &mut Updates) {
-    let before = updates.enabled;
-    ui.checkbox(
-        &mut updates.enabled,
-        tr!("Check for updates at start-up (once a day)", "Проверять обновления при запуске (раз в сутки)"),
-    )
-    .on_hover_text(tr!(
-        "Asks api.github.com for the latest release; nothing else is sent, and nothing is downloaded",
-        "Запрашивает у api.github.com последний выпуск; больше ничего не отправляется и не скачивается"
-    ));
-    if updates.enabled && !before {
-        updates.start_if_due(ui.ctx());
-    }
-    let checking = updates.status == Status::Checking;
-    if ui
-        .add_enabled(
-            !checking,
-            egui::Button::new(tr!("Check now", "Проверить сейчас")),
-        )
-        .clicked()
-    {
-        updates.start(ui.ctx());
-    }
-    match &updates.status {
-        Status::Unknown => {}
-        Status::Checking => {
-            ui.horizontal(|ui| {
-                // Centred by hand, as the language list above.
-                ui.add_space(((ui.available_width() - 110.0) / 2.0).max(0.0));
-                ui.add(egui::Spinner::new());
-                ui.weak(tr!("Checking…", "Проверка…"));
-            });
-        }
-        Status::UpToDate => {
-            ui.weak(tr!(
-                "This is the latest version",
-                "Установлена последняя версия"
-            ));
-        }
-        Status::Newer(tag) => {
-            let version = version_of(tag);
-            let url = release_url(tag);
-            if ui
-                .link(tr!(
-                    format!("Version {version} is available"),
-                    format!("Доступна версия {version}")
-                ))
-                .on_hover_text(url.as_str())
-                .clicked()
-                && !crate::win::shell_open(&url)
-            {
-                log::warn!("could not open {url}");
-            }
-        }
-        Status::Failed(e) => {
-            ui.weak(tr!(
-                "Could not check for updates",
-                "Не удалось проверить обновления"
-            ))
-            .on_hover_text(e);
         }
     }
 }

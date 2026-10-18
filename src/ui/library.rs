@@ -44,6 +44,8 @@ pub enum LibraryAction {
     RemoveFolder(usize),
     /// Open the file info window for a track.
     Info(TrackId),
+    /// Open the settings window.
+    Settings,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -640,6 +642,17 @@ fn top_bar(
     }
 
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        if crate::ui::icon_button(
+            ui,
+            Icon::Settings,
+            false,
+            tr!("Settings (Ctrl+P)", "Настройки (Ctrl+P)"),
+        )
+        .clicked()
+        {
+            actions.push(LibraryAction::Settings);
+        }
+        ui.add_space(8.0);
         let folders = crate::ui::icon_button(
             ui,
             Icon::Folder,

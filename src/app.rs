@@ -12,6 +12,7 @@ use crate::library::Library;
 use crate::library::scan::{Scan, ScanMsg, Wake};
 use crate::settings::{Settings, WindowPlace};
 use crate::ui::about::AboutDialog;
+use crate::ui::settings::SettingsDialog;
 use crate::ui::title::{self, TitleCmd};
 use crate::update::Updates;
 use crate::{frameless, palette, win};
@@ -25,6 +26,7 @@ const PLACE_SAVE_DELAY: Duration = Duration::from_secs(1);
 
 pub struct App {
     settings: Settings,
+    settings_dialog: SettingsDialog,
     /// The player bar's spectrum analyzer and the samples it is fed.
     spectrum: crate::ui::spectrum::Analyzer,
     heard: Vec<f32>,
@@ -116,6 +118,7 @@ impl App {
             settings.mute,
             settings.repeat,
             settings.shuffle,
+            settings.output_device.clone(),
         );
         let mut player = player;
         let saved_playlist = load_playlist(&mut player, settings.playlist_current);
@@ -126,10 +129,10 @@ impl App {
         }
         let mut updates = Updates::new(settings.check_updates, settings.last_update_check);
         updates.start_if_due(ctx);
-        let mut about = AboutDialog::default();
-        about.lang = settings.language;
+        let about = AboutDialog::default();
         Self {
             settings,
+            settings_dialog: SettingsDialog::default(),
             spectrum: crate::ui::spectrum::Analyzer::new(),
             heard: Vec::new(),
             about,
@@ -251,6 +254,7 @@ impl App {
                 let paths = self.paths_of(&tracks);
                 self.player.enqueue(paths);
             }
+            LibraryAction::Settings => self.settings_dialog.toggle(),
             LibraryAction::Info(track) => {
                 if let Some(t) = self.library.tracks.get(track as usize) {
                     self.info_request = Some(t.path.clone());
@@ -361,7 +365,7 @@ impl App {
             .and_then(|t| self.library.tracks.get(t as usize))
             .map_or((0, 0, 0), |t| (t.bitrate, t.sample_rate, t.channels));
         // The analyzer: the samples heard now, for as many bars as fit.
-        let bands = player_bar::analyzer_bands(ui.max_rect());
+        let bands = player_bar::analyzer_bands(self.settings.bar_layout, ui.max_rect());
         let mut heard = std::mem::take(&mut self.heard);
         let rate = self
             .player
@@ -371,6 +375,7 @@ impl App {
             .feed((rate > 0).then_some(heard.as_slice()), rate, bands);
         self.heard = heard;
         let now = NowPlaying {
+            layout: self.settings.bar_layout,
             status: self.player.status,
             title: &title,
             artist: &artist,
@@ -604,10 +609,9 @@ impl App {
         }
     }
 
-    /// Copy what lives elsewhere (About, the update check) into the
+    /// Copy what lives elsewhere (the update check, the player) into the
     /// settings.
     fn sync_settings(&mut self) {
-        self.settings.language = self.about.lang;
         self.settings.check_updates = self.updates.enabled;
         self.settings.last_update_check = self.updates.last_check;
         self.settings.volume = self.player.volume;
@@ -774,7 +778,7 @@ impl eframe::App for App {
         let ctx = root_ui.ctx().clone();
         self.uncloak(&ctx);
         // A modal takes the keys while it is open.
-        let modal = self.about.open || self.file_info.open;
+        let modal = self.about.open || self.file_info.open || self.settings_dialog.open;
         // The file info: Alt+3 as Winamp's, or I (not while typing).
         let typing = ctx.memory(|m| m.focused().is_some());
         // Letters typed over the artists' pane go to an artist, not to
@@ -795,6 +799,9 @@ impl eframe::App for App {
         if !modal {
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F1)) {
                 self.about.toggle();
+            }
+            if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::P)) {
+                self.settings_dialog.toggle();
             }
             if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::O)) {
                 self.pick_folder(frame);
@@ -827,7 +834,7 @@ impl eframe::App for App {
             .response
             .rect;
         let bar_rect = egui::Panel::top("player")
-            .exact_size(crate::ui::player_bar::HEIGHT)
+            .exact_size(crate::ui::player_bar::height(self.settings.bar_layout))
             .frame(egui::Frame::NONE)
             .show(root_ui, |ui| self.player_bar(ui))
             .response
@@ -933,7 +940,16 @@ impl eframe::App for App {
             self.file_info.open(&ctx, &path);
         }
         self.file_info.show(&ctx);
-        self.about.show(&ctx, &mut self.updates);
+        self.about.show(&ctx);
+        let changed = self
+            .settings_dialog
+            .show(&ctx, &mut self.settings, &mut self.updates);
+        if changed.device {
+            self.player.set_device(&self.settings.output_device);
+        }
+        if changed.any {
+            self.place_changed = Some(Instant::now());
+        }
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
