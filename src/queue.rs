@@ -313,18 +313,54 @@ impl Queue {
 }
 
 /// The paths of an M3U or M3U8 playlist: comments skipped, relative paths
-/// from the list's folder; addresses (`scheme://`) are left out.
+/// from the list's folder, `file:` addresses (VLC's, foobar2000's) as the
+/// paths they name; other addresses (`http://`) are left out.
 pub fn m3u_paths(text: &str, folder: &Path) -> Vec<PathBuf> {
     text.trim_start_matches('\u{feff}')
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .filter(|l| !l.contains("://"))
-        .map(|l| {
-            let p = PathBuf::from(l);
-            if p.is_absolute() { p } else { folder.join(p) }
+        .filter_map(|l| match l.get(..7) {
+            Some(scheme) if scheme.eq_ignore_ascii_case("file://") => file_url_path(&l[7..]),
+            _ if l.contains("://") => None,
+            _ => {
+                let p = PathBuf::from(l);
+                Some(if p.is_absolute() { p } else { folder.join(p) })
+            }
         })
         .collect()
+}
+
+/// The path of a `file:` address after its `file://`: `/D:/Music/a%20b.mp3`
+/// or a share's `server/folder/x.mp3`, percent-decoded as UTF-8.
+fn file_url_path(rest: &str) -> Option<PathBuf> {
+    let mut bytes = Vec::with_capacity(rest.len());
+    let mut it = rest.bytes();
+    while let Some(b) = it.next() {
+        if b == b'%' {
+            let hex = [it.next()?, it.next()?];
+            bytes.push(u8::from_str_radix(std::str::from_utf8(&hex).ok()?, 16).ok()?);
+        } else {
+            bytes.push(b);
+        }
+    }
+    let text = String::from_utf8_lossy(&bytes).replace('/', "\\");
+    let path = match text.strip_prefix('\\') {
+        // file:///D:/x: a drive.
+        Some(local) => PathBuf::from(local),
+        // file://server/share/x: a share.
+        None => PathBuf::from(format!("\\\\{text}")),
+    };
+    path.is_absolute().then_some(path)
+}
+
+/// The text of a playlist file: UTF-8 (with or without a BOM), else the
+/// ANSI code page of Windows, which older players wrote `.m3u` in.
+pub fn m3u_text(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_owned(),
+        Err(_) => crate::win::from_ansi(bytes),
+    }
 }
 
 #[cfg(test)]
@@ -447,5 +483,30 @@ mod tests {
             Path::new(r"C:\x"),
         );
         assert_eq!(relative, [PathBuf::from(r"C:\x\sub\a.mp3")]);
+    }
+
+    #[test]
+    fn a_playlist_not_in_utf8_is_read_in_the_ansi_code_page() {
+        assert_eq!(m3u_text("D:\\Ария.mp3".as_bytes()), "D:\\Ария.mp3");
+        assert_eq!(m3u_text(b"a.mp3"), "a.mp3");
+        // "Ария" in Windows-1251, where that is the code page.
+        if unsafe { windows_sys::Win32::Globalization::GetACP() } == 1251 {
+            assert_eq!(m3u_text(b"\xc0\xf0\xe8\xff.mp3"), "Ария.mp3");
+        }
+    }
+
+    #[test]
+    fn file_addresses_are_paths() {
+        let paths = m3u_paths(
+            "file:///D:/Music/%D0%90%D1%80%D0%B8%D1%8F/01%20-%20x.mp3\nFILE://nas/music/b.flac\nfile:///bad%2",
+            Path::new(r"C:\x"),
+        );
+        assert_eq!(
+            paths,
+            [
+                PathBuf::from(r"D:\Music\Ария\01 - x.mp3"),
+                PathBuf::from(r"\\nas\music\b.flac"),
+            ]
+        );
     }
 }

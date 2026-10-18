@@ -1167,9 +1167,14 @@ fn expand_playlists(files: Vec<PathBuf>) -> Vec<PathBuf> {
             .unwrap_or_default();
         if ext == "m3u8" || ext == "m3u" {
             if let Ok(bytes) = std::fs::read(&f) {
-                let text = String::from_utf8_lossy(&bytes);
+                let text = crate::queue::m3u_text(&bytes);
                 let folder = f.parent().map(PathBuf::from).unwrap_or_default();
-                out.extend(crate::queue::m3u_paths(&text, &folder));
+                // Only what plays: not a playlist in a playlist, nor a folder.
+                out.extend(
+                    crate::queue::m3u_paths(&text, &folder)
+                        .into_iter()
+                        .filter(|p| crate::filetypes::is_audio(p)),
+                );
             }
         } else if crate::filetypes::is_audio(&f) {
             out.push(f);

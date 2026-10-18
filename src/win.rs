@@ -10,6 +10,25 @@ pub fn wide(s: impl AsRef<OsStr>) -> Vec<u16> {
     s.as_ref().encode_wide().chain(std::iter::once(0)).collect()
 }
 
+/// `bytes` in the ANSI code page of Windows (Windows-1251 on a Russian
+/// one) as text.
+pub fn from_ansi(bytes: &[u8]) -> String {
+    use windows_sys::Win32::Globalization::{CP_ACP, MultiByteToWideChar};
+    let Ok(len) = i32::try_from(bytes.len()) else {
+        return String::from_utf8_lossy(bytes).into_owned();
+    };
+    if len == 0 {
+        return String::new();
+    }
+    let n = unsafe { MultiByteToWideChar(CP_ACP, 0, bytes.as_ptr(), len, std::ptr::null_mut(), 0) };
+    if n <= 0 {
+        return String::from_utf8_lossy(bytes).into_owned();
+    }
+    let mut wide = vec![0u16; n as usize];
+    let n = unsafe { MultiByteToWideChar(CP_ACP, 0, bytes.as_ptr(), len, wide.as_mut_ptr(), n) };
+    String::from_utf16_lossy(&wide[..n.max(0) as usize])
+}
+
 /// Show `text` in a system message box with an error icon, waiting until
 /// it is closed. It needs no window of the app, so it works from any thread
 /// and while the app is failing (the panic hook). user32 is declared by
