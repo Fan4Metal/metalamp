@@ -32,6 +32,9 @@ pub struct Player {
     /// Tokens of the engine's `Play` and `Preload` to playlist entry ids.
     tokens: HashMap<u64, u64>,
     last_token: u64,
+    /// The token of the last `Play`: a failure of one before it is old
+    /// news (the user went on meanwhile).
+    last_play: u64,
     /// The token and entry preloaded.
     preloaded: Option<(u64, u64)>,
     /// Failures one after the other: past the playlist's length, stop.
@@ -75,6 +78,7 @@ impl Player {
             playing: None,
             tokens: HashMap::new(),
             last_token: 0,
+            last_play: 0,
             preloaded: None,
             failed_in_row: 0,
             error: None,
@@ -138,6 +142,7 @@ impl Player {
         };
         self.queue.set_current(Some(index));
         let token = self.token_for(entry.id);
+        self.last_play = token;
         self.preloaded = None;
         let gain = self.gain_for(&entry.path);
         self.engine.send(Cmd::Play {
@@ -210,6 +215,8 @@ impl Player {
         self.status = Status::Stopped;
         self.playing = None;
         self.preloaded = None;
+        // A Started already on its way is of nothing now.
+        self.tokens.clear();
     }
 
     /// The entry after the current one (round to the first with repeat
@@ -388,9 +395,13 @@ impl Player {
                     self.error = Some(format!("{path}: {message}"));
                     let from = self.queue.index_of(entry);
                     if self.preloaded.is_some_and(|(t, _)| t == token) {
-                        // Preload the one after it instead.
+                        // Preload the one after it instead, unless the
+                        // whole list failed (its disk gone, round and
+                        // round with repeat all).
                         self.preloaded = None;
-                        if let Some(next) = self.queue.after(from).filter(|&n| Some(n) != from)
+                        self.failed_in_row += 1;
+                        if self.failed_in_row < self.queue.len()
+                            && let Some(next) = self.queue.after(from).filter(|&n| Some(n) != from)
                             && let Some(e) = self.queue.entries().get(next).cloned()
                         {
                             let token = self.token_for(e.id);
@@ -398,6 +409,9 @@ impl Player {
                             let gain = self.gain_for(&e.path);
                             self.engine.send(Cmd::Preload(Some((token, e.path, gain))));
                         }
+                        continue;
+                    }
+                    if token < self.last_play {
                         continue;
                     }
                     self.failed_in_row += 1;

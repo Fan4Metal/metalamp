@@ -85,6 +85,7 @@ pub fn track_gain(lufs: f32, peak: f32) -> f32 {
 
 pub struct Chain {
     settings: DspSettings,
+    rate: u32,
     channels: usize,
     eq: eq::Equalizer,
     enhancer: enhancer::Enhancer,
@@ -99,6 +100,7 @@ impl Chain {
         let channels = usize::from(channels.max(1));
         Chain {
             settings: settings.clone(),
+            rate,
             channels,
             eq: eq::Equalizer::new(rate, channels, settings.preamp, &settings.bands),
             enhancer: enhancer::Enhancer::new(rate, channels, settings.amounts()),
@@ -109,8 +111,22 @@ impl Chain {
         }
     }
 
-    /// New settings; the filters' state is kept.
+    /// The filters' and the limiter's state dropped, the gain kept: what
+    /// they hold is the sound before (another track, a seek).
+    pub fn reset(&mut self) {
+        let gain = self.gain;
+        *self = Chain::new(self.rate, self.channels as u16, &self.settings);
+        self.gain = gain;
+    }
+
+    /// New settings; the filters' state is kept, but for a chain turned on
+    /// from a wire, whose state is of the sound long before.
     pub fn configure(&mut self, settings: &DspSettings) {
+        if !self.settings.active() && settings.active() {
+            self.settings = settings.clone();
+            self.reset();
+            return;
+        }
         if settings.preamp != self.settings.preamp || settings.bands != self.settings.bands {
             self.eq.configure(settings.preamp, &settings.bands);
         }

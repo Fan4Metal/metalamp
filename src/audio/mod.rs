@@ -369,6 +369,9 @@ impl Player<'_> {
             }
             Cmd::Pause => {
                 self.paused = true;
+                // The wait for the last frames to be heard starts again
+                // after the pause, not counting it.
+                self.drained_since = None;
                 if let Some(out) = &mut self.out {
                     let _ = out.stop();
                 }
@@ -457,8 +460,15 @@ impl Player<'_> {
                     return;
                 }
             }
-        } else if let Some(out) = &mut self.out {
-            let _ = out.reset();
+        } else {
+            if let Some(out) = &mut self.out {
+                let _ = out.reset();
+            }
+            // What the filters and the limiter's delay hold is the sound
+            // before.
+            if let Some(chain) = &mut self.chain {
+                chain.reset();
+            }
         }
         self.ring.clear();
         self.written = 0;
@@ -491,33 +501,28 @@ impl Player<'_> {
         self.segments.front()
     }
 
-    /// The loudness gain of the track `id` among those open (1 when it
-    /// is not).
-    fn gain_of(&self, id: u64) -> f32 {
-        [self.decoding.as_ref(), self.next.as_ref()]
-            .into_iter()
-            .flatten()
-            .find(|o| o.id == id)
-            .map_or(1.0, |o| o.gain)
+    fn seek(&mut self, ms: u64) {
+        self.restart_heard(ms);
     }
 
-    fn seek(&mut self, ms: u64) {
+    /// The track heard begun again at `from_ms`, its pause kept (a seek,
+    /// a recovery). It may be behind the one being decoded (the last
+    /// second of one, the next already in the ring): it is opened again,
+    /// and the one ahead waits as the next. A file that cannot be opened
+    /// any more (deleted, its disk gone) fails, as a Play of it would.
+    fn restart_heard(&mut self, from_ms: u64) {
         let Some(seg) = self.heard() else { return };
-        let (id, path) = (seg.id, seg.path.clone());
-        let gain = self.gain_of(id);
+        let (id, path, gain) = (seg.id, seg.path.clone(), seg.gain);
         let paused = self.paused;
-        // The track heard may be behind the one being decoded (the last
-        // second of one, the next already in the ring): open it again,
-        // and the one ahead waits as the next.
         let open = match self.decoding.take() {
-            Some(d) if d.id == id => Some(d),
+            Some(d) if d.id == id => Ok(d),
             ahead => {
                 if let Some(mut a) = ahead
                     && a.decoder.seek(0).is_ok()
                 {
                     self.next = Some(a);
                 }
-                Decoder::open(&path).ok().map(|decoder| Open {
+                Decoder::open(&path).map(|decoder| Open {
                     id,
                     path,
                     decoder,
@@ -525,11 +530,21 @@ impl Player<'_> {
                 })
             }
         };
-        let Some(open) = open else { return };
-        self.begin(open, ms);
-        self.paused = paused;
-        // Started again for the same track: not news.
-        self.heard_id = Some(id);
+        match open {
+            Ok(open) => {
+                self.begin(open, from_ms);
+                self.paused = paused;
+                // Started again for the same track: not news.
+                self.heard_id = Some(id);
+            }
+            Err(e) => {
+                self.stop();
+                self.send(Event::Failed {
+                    id,
+                    message: mf::describe(&e),
+                });
+            }
+        }
     }
 
     /// Decode, write, follow the clock; the next track at the end.
@@ -695,38 +710,9 @@ impl Player<'_> {
     /// The output failed or the default device changed: open it again and
     /// go on from where the track heard was.
     fn recover(&mut self) {
-        let Some(seg) = self.heard() else {
-            self.out = None;
-            return;
-        };
-        let (id, path) = (seg.id, seg.path.clone());
-        let gain = self.gain_of(id);
-        let position = self.shared.position_ms.load(Relaxed);
-        let paused = self.paused;
         self.out = None;
-        let open = match self.decoding.take() {
-            Some(d) if d.id == id => Some(d),
-            ahead => {
-                if let Some(mut a) = ahead
-                    && a.decoder.seek(0).is_ok()
-                {
-                    self.next = Some(a);
-                }
-                Decoder::open(&path).ok().map(|decoder| Open {
-                    id,
-                    path,
-                    decoder,
-                    gain,
-                })
-            }
-        };
-        match open {
-            Some(open) => {
-                self.begin(open, position);
-                self.paused = paused;
-                self.heard_id = Some(id);
-            }
-            None => self.stop(),
+        if self.heard().is_some() {
+            self.restart_heard(self.shared.position_ms.load(Relaxed));
         }
     }
 }
