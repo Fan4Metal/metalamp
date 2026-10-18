@@ -24,10 +24,6 @@ const UNCLOAK_TIMEOUT: Duration = Duration::from_secs(1);
 /// crash or a logoff may skip.
 const PLACE_SAVE_DELAY: Duration = Duration::from_secs(1);
 
-/// The playlist's width in points, as its left edge may move it.
-const PLAYLIST_MIN: f32 = 220.0;
-const PLAYLIST_MAX: f32 = 700.0;
-
 pub struct App {
     settings: Settings,
     settings_dialog: SettingsDialog,
@@ -38,9 +34,6 @@ pub struct App {
     /// out: with the pointer there the arrows seek and set the volume
     /// (the keys are read before the panels are laid out).
     player_area: egui::Rect,
-    /// The playlist's edge held: where the button went down and the
-    /// playlist's width then.
-    edge_drag: Option<(f32, f32)>,
     about: AboutDialog,
     updates: Updates,
     /// The window's handle; `None` off Windows.
@@ -157,7 +150,6 @@ impl App {
             visual: crate::ui::visual::Visualizer::new(),
             heard: Vec::new(),
             player_area: egui::Rect::NOTHING,
-            edge_drag: None,
             about,
             updates,
             hwnd,
@@ -456,52 +448,6 @@ impl App {
                     self.place_changed = Some(Instant::now());
                 }
             }
-        }
-    }
-
-    /// The strip over the playlist's left edge (`edge`, none while the
-    /// playlist or a modal is not shown): a press in it holds the edge
-    /// until the button is let go, the width following the pointer from
-    /// where it went down. Followed from the pointer itself, not from
-    /// egui's drag: a drag egui gave to another widget under the edge (the
-    /// tracks' scroll bar, a row of the playlist) left the edge behind.
-    fn playlist_edge(&mut self, root_ui: &mut egui::Ui, edge: Option<egui::Rect>) {
-        let ctx = root_ui.ctx().clone();
-        let Some(edge) = edge else {
-            self.edge_drag = None;
-            return;
-        };
-        // Registered last, so egui gives a press there to it and not to
-        // what lies under it.
-        root_ui.interact(edge, egui::Id::new("playlist_edge"), egui::Sense::drag());
-        let (pressed, down, origin, at) = ctx.input(|i| {
-            (
-                i.pointer.primary_pressed(),
-                i.pointer.primary_down(),
-                i.pointer.press_origin(),
-                i.pointer.latest_pos(),
-            )
-        });
-        let width = self
-            .settings
-            .playlist_width
-            .clamp(PLAYLIST_MIN, PLAYLIST_MAX);
-        if pressed && let Some(o) = origin.filter(|o| edge.contains(*o)) {
-            self.edge_drag = Some((o.x, width));
-        }
-        if !down {
-            self.edge_drag = None;
-        }
-        if let (Some((x0, w0)), Some(p)) = (self.edge_drag, at) {
-            let w = (w0 - (p.x - x0)).clamp(PLAYLIST_MIN, PLAYLIST_MAX);
-            if (w - self.settings.playlist_width).abs() > 0.1 {
-                self.settings.playlist_width = w;
-                self.place_changed = Some(Instant::now());
-            }
-        }
-        let hovered = ctx.pointer_hover_pos().is_some_and(|p| edge.contains(p));
-        if self.edge_drag.is_some() || (hovered && !down) {
-            ctx.set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
     }
 
@@ -1054,21 +1000,13 @@ impl eframe::App for App {
                 self.place_changed = Some(Instant::now());
             }
         }
-        // The playlist's left edge, moved by a strip of the app's own laid
-        // over everything after the central panel: egui's handle of a
-        // resizable panel lies under the tracks' scroll bar and rows,
-        // registered after it, so it could not be caught.
-        let mut playlist_edge = None;
         if self.settings.playlist_visible && !self.settings.library_folders.is_empty() {
             let cover = self.playing_cover(&ctx);
             let shown_cover = self.settings.playlist_cover;
             let panel = egui::Panel::right("playlist")
-                .resizable(false)
-                .exact_size(
-                    self.settings
-                        .playlist_width
-                        .clamp(PLAYLIST_MIN, PLAYLIST_MAX),
-                )
+                .resizable(true)
+                .default_size(self.settings.playlist_width)
+                .size_range(220.0..=700.0)
                 .frame(egui::Frame::NONE)
                 .show(root_ui, |ui| {
                     crate::ui::playlist::show(
@@ -1084,11 +1022,11 @@ impl eframe::App for App {
             if self.settings.playlist_cover != shown_cover {
                 self.place_changed = Some(Instant::now());
             }
-            let r = panel.response.rect;
-            playlist_edge = Some(egui::Rect::from_x_y_ranges(
-                r.left() - 3.0..=r.left() + 4.0,
-                r.y_range(),
-            ));
+            let width = panel.response.rect.width();
+            if (width - self.settings.playlist_width).abs() > 0.5 {
+                self.settings.playlist_width = width;
+                self.place_changed = Some(Instant::now());
+            }
             // A press inside the playlist gives it the keys, elsewhere
             // takes them back.
             if ctx.input(|i| i.pointer.any_pressed())
@@ -1145,7 +1083,6 @@ impl eframe::App for App {
             );
             crate::ui::start::show(ui, &mut self.start_icon, hint);
         });
-        self.playlist_edge(root_ui, playlist_edge.filter(|_| !modal));
         if let Some(path) = self.info_request.take() {
             self.file_info.open(&ctx, &path);
         }
