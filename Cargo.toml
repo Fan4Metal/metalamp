@@ -83,8 +83,10 @@ png = "0.18"
 opt-level = 3
 lto = "fat"
 codegen-units = 1
-# A panic ends the process; main::install_panic_hook shows it first.
-panic = "abort"
+# Unwinding, so that a panic in another crate's parser on a damaged file
+# is caught (guard.rs) and the file left out; any other panic still ends
+# the process, main::install_panic_hook showing it first.
+panic = "unwind"
 strip = true
 
 [profile.dev]

@@ -17,6 +17,7 @@ mod covers;
 mod filetypes;
 mod format;
 mod frameless;
+mod guard;
 mod icon;
 mod instance;
 mod kept;
@@ -222,19 +223,29 @@ pub fn embedded_icon(size: u32) -> &'static [u8] {
     }
 }
 
-/// The release build aborts on a panic and has no console, so the window
-/// would vanish without a word: say what happened in a message box. The
-/// default hook still prints it (seen in a debug build). A stack overflow
-/// is not a panic and still ends the process silently. disk_flashlight also
-/// appends the report to `crash.log` next to the settings file.
+/// A panic ends the program, and the release build has no console, so the
+/// window would vanish without a word: say what happened in a message box,
+/// then abort (the release build unwinds only for `guard::catch`, whose
+/// panics, in other crates' parsers on a damaged file, are only logged).
+/// The default hook still prints it (seen in a debug build). A stack
+/// overflow is not a panic and still ends the process silently.
+/// disk_flashlight also appends the report to `crash.log` next to the
+/// settings file.
 fn install_panic_hook() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        if guard::guarded() {
+            log::error!("{info}");
+            return;
+        }
         default(info);
         let text = tr!(
             format!("{APP_NAME} stopped because of an internal error.\n\n{info}"),
             format!("{APP_NAME} остановлен из-за внутренней ошибки.\n\n{info}")
         );
         win::error_box(APP_NAME, &text);
+        // Not left to unwind: a thread gone (the audio, the scan) would
+        // leave the window up with part of it dead.
+        std::process::abort();
     }));
 }

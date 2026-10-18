@@ -260,7 +260,8 @@ fn work(queue: &Queue, tx: &Sender<Found>, dir: Option<&Path>, ctx: &egui::Conte
                 jobs = queue.ready.wait(jobs).unwrap_or_else(|e| e.into_inner());
             }
         };
-        let found = match cover(&job, dir) {
+        let source = job.tagged.as_deref().unwrap_or(&job.folder);
+        let found = match crate::guard::catch(source, || cover(&job, dir)).flatten() {
             Some(image) => Found::Image(job.key, image),
             None => Found::Missing(job.key),
         };

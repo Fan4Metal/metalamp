@@ -83,7 +83,8 @@ impl InfoView {
                         while let Ok(next) = req_rx.try_recv() {
                             path = next;
                         }
-                        let read = details::read(&path);
+                        let read = crate::guard::catch(&path, || details::read(&path))
+                            .unwrap_or_else(|| Err("the file could not be read".into()));
                         if res_tx.send((path, read)).is_err() {
                             return;
                         }

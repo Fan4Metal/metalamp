@@ -308,7 +308,8 @@ pub fn read_tracks(
         if cancel.load(Relaxed) {
             return None;
         }
-        let track = tags::read(&f.path, f.size, f.mtime)
+        let track = crate::guard::catch(&f.path, || tags::read(&f.path, f.size, f.mtime))
+            .flatten()
             .or_else(|| known.get(f.path.as_path()).map(|t| (*t).clone()));
         let n = done.fetch_add(1, Relaxed) + 1;
         if let Ok(mut last) = last_report.try_lock()
