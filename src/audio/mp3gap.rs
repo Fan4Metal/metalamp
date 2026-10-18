@@ -54,12 +54,14 @@ pub fn leading_tags(file: &mut (impl std::io::Read + std::io::Seek)) -> Vec<std:
     let mut tags = Vec::new();
     let mut at = 0;
     let mut header = [0u8; 10];
+    let end = file.seek(std::io::SeekFrom::End(0)).unwrap_or(0);
     while tags.len() < 8
         && file.seek(std::io::SeekFrom::Start(at)).is_ok()
         && file.read_exact(&mut header).is_ok()
     {
         let len = id3v2_len(&header) as u64;
-        if len == 0 {
+        // A size past the file's end is no tag (a damaged one).
+        if len == 0 || at + len > end {
             break;
         }
         tags.push(at..at + len);
@@ -297,5 +299,10 @@ mod tests {
         let tags = leading_tags(&mut std::io::Cursor::new(&data));
         assert_eq!(tags, [0..12, 12..23]);
         assert!(leading_tags(&mut std::io::Cursor::new(b"\xff\xfb\x90\x00")).is_empty());
+        // A second tag that says it is longer than the file: not a tag.
+        let mut data = b"ID3\x03\x00\x00\x00\x00\x00\x02ab".to_vec();
+        data.extend(b"ID3\x04\x00\x00\x00\x00\x7f\x7fc");
+        let tags = leading_tags(&mut std::io::Cursor::new(&data));
+        assert_eq!((tags.len(), &tags[0]), (1, &(0..12)));
     }
 }
