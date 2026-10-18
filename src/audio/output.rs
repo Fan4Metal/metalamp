@@ -9,7 +9,7 @@ use windows::Win32::Media::Audio::{
     AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
     AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, DEVICE_STATE_ACTIVE, IAudioClient, IAudioClock,
     IAudioRenderClient, IAudioStreamVolume, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
-    WAVEFORMATEX, eConsole, eRender,
+    WAVEFORMATEX, WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0, eConsole, eRender,
 };
 use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, CoTaskMemFree, STGM_READ};
 use windows::core::{HSTRING, Result};
@@ -100,7 +100,6 @@ fn devices() -> Result<Vec<Device>> {
     Ok(out)
 }
 
-const WAVE_FORMAT_IEEE_FLOAT: u16 = 3;
 /// The device buffer, in 100 ns: half a second, of which the engine keeps
 /// only `WRITE_AHEAD` written (a change of the settings is heard soon).
 const BUFFER: i64 = 5_000_000;
@@ -136,9 +135,12 @@ impl Wasapi {
     pub fn open(rate: u32, channels: u16, wanted: &str) -> Result<Wasapi> {
         let enumerator: IMMDeviceEnumerator =
             unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)? };
+        // Windows knows a device unplugged or turned off too: only an
+        // active one is taken.
         let chosen = (!wanted.is_empty())
             .then(|| unsafe { enumerator.GetDevice(&HSTRING::from(wanted)) }.ok())
-            .flatten();
+            .flatten()
+            .filter(|d| unsafe { d.GetState() }.is_ok_and(|s| s == DEVICE_STATE_ACTIVE));
         if !wanted.is_empty() && chosen.is_none() {
             log::warn!("sound device {wanted} is not present: the default one plays");
         }
@@ -148,17 +150,18 @@ impl Wasapi {
         };
         let id = device_id(&device);
         let client: IAudioClient = unsafe { device.Activate(CLSCTX_ALL, None)? };
-        let format = WAVEFORMATEX {
-            wFormatTag: WAVE_FORMAT_IEEE_FLOAT,
-            nChannels: channels,
-            nSamplesPerSec: rate,
-            nAvgBytesPerSec: rate * 4 * u32::from(channels),
-            nBlockAlign: 4 * channels,
-            wBitsPerSample: 32,
-            cbSize: 0,
-        };
+        let format = float_format(rate, channels);
         let flags = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
-        unsafe { client.Initialize(AUDCLNT_SHAREMODE_SHARED, flags, BUFFER, 0, &format, None)? };
+        unsafe {
+            client.Initialize(
+                AUDCLNT_SHAREMODE_SHARED,
+                flags,
+                BUFFER,
+                0,
+                &format.Format,
+                None,
+            )?
+        };
         let render: IAudioRenderClient = unsafe { client.GetService()? };
         let clock: IAudioClock = unsafe { client.GetService()? };
         let volume: IAudioStreamVolume = unsafe { client.GetService()? };
@@ -178,6 +181,43 @@ impl Wasapi {
             volume,
             gain: None,
         })
+    }
+}
+
+/// 32-bit float of `rate` and `channels`, as WAVEFORMATEXTENSIBLE: a plain
+/// WAVEFORMATEX of more than two channels is refused (E_INVALIDARG), as
+/// it says nothing of which speaker each one is. The usual layouts by
+/// count: mono, stereo, 3.0, quad, 5.0, 5.1, 6.1, 7.1.
+fn float_format(rate: u32, channels: u16) -> WAVEFORMATEXTENSIBLE {
+    const WAVE_FORMAT_EXTENSIBLE: u16 = 0xfffe;
+    const SUBTYPE_IEEE_FLOAT: windows::core::GUID =
+        windows::core::GUID::from_u128(0x00000003_0000_0010_8000_00aa00389b71);
+    let mask = match channels {
+        1 => 0x4,
+        2 => 0x3,
+        3 => 0x7,
+        4 => 0x33,
+        5 => 0x37,
+        6 => 0x3f,
+        7 => 0x13f,
+        8 => 0x63f,
+        _ => 0,
+    };
+    WAVEFORMATEXTENSIBLE {
+        Format: WAVEFORMATEX {
+            wFormatTag: WAVE_FORMAT_EXTENSIBLE,
+            nChannels: channels,
+            nSamplesPerSec: rate,
+            nAvgBytesPerSec: rate * 4 * u32::from(channels),
+            nBlockAlign: 4 * channels,
+            wBitsPerSample: 32,
+            cbSize: (size_of::<WAVEFORMATEXTENSIBLE>() - size_of::<WAVEFORMATEX>()) as u16,
+        },
+        Samples: WAVEFORMATEXTENSIBLE_0 {
+            wValidBitsPerSample: 32,
+        },
+        dwChannelMask: mask,
+        SubFormat: SUBTYPE_IEEE_FLOAT,
     }
 }
 
@@ -266,12 +306,12 @@ impl Output for Wasapi {
             false
         } else {
             // The default stands in: back to the chosen one once it is
-            // present again.
+            // present again (plugged in and on, not only known).
             unsafe {
                 self.enumerator
                     .GetDevice(&HSTRING::from(self.wanted.as_str()))
             }
-            .is_ok()
+            .is_ok_and(|d| unsafe { d.GetState() }.is_ok_and(|s| s == DEVICE_STATE_ACTIVE))
         }
     }
 }
