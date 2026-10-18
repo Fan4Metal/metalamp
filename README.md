@@ -77,7 +77,7 @@ The sound can be processed on its way to the device, all of it off by default an
 
 ### Settings
 
-The settings window (`F5`, or `Ctrl+P` as Winamp's Preferences, or the gear in the library's bar) holds the interface language, the layout of the player bar, the size of the covers in the albums' grid (also by the right button on the covers' button in the library bar: four sizes and a slider; `Ctrl` and the wheel over the covers change it too), the sound output device (Windows' default, which follows the device chosen in Windows, or one of the devices present; a chosen device that is absent when a track starts is replaced by the default one until it is back), the sound processing (loudness, the equalizer, the enhancer) and the update check. **Reset** puts them back to their defaults.
+The settings window (`F5`, or `Ctrl+P` as Winamp's Preferences, or the gear in the library's bar) holds the interface language, the layout of the player bar, the sound output device (Windows' default, which follows the device chosen in Windows, or one of the devices present; a chosen device that is absent when a track starts is replaced by the default one until it is back), the sound processing (loudness, the equalizer, the enhancer) and the update check. **Reset** puts them back to their defaults.
 
 ### The playlist
 
@@ -108,7 +108,7 @@ The playlist on the right (`Alt+E` shows or hides it) lists "Artist – Title" w
 | `Enter` | Play the selection |
 | `Delete` | Remove from the playlist |
 | `F1` | About (also a click on the icon in the title row) |
-| `Ctrl` + wheel over the covers | Larger or smaller covers |
+| `Ctrl` + wheel over the covers | Larger or smaller covers (also the right button on the covers' button in the library bar: four sizes and a slider) |
 | `F5`, `Ctrl+P` | Settings (also the gear in the library's bar) |
 
 The media keys of keyboards and headsets work while the window is in front.

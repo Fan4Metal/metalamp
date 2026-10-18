@@ -16,7 +16,6 @@ use crate::i18n::LangChoice;
 use crate::palette;
 use crate::settings::{BarLayout, EqPreset, MediaKeys, Settings};
 use crate::ui::icons::{self, Icon};
-use crate::ui::library::{MAX_COVER, MIN_COVER};
 use crate::update::{Status, Updates, release_url, version_of};
 
 /// The size of the window's content in points.
@@ -49,8 +48,8 @@ impl Page {
     fn summary(self) -> &'static str {
         match self {
             Page::General => tr!(
-                "The language, the layout of the player bar, the size of the covers and the media keys.",
-                "Язык, вид панели плеера, размер обложек и медиаклавиши."
+                "The language, the layout of the player bar and the media keys.",
+                "Язык, вид панели плеера и медиаклавиши."
             ),
             Page::Sound => tr!(
                 "The device the sound goes to; one loudness for every track, the equalizer and the enhancer.",
@@ -484,24 +483,6 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
                             ui.selectable_value(&mut settings.bar_layout, l, l.label());
                         }
                     });
-            },
-        );
-        divider(ui);
-        row(
-            ui,
-            tr!("Covers", "Обложки"),
-            Some(tr!(
-                "The size of the covers in the albums' grid; Ctrl and the wheel over them change it too.",
-                "Размер обложек в сетке альбомов; его меняют и Ctrl с колесом над ними."
-            )),
-            CONTROL,
-            |ui| {
-                ui.spacing_mut().slider_width = CONTROL - 60.0;
-                ui.add(
-                    egui::Slider::new(&mut settings.cover_size, MIN_COVER..=MAX_COVER)
-                        .step_by(8.0)
-                        .fixed_decimals(0),
-                );
             },
         );
     });
@@ -1135,7 +1116,6 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     }
     settings.language = d.language;
     settings.bar_layout = d.bar_layout;
-    settings.cover_size = d.cover_size;
     settings.media_keys = d.media_keys;
     settings.output_device = d.output_device;
     settings.output_device_name = d.output_device_name;
