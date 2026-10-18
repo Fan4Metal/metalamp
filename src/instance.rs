@@ -90,9 +90,15 @@ pub fn forward(paths: &[PathBuf]) -> bool {
             )
         };
         if !window.is_null() {
-            // A first start that does not answer (hung) is left alone and
-            // this one runs on its own.
-            return send(window, paths);
+            match send(window, paths) {
+                Sent::Taken => return true,
+                // A first start that does not answer (hung) is left alone
+                // and this one runs on its own.
+                Sent::NoAnswer => return false,
+                // Closing: once it is gone (its settings saved) this start
+                // is the first, holding the mutex.
+                Sent::Refused => {}
+            }
         }
         // The first start has not made its window yet, or is closing.
         if Instant::now() >= deadline {
@@ -103,10 +109,19 @@ pub fn forward(paths: &[PathBuf]) -> bool {
     }
 }
 
+/// What became of the paths sent.
+enum Sent {
+    Taken,
+    /// The first start is closing and takes no more.
+    Refused,
+    /// No answer in time (hung) or no message sent.
+    NoAnswer,
+}
+
 /// Send `paths` to the message window `to` in one message (all taken or
 /// none), then bring the main window it answers with to the foreground:
 /// this process was started by the user, so it may.
-fn send(to: HWND, paths: &[PathBuf]) -> bool {
+fn send(to: HWND, paths: &[PathBuf]) -> Sent {
     let text = joined(paths);
     let bytes = text.len() * 2;
     let data = COPYDATASTRUCT {
@@ -126,12 +141,15 @@ fn send(to: HWND, paths: &[PathBuf]) -> bool {
             &mut answer,
         )
     };
-    if ok == 0 || answer == 0 {
-        log::warn!("the running player did not take the file");
-        return false;
+    if ok == 0 {
+        log::warn!("the running player did not answer");
+        return Sent::NoAnswer;
+    }
+    if answer == 0 {
+        return Sent::Refused;
     }
     unsafe { SetForegroundWindow(answer as HWND) };
-    true
+    Sent::Taken
 }
 
 /// `paths` as UTF-16, separated by NULs, without a terminating one.
