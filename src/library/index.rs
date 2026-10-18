@@ -60,16 +60,29 @@ pub fn ask() -> u64 {
 }
 
 /// Saves `tracks` as the scan numbered `number` (from [`ask`]) has them.
+/// A path JSON cannot hold (a name not valid Unicode, which Windows
+/// allows) is left out, read again by each scan, rather than fail the
+/// whole index.
 pub fn save(tracks: &[Track], number: u64) {
     let Some(path) = path() else { return };
     #[derive(Serialize)]
     struct IndexRef<'a> {
         version: u32,
-        tracks: &'a [Track],
+        tracks: Vec<&'a Track>,
+    }
+    let kept: Vec<&Track> = tracks
+        .iter()
+        .filter(|t| t.path.to_str().is_some())
+        .collect();
+    if kept.len() < tracks.len() {
+        log::warn!(
+            "{} files with names not in Unicode left out of the index",
+            tracks.len() - kept.len()
+        );
     }
     let index = IndexRef {
         version: VERSION,
-        tracks,
+        tracks: kept,
     };
     let result = serde_json::to_vec(&index)
         .map_err(std::io::Error::other)
