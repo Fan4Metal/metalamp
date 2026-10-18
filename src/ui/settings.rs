@@ -20,7 +20,7 @@ use crate::ui::icons::{self, Icon};
 use crate::update::{Status, Updates, release_url, version_of};
 
 /// The size of the window's content in points.
-const SIZE: egui::Vec2 = vec2(720.0, 440.0);
+const SIZE: egui::Vec2 = vec2(820.0, 560.0);
 /// The width of the category column.
 const SIDEBAR_WIDTH: f32 = 180.0;
 /// The corner radius of the window.
