@@ -786,9 +786,14 @@ fn eq_head(
     presets: &mut Vec<EqPreset>,
     naming: &mut Option<String>,
 ) {
-    let mine = presets
-        .iter()
-        .position(|p| p.bands == dsp.bands && p.preamp == dsp.preamp);
+    // The one of mine chosen last while the sliders still stand at it,
+    // else the first that does: two of the same values are two presets.
+    let same = |p: &EqPreset| p.bands == dsp.bands && p.preamp == dsp.preamp;
+    let chosen_id = egui::Id::new("eq_mine");
+    let mine = ui
+        .data(|d| d.get_temp::<usize>(chosen_id))
+        .filter(|&i| presets.get(i).is_some_and(same))
+        .or_else(|| presets.iter().position(same));
     // A built-in preset sets the preamp to 0: one stands at it only so.
     let built_in = eq::PRESETS
         .iter()
@@ -833,6 +838,7 @@ fn eq_head(
                             dsp.bands = p.bands;
                             dsp.preamp = p.preamp;
                             dsp.eq = true;
+                            ui.data_mut(|d| d.insert_temp(chosen_id, i));
                         }
                     }
                 }
@@ -857,23 +863,31 @@ fn eq_head(
             && let Some(i) = mine
         {
             presets.remove(i);
+            ui.data_mut(|d| d.remove::<usize>(chosen_id));
         }
     });
+    // A name in any case is the same name ("Rock" is "rock").
+    let same_name = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
     let full = presets.len() >= MAX_OWN_PRESETS;
     let names: Vec<String> = presets.iter().map(|p| p.name.clone()).collect();
     if let Some(name) = name_row(
         ui,
         naming,
         tr!("My equalizer", "Мой эквалайзер"),
-        |n| full && !names.iter().any(|o| o == n),
+        |n| full && !names.iter().any(|o| same_name(o, n)),
     ) {
-        match presets.iter_mut().find(|p| p.name == name) {
-            Some(p) => {
+        let name: String = name.chars().take(MAX_NAME).collect();
+        let at = match presets.iter().position(|p| same_name(&p.name, &name)) {
+            Some(i) => {
+                let p = &mut presets[i];
+                p.name = name;
                 p.preamp = dsp.preamp;
                 p.bands = dsp.bands;
+                i
             }
             None => {
-                if presets.len() >= MAX_OWN_PRESETS {
+                // A list made longer by hand keeps only the newest.
+                while presets.len() >= MAX_OWN_PRESETS {
                     presets.remove(0);
                 }
                 presets.push(EqPreset {
@@ -881,10 +895,15 @@ fn eq_head(
                     preamp: dsp.preamp,
                     bands: dsp.bands,
                 });
+                presets.len() - 1
             }
-        }
+        };
+        ui.data_mut(|d| d.insert_temp(chosen_id, at));
     }
 }
+
+/// The longest name of a preset of one's own, in letters.
+const MAX_NAME: usize = 40;
 
 /// The row where a name is typed for what is to be saved, while `naming`
 /// holds it: Enter or the tick saves (the name returned), Esc or the
