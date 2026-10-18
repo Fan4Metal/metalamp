@@ -38,6 +38,9 @@ pub struct App {
     /// out: with the pointer there the arrows seek and set the volume
     /// (the keys are read before the panels are laid out).
     player_area: egui::Rect,
+    /// The playlist's edge held: where the button went down and the
+    /// playlist's width then.
+    edge_drag: Option<(f32, f32)>,
     about: AboutDialog,
     updates: Updates,
     /// The window's handle; `None` off Windows.
@@ -154,6 +157,7 @@ impl App {
             visual: crate::ui::visual::Visualizer::new(),
             heard: Vec::new(),
             player_area: egui::Rect::NOTHING,
+            edge_drag: None,
             about,
             updates,
             hwnd,
@@ -452,6 +456,52 @@ impl App {
                     self.place_changed = Some(Instant::now());
                 }
             }
+        }
+    }
+
+    /// The strip over the playlist's left edge (`edge`, none while the
+    /// playlist or a modal is not shown): a press in it holds the edge
+    /// until the button is let go, the width following the pointer from
+    /// where it went down. Followed from the pointer itself, not from
+    /// egui's drag: a drag egui gave to another widget under the edge (the
+    /// tracks' scroll bar, a row of the playlist) left the edge behind.
+    fn playlist_edge(&mut self, root_ui: &mut egui::Ui, edge: Option<egui::Rect>) {
+        let ctx = root_ui.ctx().clone();
+        let Some(edge) = edge else {
+            self.edge_drag = None;
+            return;
+        };
+        // Registered last, so egui gives a press there to it and not to
+        // what lies under it.
+        root_ui.interact(edge, egui::Id::new("playlist_edge"), egui::Sense::drag());
+        let (pressed, down, origin, at) = ctx.input(|i| {
+            (
+                i.pointer.primary_pressed(),
+                i.pointer.primary_down(),
+                i.pointer.press_origin(),
+                i.pointer.latest_pos(),
+            )
+        });
+        let width = self
+            .settings
+            .playlist_width
+            .clamp(PLAYLIST_MIN, PLAYLIST_MAX);
+        if pressed && let Some(o) = origin.filter(|o| edge.contains(*o)) {
+            self.edge_drag = Some((o.x, width));
+        }
+        if !down {
+            self.edge_drag = None;
+        }
+        if let (Some((x0, w0)), Some(p)) = (self.edge_drag, at) {
+            let w = (w0 - (p.x - x0)).clamp(PLAYLIST_MIN, PLAYLIST_MAX);
+            if (w - self.settings.playlist_width).abs() > 0.1 {
+                self.settings.playlist_width = w;
+                self.place_changed = Some(Instant::now());
+            }
+        }
+        let hovered = ctx.pointer_hover_pos().is_some_and(|p| edge.contains(p));
+        if self.edge_drag.is_some() || (hovered && !down) {
+            ctx.set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
     }
 
@@ -1095,21 +1145,7 @@ impl eframe::App for App {
             );
             crate::ui::start::show(ui, &mut self.start_icon, hint);
         });
-        if let Some(edge) = playlist_edge {
-            let resp = root_ui.interact(edge, egui::Id::new("playlist_edge"), egui::Sense::drag());
-            if resp.hovered() || resp.dragged() {
-                ctx.set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-            }
-            let d = resp.drag_delta().x;
-            if resp.dragged() && d != 0.0 {
-                let width = self
-                    .settings
-                    .playlist_width
-                    .clamp(PLAYLIST_MIN, PLAYLIST_MAX);
-                self.settings.playlist_width = (width - d).clamp(PLAYLIST_MIN, PLAYLIST_MAX);
-                self.place_changed = Some(Instant::now());
-            }
-        }
+        self.playlist_edge(root_ui, playlist_edge.filter(|_| !modal));
         if let Some(path) = self.info_request.take() {
             self.file_info.open(&ctx, &path);
         }
