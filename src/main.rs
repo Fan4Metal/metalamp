@@ -25,6 +25,8 @@ mod palette;
 mod player;
 mod queue;
 mod settings;
+mod smtc;
+mod taskbar;
 mod ui;
 mod update;
 mod win;

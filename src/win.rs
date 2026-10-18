@@ -312,14 +312,29 @@ pub enum MediaKey {
     Previous,
 }
 
+/// The way a media key came. One press may come more than one way: with
+/// the window in front, Windows sends `WM_APPCOMMAND` and then the key,
+/// and Windows' media controls may report it too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Via {
+    /// `WM_KEYDOWN` with a `VK_MEDIA_*` key.
+    Key,
+    /// `WM_APPCOMMAND`.
+    Command,
+    /// Windows' media controls (`smtc.rs`).
+    Controls,
+}
+
 /// What the window's messages asked for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hooked {
-    /// A media key (`WM_KEYDOWN` with a `VK_MEDIA_*` key, or
-    /// `WM_APPCOMMAND`). With the window in front one press may come both
-    /// ways: `WM_APPCOMMAND` first, then the key; `from_command` tells them
-    /// apart.
-    Media { key: MediaKey, from_command: bool },
+    /// A media key and the way it came.
+    Media(MediaKey, Via),
+    /// The taskbar button exists (`TaskbarButtonCreated`): the thumbnail
+    /// buttons can be added (`taskbar.rs`).
+    TaskbarButton,
+    /// A thumbnail button was clicked (its id).
+    Thumb(u16),
     /// Windows is ending the session (`WM_QUERYENDSESSION`): winit closes
     /// nothing, so the settings are saved now.
     EndSession,
@@ -331,19 +346,62 @@ pub enum Hooked {
     Suspend,
 }
 
+/// `TaskbarButtonCreated`, registered by [`hook_window`].
+static TASKBAR_CREATED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The window takes the media keys ([`set_media_keys`]).
+static MEDIA_KEYS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
 /// Subclass the window once: media keys (`WM_KEYDOWN` with a `VK_MEDIA_*`
 /// key, which egui drops, and `WM_APPCOMMAND`, which headsets and remotes
-/// send), the end of the session and sleep are queued for [`take_hooked`]
-/// and `wake` is called (metalmpv's `hook_window`, without its snapping,
-/// fullscreen and taskbar parts).
+/// send), the taskbar button made and its thumbnail buttons clicked, the
+/// end of the session and sleep are queued for [`take_hooked`] and `wake`
+/// is called (metalmpv's `hook_window`, without its snapping and
+/// fullscreen parts).
 pub fn hook_window(hwnd: isize, wake: impl Fn() + Send + Sync + 'static) {
     use std::sync::Once;
     use windows_sys::Win32::UI::Shell::SetWindowSubclass;
     static SUBCLASSED: Once = Once::new();
     SUBCLASSED.call_once(|| {
+        use windows_sys::Win32::UI::WindowsAndMessaging::RegisterWindowMessageW;
+        let name = wide("TaskbarButtonCreated");
+        let message = unsafe { RegisterWindowMessageW(name.as_ptr()) };
+        TASKBAR_CREATED.store(message, std::sync::atomic::Ordering::Relaxed);
         let _ = WAKE.set(Box::new(wake));
+        // A copy running elevated still hears Explorer (UIPI): the taskbar
+        // button made and the thumbnail buttons' clicks.
+        #[link(name = "user32")]
+        unsafe extern "system" {
+            fn ChangeWindowMessageFilterEx(
+                hwnd: windows_sys::Win32::Foundation::HWND,
+                message: u32,
+                action: u32,
+                filter: *mut core::ffi::c_void,
+            ) -> i32;
+        }
+        const MSGFLT_ALLOW: u32 = 1;
+        for message in [
+            message,
+            windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND,
+        ] {
+            unsafe {
+                ChangeWindowMessageFilterEx(hwnd as _, message, MSGFLT_ALLOW, std::ptr::null_mut())
+            };
+        }
         unsafe { SetWindowSubclass(hwnd as _, Some(window_proc), 1, 0) };
     });
+}
+
+/// Whether the window takes the media keys; off, the keys and
+/// `WM_APPCOMMAND` go on to Windows (and through it to other programs).
+pub fn set_media_keys(on: bool) {
+    MEDIA_KEYS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A media key pressed elsewhere (Windows' media controls, `smtc.rs`),
+/// queued as one of the window's.
+pub fn hook_media(key: MediaKey) {
+    hook(Hooked::Media(key, Via::Controls));
 }
 
 /// What the window's messages asked for since the last call.
@@ -397,36 +455,46 @@ unsafe extern "system" fn window_proc(
 ) -> windows_sys::Win32::Foundation::LRESULT {
     use windows_sys::Win32::UI::Shell::DefSubclassProc;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        ENDSESSION_CLOSEAPP, PBT_APMSUSPEND, WM_APPCOMMAND, WM_KEYDOWN, WM_POWERBROADCAST,
-        WM_QUERYENDSESSION,
+        DefWindowProcW, ENDSESSION_CLOSEAPP, PBT_APMSUSPEND, WM_APPCOMMAND, WM_COMMAND, WM_KEYDOWN,
+        WM_KEYUP, WM_POWERBROADCAST, WM_QUERYENDSESSION,
     };
+    // THBN_CLICKED in WM_COMMAND's high word.
+    const THBN_CLICKED: usize = 0x1800;
+    if msg != 0 && msg == TASKBAR_CREATED.load(std::sync::atomic::Ordering::Relaxed) {
+        hook(Hooked::TaskbarButton);
+    }
+    let media = MEDIA_KEYS.load(std::sync::atomic::Ordering::Relaxed);
+    // While the window lets the keys go, a media key goes to
+    // `DefWindowProc`, which makes it the `WM_APPCOMMAND` other players
+    // take: winit answers every key itself without it.
+    if !media && matches!(msg, WM_KEYDOWN | WM_KEYUP) && media_vk(wparam as u32).is_some() {
+        return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+    }
     match msg {
+        WM_COMMAND if (wparam >> 16) & 0xFFFF == THBN_CLICKED => {
+            hook(Hooked::Thumb((wparam & 0xFFFF) as u16));
+            return 0;
+        }
         // Answered as DefWindowProc does (yes); the app saves before the
         // process is ended. The Restart Manager (an installer replacing
         // the exe) asks the app to close and waits for it.
         WM_QUERYENDSESSION if lparam as u32 & ENDSESSION_CLOSEAPP != 0 => hook(Hooked::Close),
         WM_QUERYENDSESSION => hook(Hooked::EndSession),
         WM_POWERBROADCAST if wparam == PBT_APMSUSPEND as usize => hook(Hooked::Suspend),
-        WM_KEYDOWN => {
+        WM_KEYDOWN if media => {
             if let Some(key) = media_vk(wparam as u32) {
                 // Held keys repeat; one press is one command.
                 if lparam & (1 << 30) == 0 {
-                    hook(Hooked::Media {
-                        key,
-                        from_command: false,
-                    });
+                    hook(Hooked::Media(key, Via::Key));
                 }
                 return 0;
             }
         }
-        WM_APPCOMMAND => {
+        WM_APPCOMMAND if media => {
             // GET_APPCOMMAND_LPARAM: the high word without the device bits.
             let command = ((lparam as u32) >> 16) & !0xF000;
             if let Some(key) = media_command(command) {
-                hook(Hooked::Media {
-                    key,
-                    from_command: true,
-                });
+                hook(Hooked::Media(key, Via::Command));
                 return 1;
             }
         }

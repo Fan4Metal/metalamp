@@ -34,6 +34,14 @@ pub struct App {
     updates: Updates,
     /// The window's handle; `None` off Windows.
     hwnd: Option<isize>,
+    /// The taskbar button's progress and thumbnail buttons.
+    taskbar: Option<crate::taskbar::Taskbar>,
+    /// Windows' media controls, while the media keys are taken always;
+    /// `smtc_failed`: Windows has none, not asked again.
+    smtc: Option<crate::smtc::Smtc>,
+    smtc_failed: bool,
+    /// The last media key: one press may come more than one way.
+    last_media: Option<(win::MediaKey, win::Via, Instant)>,
     /// The window is cloaked until its first maximized frame (the time it
     /// is shown anyway and the frame it was cloaked in).
     cloak: Option<(Instant, u64)>,
@@ -139,6 +147,10 @@ impl App {
             about,
             updates,
             hwnd,
+            taskbar: hwnd.and_then(crate::taskbar::Taskbar::new),
+            smtc: None,
+            smtc_failed: false,
+            last_media: None,
             cloak,
             place_changed: None,
             start_icon: None,
@@ -675,12 +687,25 @@ impl App {
             match hooked {
                 win::Hooked::EndSession | win::Hooked::Suspend => self.save_now(),
                 win::Hooked::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-                win::Hooked::Media { key, from_command } => {
-                    // With the window in front a press comes as the command
-                    // and then as the key: the key alone counts then.
-                    if from_command && ctx.input(|i| i.focused) {
+                win::Hooked::TaskbarButton => {
+                    if let Some(taskbar) = &mut self.taskbar {
+                        taskbar.button_created();
+                    }
+                }
+                win::Hooked::Thumb(id) => match id {
+                    crate::taskbar::PREVIOUS => self.player.previous(),
+                    crate::taskbar::PLAY_PAUSE => self.player.toggle_pause(),
+                    crate::taskbar::NEXT => self.player.next(),
+                    _ => {}
+                },
+                win::Hooked::Media(key, via) => {
+                    let now = Instant::now();
+                    if same_press(self.last_media, key, via, now) {
+                        log::debug!("media key {key:?} by {via:?}: the same press");
                         continue;
                     }
+                    log::debug!("media key {key:?} by {via:?}");
+                    self.last_media = Some((key, via, now));
                     match key {
                         win::MediaKey::PlayPause => self.player.toggle_pause(),
                         win::MediaKey::Play => self.player.play(),
@@ -695,6 +720,92 @@ impl App {
                     }
                 }
             }
+        }
+    }
+
+    /// Whether Previous does something: a track before the current one,
+    /// or the current one past its first seconds (back to its start).
+    fn has_previous(&self) -> bool {
+        let p = &self.player;
+        p.queue.before(p.queue.current()).is_some()
+            || (p.status != crate::player::Status::Stopped && p.position_ms() > 3000)
+    }
+
+    fn has_next(&self) -> bool {
+        self.player
+            .queue
+            .after(self.player.queue.current())
+            .is_some()
+    }
+
+    /// The position as the taskbar button's progress (yellow when paused)
+    /// and the thumbnail buttons' state.
+    fn show_on_taskbar(&mut self) {
+        use crate::player::Status;
+        let status = self.player.status;
+        let duration = self.player.duration_ms();
+        let progress = (status != Status::Stopped && duration > 0)
+            .then(|| (self.player.position_ms().min(duration) * 1000 / duration).min(1000));
+        let shown = crate::taskbar::Shown {
+            progress,
+            paused: status != Status::Playing,
+            has_previous: self.has_previous(),
+            has_next: self.has_next(),
+        };
+        if let Some(taskbar) = &mut self.taskbar {
+            taskbar.show(shown);
+        }
+    }
+
+    /// Take the media keys as the setting says: Windows' media controls
+    /// made or let go, the window's own keys on or off.
+    fn follow_media_keys(&mut self) {
+        use crate::settings::MediaKeys;
+        let wanted = self.settings.media_keys;
+        win::set_media_keys(wanted != MediaKeys::Off);
+        if wanted == MediaKeys::Always {
+            if self.smtc.is_none() && !self.smtc_failed {
+                self.smtc = self.hwnd.and_then(crate::smtc::Smtc::new);
+                self.smtc_failed = self.smtc.is_none();
+            }
+        } else if self.smtc.take().is_some() {
+            log::debug!("media controls let go");
+        }
+    }
+
+    /// What plays in Windows' media controls: the state, previous and
+    /// next, the title and the artist.
+    fn show_in_media_controls(&mut self) {
+        if self.smtc.is_none() {
+            return;
+        }
+        use crate::player::Status as Player;
+        use crate::smtc::Status;
+        let status = match self.player.status {
+            Player::Stopped if self.player.queue.is_empty() => Status::Closed,
+            Player::Stopped => Status::Stopped,
+            Player::Paused => Status::Paused,
+            Player::Playing => Status::Playing,
+        };
+        let (title, _, track) = self.now_playing();
+        let artist = track
+            .and_then(|t| self.library.tracks.get(t as usize))
+            .map(|t| t.artist.clone())
+            .filter(|a| !a.is_empty());
+        let shown = crate::smtc::Shown {
+            status,
+            has_previous: self.has_previous(),
+            has_next: self.has_next(),
+            title: if status == Status::Closed {
+                String::new()
+            } else {
+                title
+            },
+            artist,
+            music: true,
+        };
+        if let Some(smtc) = &mut self.smtc {
+            smtc.show(shown);
         }
     }
 
@@ -769,6 +880,9 @@ impl eframe::App for App {
             // The analyzer moves: 50 frames a second.
             ctx.request_repaint_after(Duration::from_millis(20));
         }
+        self.follow_media_keys();
+        self.show_on_taskbar();
+        self.show_in_media_controls();
         self.remember_place();
     }
 
@@ -1008,4 +1122,46 @@ fn expand_playlists(files: Vec<PathBuf>) -> Vec<PathBuf> {
         }
     }
     out
+}
+
+/// Media key `key` at `at`, come by `via`, is the press `last` was, come
+/// again another way (metalmpv's): Play, Pause and Play/Pause are one
+/// button. Two quick presses the same way are two.
+fn same_press(
+    last: Option<(win::MediaKey, win::Via, Instant)>,
+    key: win::MediaKey,
+    via: win::Via,
+    at: Instant,
+) -> bool {
+    use win::MediaKey::{Pause, Play, PlayPause};
+    let button = |k: win::MediaKey| match k {
+        Play | Pause | PlayPause => PlayPause,
+        other => other,
+    };
+    last.is_some_and(|(k, way, t)| {
+        way != via
+            && button(k) == button(key)
+            && at.saturating_duration_since(t) < Duration::from_millis(300)
+    })
+}
+
+#[cfg(test)]
+mod media_tests {
+    use super::*;
+    use win::{MediaKey, Via};
+
+    #[test]
+    fn one_press_two_ways_counts_once() {
+        let t = Instant::now();
+        let last = Some((MediaKey::PlayPause, Via::Command, t));
+        let soon = t + Duration::from_millis(50);
+        assert!(same_press(last, MediaKey::PlayPause, Via::Key, soon));
+        assert!(same_press(last, MediaKey::Pause, Via::Controls, soon));
+        // The same way twice is two presses; another key is another press.
+        assert!(!same_press(last, MediaKey::PlayPause, Via::Command, soon));
+        assert!(!same_press(last, MediaKey::Next, Via::Key, soon));
+        // Late: a press of its own.
+        let late = t + Duration::from_millis(400);
+        assert!(!same_press(last, MediaKey::PlayPause, Via::Key, late));
+    }
 }

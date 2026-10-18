@@ -78,6 +78,35 @@ pub struct Settings {
     pub dsp: crate::audio::dsp::DspSettings,
     /// The user's equalizer presets (Winamp's are built in).
     pub eq_presets: Vec<EqPreset>,
+    /// When the media keys are the player's.
+    pub media_keys: MediaKeys,
+}
+
+/// When the media keys (of keyboards, headsets, remotes) control the
+/// player.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MediaKeys {
+    /// Also while another window is active, through Windows' media
+    /// controls (`smtc.rs`), whose flyout shows the track.
+    #[default]
+    Always,
+    /// Only while the player's window is active.
+    Window,
+    /// None: they go on to Windows and the other programs.
+    Off,
+}
+
+impl MediaKeys {
+    pub const ALL: [MediaKeys; 3] = [MediaKeys::Always, MediaKeys::Window, MediaKeys::Off];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            MediaKeys::Always => tr!("Always", "Всегда"),
+            MediaKeys::Window => tr!("While the player is active", "Когда активно окно плеера"),
+            MediaKeys::Off => tr!("Never", "Никогда"),
+        }
+    }
 }
 
 /// An equalizer setting saved under a name.
@@ -147,6 +176,7 @@ impl Default for Settings {
             output_device_name: String::new(),
             dsp: Default::default(),
             eq_presets: Vec::new(),
+            media_keys: MediaKeys::default(),
         }
     }
 }

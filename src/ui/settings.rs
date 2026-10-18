@@ -14,7 +14,7 @@ use crate::audio::dsp::{DspSettings, eq};
 use crate::audio::output::Device;
 use crate::i18n::LangChoice;
 use crate::palette;
-use crate::settings::{BarLayout, EqPreset, Settings};
+use crate::settings::{BarLayout, EqPreset, MediaKeys, Settings};
 use crate::ui::icons::{self, Icon};
 use crate::ui::library::{MAX_COVER, MIN_COVER};
 use crate::update::{Status, Updates, release_url, version_of};
@@ -49,8 +49,8 @@ impl Page {
     fn summary(self) -> &'static str {
         match self {
             Page::General => tr!(
-                "The language, the layout of the player bar and the size of the covers.",
-                "Язык, вид панели плеера и размер обложек."
+                "The language, the layout of the player bar, the size of the covers and the media keys.",
+                "Язык, вид панели плеера, размер обложек и медиаклавиши."
             ),
             Page::Sound => tr!(
                 "The device the sound goes to; one loudness for every track, the equalizer and the enhancer.",
@@ -502,6 +502,27 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
                         .step_by(8.0)
                         .fixed_decimals(0),
                 );
+            },
+        );
+    });
+    section(ui, tr!("Media keys", "Медиаклавиши"), |ui| {
+        row(
+            ui,
+            tr!("Media keys", "Медиаклавиши"),
+            Some(tr!(
+                "The keys of keyboards, headsets and remotes. \"Always\": also while another window is active, through Windows' media controls, whose panel by the volume shows the track.",
+                "Клавиши клавиатур, гарнитур и пультов. «Всегда»: и когда активно другое окно, через медиаэлементы Windows, панель которых у регулятора громкости показывает трек."
+            )),
+            CONTROL,
+            |ui| {
+                egui::ComboBox::from_id_salt("settings_media_keys")
+                    .selected_text(settings.media_keys.label())
+                    .width(CONTROL - 10.0)
+                    .show_ui(ui, |ui| {
+                        for m in MediaKeys::ALL {
+                            ui.selectable_value(&mut settings.media_keys, m, m.label());
+                        }
+                    });
             },
         );
     });
@@ -1115,6 +1136,7 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     settings.language = d.language;
     settings.bar_layout = d.bar_layout;
     settings.cover_size = d.cover_size;
+    settings.media_keys = d.media_keys;
     settings.output_device = d.output_device;
     settings.output_device_name = d.output_device_name;
     settings.dsp = d.dsp;
