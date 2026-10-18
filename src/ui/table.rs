@@ -245,7 +245,8 @@ impl Table<'_> {
 }
 
 /// The header of a table in `header`: the columns' titles, a click sorts
-/// by one (again: the other way), a column's right edge dragged changes
+/// by one (again: the other way; a third time: the library's order), a
+/// column's right edge dragged changes
 /// its width, a double click on it gives the column the width `fit` says
 /// (`fit_width`: its widest text). The columns start at `span.0` and take
 /// `span.1` (wider than `header` when the table scrolls sideways; what is
@@ -279,16 +280,18 @@ pub fn header_row(
             painter.rect_filled(r, 0.0, palette::hover());
         }
         if resp.clicked() {
-            *sort = Some(match *sort {
-                Some(s) if s.column == i => Sort {
+            // Up, down, then the library's order again.
+            *sort = match *sort {
+                Some(s) if s.column == i && s.descending => None,
+                Some(s) if s.column == i => Some(Sort {
                     column: i,
-                    descending: !s.descending,
-                },
-                _ => Sort {
+                    descending: true,
+                }),
+                _ => Some(Sort {
                     column: i,
                     descending: false,
-                },
-            });
+                }),
+            };
             sorted = true;
         }
         let clip = r.shrink2(vec2(PAD, 0.0));
