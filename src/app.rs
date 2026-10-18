@@ -133,7 +133,7 @@ impl App {
         let about = AboutDialog::default();
         Self {
             settings,
-            settings_dialog: SettingsDialog::default(),
+            settings_dialog: SettingsDialog::from_env(),
             spectrum: crate::ui::spectrum::Analyzer::new(),
             heard: Vec::new(),
             about,

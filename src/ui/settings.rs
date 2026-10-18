@@ -15,6 +15,7 @@ use crate::audio::output::Device;
 use crate::i18n::LangChoice;
 use crate::palette;
 use crate::settings::{BarLayout, EqPreset, Settings};
+use crate::ui::icons::{self, Icon};
 use crate::update::{Status, Updates, release_url, version_of};
 
 /// The size of the window's content in points.
@@ -82,11 +83,32 @@ pub struct SettingsDialog {
     page: Page,
     /// The output devices, listed when the window opens.
     devices: Vec<Device>,
-    /// The name a preset is saved under.
-    preset_name: String,
+    /// The name an equalizer preset is being saved under, while one is.
+    naming: Option<String>,
+    /// A scroll offset to put the page at once (`from_env`).
+    scroll_to: Option<f32>,
 }
 
 impl SettingsDialog {
+    /// Closed, unless `METALAMP_SETTINGS` names a page (`general`, `sound`,
+    /// `updates`), optionally with a scroll offset after a colon
+    /// (`sound:800`): then open on it at start, for looking at a page
+    /// without a hand on the window (GUI checks).
+    pub fn from_env() -> SettingsDialog {
+        let mut dialog = SettingsDialog::default();
+        if let Ok(spec) = std::env::var("METALAMP_SETTINGS") {
+            let (page, offset) = spec.split_once(':').unwrap_or((&spec, ""));
+            dialog.page = match page {
+                "sound" => Page::Sound,
+                "updates" => Page::Updates,
+                _ => Page::General,
+            };
+            dialog.scroll_to = offset.parse().ok();
+            dialog.toggle();
+        }
+        dialog
+    }
+
     pub fn toggle(&mut self) {
         self.open = !self.open;
         self.fresh = self.open;
@@ -198,24 +220,24 @@ impl SettingsDialog {
                 ui.add_space(2.0);
                 ui.label(RichText::new(self.page.summary()).color(palette::TEXT_WEAK));
                 ui.add_space(4.0);
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(&mut ui, |ui| {
-                        egui::Frame::new()
-                            .inner_margin(Margin {
-                                left: 0,
-                                right: 18,
-                                top: 0,
-                                bottom: 18,
-                            })
-                            .show(ui, |ui| match self.page {
-                                Page::General => general(ui, settings),
-                                Page::Sound => {
-                                    sound(ui, settings, &self.devices, &mut self.preset_name)
-                                }
-                                Page::Updates => updates_page(ui, updates),
-                            });
-                    });
+                let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]);
+                if let Some(offset) = self.scroll_to.take() {
+                    area = area.vertical_scroll_offset(offset);
+                }
+                area.show(&mut ui, |ui| {
+                    egui::Frame::new()
+                        .inner_margin(Margin {
+                            left: 0,
+                            right: 18,
+                            top: 0,
+                            bottom: 18,
+                        })
+                        .show(ui, |ui| match self.page {
+                            Page::General => general(ui, settings),
+                            Page::Sound => sound(ui, settings, &self.devices, &mut self.naming),
+                            Page::Updates => updates_page(ui, updates),
+                        });
+                });
             });
         if close
             || (!fresh
@@ -466,7 +488,7 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
     });
 }
 
-fn sound(ui: &mut Ui, settings: &mut Settings, devices: &[Device], preset_name: &mut String) {
+fn sound(ui: &mut Ui, settings: &mut Settings, devices: &[Device], naming: &mut Option<String>) {
     section(ui, tr!("Output", "Вывод"), |ui| {
         row(
             ui,
@@ -519,7 +541,7 @@ fn sound(ui: &mut Ui, settings: &mut Settings, devices: &[Device], preset_name: 
             },
         );
     });
-    processing(ui, &mut settings.dsp, &mut settings.eq_presets, preset_name);
+    processing(ui, &mut settings.dsp, &mut settings.eq_presets, naming);
 }
 
 /// The loudness, the equalizer and the enhancer.
@@ -527,7 +549,7 @@ fn processing(
     ui: &mut Ui,
     dsp: &mut DspSettings,
     presets: &mut Vec<EqPreset>,
-    preset_name: &mut String,
+    naming: &mut Option<String>,
 ) {
     section(ui, tr!("Loudness", "Громкость"), |ui| {
         row(
@@ -545,18 +567,9 @@ fn processing(
         );
     });
     section(ui, tr!("Equalizer", "Эквалайзер"), |ui| {
-        row(
-            ui,
-            tr!("Equalizer", "Эквалайзер"),
-            Some(tr!(
-                "Ten bands, Winamp's, and a preamp; a limiter after them keeps the sound from clipping.",
-                "Десять полос, как в Winamp, и предусиление; лимитер после них не даёт звуку клиповать."
-            )),
-            50.0,
-            |ui| switch(ui, &mut dsp.eq),
-        );
-        divider(ui);
-        equalizer(ui, dsp, presets, preset_name);
+        ui.add_space(8.0);
+        eq_head(ui, dsp, presets, naming);
+        bands(ui, dsp);
     });
     section(ui, tr!("Enhancer", "Улучшение звука"), |ui| {
         row(
@@ -620,136 +633,355 @@ fn amount(ui: &mut Ui, title: &str, hint: &str, value: &mut u8) {
     });
 }
 
-/// The preamp and the ten bands as vertical sliders, a value over each
-/// and its frequency under it; under them the presets (Winamp's, then
-/// the user's; the one matching the sliders is named), a field and
-/// Save for the user's own, Delete for the one named, and Flat.
-fn equalizer(
+/// The width of a small icon button (`tool`).
+const TOOL: f32 = 26.0;
+/// The most presets of the user's kept; saving one more drops the oldest.
+const MAX_OWN_PRESETS: usize = 20;
+
+/// A small icon button, as metalmpv's: `icon` in `TOOL` points, lit
+/// under the pointer, greyed and inert while not `enabled`.
+fn tool(ui: &mut Ui, tip: &str, enabled: bool, icon: Icon) -> Response {
+    let enabled = enabled && ui.is_enabled();
+    let sense = if enabled {
+        Sense::click()
+    } else {
+        Sense::hover()
+    };
+    let (rect, response) = ui.allocate_exact_size(vec2(TOOL, 24.0), sense);
+    let color = if !enabled {
+        palette::TEXT_WEAK.gamma_multiply(0.5)
+    } else if response.hovered() {
+        palette::TEXT_BRIGHT
+    } else {
+        palette::TEXT
+    };
+    let mut fill = palette::CARD_BG;
+    if enabled && response.hovered() {
+        fill = if response.is_pointer_button_down_on() {
+            palette::PRESSED
+        } else {
+            palette::HOVER
+        };
+        ui.painter().rect_filled(rect, 4.0, fill);
+    }
+    icons::paint(ui.painter(), icon, rect.center(), icons::SIZE, color, fill);
+    response.on_hover_text(tip)
+}
+
+/// The equalizer's switch, Winamp's presets and the user's own in one
+/// list (the one the sliders stand at named; "Custom" otherwise), and
+/// beside it saving the sliders as one's own and deleting one's own; the
+/// name is typed in a row under it (metalmpv's equalizer head).
+fn eq_head(
     ui: &mut Ui,
     dsp: &mut DspSettings,
     presets: &mut Vec<EqPreset>,
-    preset_name: &mut String,
+    naming: &mut Option<String>,
 ) {
-    ui.add_space(6.0);
+    let mine = presets
+        .iter()
+        .position(|p| p.bands == dsp.bands && p.preamp == dsp.preamp);
+    let built_in = eq::PRESETS
+        .iter()
+        .find(|(_, _, bands)| *bands == dsp.bands)
+        .map(|(en, ru, _)| tr!(*en, *ru));
     ui.horizontal(|ui| {
-        ui.spacing_mut().slider_width = 96.0;
-        ui.spacing_mut().item_spacing.x = 4.0;
-        let column = |ui: &mut Ui, label: String, v: &mut f32| {
-            ui.vertical(|ui| {
-                ui.set_width(38.0);
-                ui.vertical_centered(|ui| {
-                    ui.label(
-                        RichText::new(format!("{v:+.0}"))
-                            .size(11.0)
-                            .color(palette::TEXT_WEAK),
-                    );
-                    ui.add(
-                        egui::Slider::new(v, -eq::RANGE_DB..=eq::RANGE_DB)
-                            .vertical()
-                            .show_value(false)
-                            .step_by(1.0),
-                    );
-                    ui.label(RichText::new(label).size(11.0));
-                });
-            });
+        switch(ui, &mut dsp.eq).on_hover_text(tr!(
+            "Ten bands, Winamp's, and a preamp; a limiter after them keeps the sound from clipping.",
+            "Десять полос, как в Winamp, и предусиление; лимитер после них не даёт звуку клиповать."
+        ));
+        ui.add_space(4.0);
+        let name = match (mine, built_in) {
+            (Some(i), _) => presets[i].name.clone(),
+            (None, Some(p)) => p.to_owned(),
+            (None, None) => tr!("Custom", "Другой").to_owned(),
         };
-        column(ui, tr!("Pre", "Пред.").to_owned(), &mut dsp.preamp);
-        ui.add_space(6.0);
-        for (i, &f) in eq::BANDS.iter().enumerate() {
-            let label = if f >= 1000.0 {
-                format!("{}k", f / 1000.0)
-            } else {
-                format!("{f}")
-            };
-            column(ui, label, &mut dsp.bands[i]);
-        }
-    });
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        // The preset the sliders stand at, if any.
-        let built_in = eq::PRESETS
-            .iter()
-            .find(|(_, _, bands)| *bands == dsp.bands)
-            .map(|(en, ru, _)| tr!(*en, *ru).to_owned());
-        let own = presets
-            .iter()
-            .find(|p| p.bands == dsp.bands && p.preamp == dsp.preamp)
-            .map(|p| p.name.clone());
-        let current = own
-            .or(built_in)
-            .unwrap_or_else(|| tr!("Preset…", "Пресет…").to_owned());
+        let width = ui.available_width() - 2.0 * TOOL - 3.0 * ui.spacing().item_spacing.x;
         egui::ComboBox::from_id_salt("eq_preset")
-            .selected_text(shorten(&current, 22))
-            .width(190.0)
+            .selected_text(name)
+            .width(width)
             .show_ui(ui, |ui| {
                 for (en, ru, bands) in eq::PRESETS {
-                    if ui
-                        .selectable_label(bands == dsp.bands, tr!(en, ru))
-                        .clicked()
-                    {
+                    let on = mine.is_none() && bands == dsp.bands;
+                    if ui.selectable_label(on, tr!(en, ru)).clicked() {
                         dsp.bands = bands;
                         dsp.preamp = 0.0;
+                        dsp.eq = true;
                     }
                 }
                 if !presets.is_empty() {
                     ui.separator();
-                }
-                for p in presets.iter() {
-                    let on = p.bands == dsp.bands && p.preamp == dsp.preamp;
-                    if ui.selectable_label(on, &p.name).clicked() {
-                        dsp.bands = p.bands;
-                        dsp.preamp = p.preamp;
-                        *preset_name = p.name.clone();
+                    ui.label(
+                        RichText::new(tr!("Mine", "Мои"))
+                            .small()
+                            .color(palette::TEXT_WEAK),
+                    );
+                    for (i, p) in presets.iter().enumerate() {
+                        if ui.selectable_label(mine == Some(i), &p.name).clicked() {
+                            dsp.bands = p.bands;
+                            dsp.preamp = p.preamp;
+                            dsp.eq = true;
+                        }
                     }
                 }
             });
-        if ui.button(tr!("Flat", "Выровнять")).clicked() {
-            dsp.preamp = 0.0;
-            dsp.bands = [0.0; 10];
-        }
-    });
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.add(
-            egui::TextEdit::singleline(preset_name)
-                .hint_text(tr!("Name", "Имя"))
-                .desired_width(190.0),
-        );
-        let name = preset_name.trim();
-        let exists = presets.iter().position(|p| p.name == name);
-        if ui
-            .add_enabled(
-                !name.is_empty(),
-                egui::Button::new(tr!("Save", "Сохранить")),
-            )
-            .on_hover_text(tr!(
-                "Keep the sliders as a preset of this name",
-                "Сохранить положение ползунков под этим именем"
-            ))
-            .clicked()
+        if tool(
+            ui,
+            tr!("Save as my own…", "Сохранить как свой…"),
+            naming.is_none(),
+            Icon::Plus,
+        )
+        .clicked()
         {
-            let preset = EqPreset {
-                name: name.to_owned(),
-                preamp: dsp.preamp,
-                bands: dsp.bands,
-            };
-            match exists {
-                Some(i) => presets[i] = preset,
-                None => presets.push(preset),
-            }
+            *naming = Some(mine.map(|i| presets[i].name.clone()).unwrap_or_default());
         }
-        if ui
-            .add_enabled(
-                exists.is_some(),
-                egui::Button::new(tr!("Delete", "Удалить")),
-            )
-            .clicked()
-            && let Some(i) = exists
+        if tool(
+            ui,
+            tr!("Delete this preset of mine", "Удалить этот свой пресет"),
+            mine.is_some(),
+            Icon::Delete,
+        )
+        .clicked()
+            && let Some(i) = mine
         {
             presets.remove(i);
         }
     });
+    let full = presets.len() >= MAX_OWN_PRESETS;
+    let names: Vec<String> = presets.iter().map(|p| p.name.clone()).collect();
+    if let Some(name) = name_row(
+        ui,
+        naming,
+        tr!("My equalizer", "Мой эквалайзер"),
+        |n| full && !names.iter().any(|o| o == n),
+    ) {
+        match presets.iter_mut().find(|p| p.name == name) {
+            Some(p) => {
+                p.preamp = dsp.preamp;
+                p.bands = dsp.bands;
+            }
+            None => {
+                if presets.len() >= MAX_OWN_PRESETS {
+                    presets.remove(0);
+                }
+                presets.push(EqPreset {
+                    name,
+                    preamp: dsp.preamp,
+                    bands: dsp.bands,
+                });
+            }
+        }
+    }
+}
+
+/// The row where a name is typed for what is to be saved, while `naming`
+/// holds it: Enter or the tick saves (the name returned), Esc or the
+/// cross gives up. `drops_oldest`: saving that name drops the oldest of a
+/// full list, which is said under it.
+fn name_row(
+    ui: &mut Ui,
+    naming: &mut Option<String>,
+    hint: &str,
+    drops_oldest: impl Fn(&str) -> bool,
+) -> Option<String> {
+    let name = naming.as_mut()?;
+    let (mut done, mut saved) = (false, None);
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.add_sized(
+            vec2(60.0, ui.spacing().interact_size.y),
+            egui::Label::new(tr!("Name", "Название")),
+        );
+        let width = ui.available_width() - 2.0 * TOOL - 3.0 * ui.spacing().item_spacing.x;
+        let field = ui.add(
+            egui::TextEdit::singleline(name)
+                .hint_text(hint)
+                .desired_width(width),
+        );
+        if ui.memory(|m| m.focused().is_none()) {
+            field.request_focus();
+        }
+        let filled = !name.trim().is_empty();
+        let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let ok = tool(ui, tr!("Save", "Сохранить"), filled, Icon::Check);
+        if (enter || ok.clicked()) && filled {
+            saved = Some(name.trim().to_owned());
+            done = true;
+        }
+        let cancel = tool(ui, tr!("Cancel", "Отмена"), true, Icon::Close);
+        if cancel.clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            done = true;
+        }
+    });
+    if drops_oldest(name.trim()) {
+        ui.label(
+            RichText::new(tr!(
+                "The list is full: the oldest of mine gives way.",
+                "Список полон: самый старый свой уступит место."
+            ))
+            .size(12.5)
+            .color(palette::TEXT_WEAK),
+        );
+    }
+    if done {
+        *naming = None;
+    }
+    saved
+}
+
+/// A gain for a label: `+4`, `−3.5`, `0`.
+fn gain_text(gain: f32) -> String {
+    if gain == 0.0 {
+        "0".to_owned()
+    } else if gain.fract() == 0.0 {
+        format!("{gain:+.0}")
+    } else {
+        format!("{gain:+.1}")
+    }
+}
+
+/// The bands as metalmpv's: the preamp's column, a scale of ±12 dB, then
+/// a vertical slider per band with its gain over it and its frequency
+/// and reset under it, the 0 dB line across and a curve through the
+/// knobs drawn under them; greyed while the equalizer is off.
+fn bands(ui: &mut Ui, dsp: &mut DspSettings) {
+    let on = dsp.eq;
     ui.add_space(6.0);
+    ui.add_enabled_ui(on, |ui| {
+        let scale = 28.0;
+        let column = ((ui.available_width() - scale) / (eq::BANDS.len() + 1) as f32).floor();
+        let under = ui.painter().add(egui::Shape::Noop);
+        let mut knobs = Vec::new();
+        let mut travel = None;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.spacing_mut().slider_width = 130.0;
+            // One column: the gain, the slider, the label, the reset; the
+            // knob's place for the curve.
+            let band = |ui: &mut Ui, value: &mut f32, label: String, hz: Option<f32>| {
+                ui.allocate_ui_with_layout(
+                    vec2(column, 216.0),
+                    Layout::top_down(Align::Center),
+                    |ui| {
+                        let color = if *value != 0.0 && on {
+                            palette::ACCENT_HOVER
+                        } else {
+                            palette::TEXT_WEAK
+                        };
+                        ui.label(RichText::new(gain_text(*value)).size(11.0).color(color));
+                        let tip = match hz {
+                            Some(hz) => tr!(
+                                format!("{hz} Hz; a double click puts it back to 0"),
+                                format!("{hz} Гц; двойной щелчок возвращает 0")
+                            ),
+                            None => tr!(
+                                "The preamp, before the bands; a double click puts it back to 0",
+                                "Предусиление перед полосами; двойной щелчок возвращает 0"
+                            )
+                            .to_owned(),
+                        };
+                        let response = ui
+                            .add(
+                                egui::Slider::new(value, -eq::RANGE_DB..=eq::RANGE_DB)
+                                    .vertical()
+                                    .show_value(false)
+                                    .step_by(0.5),
+                            )
+                            .on_hover_text(tip);
+                        let r = response.rect;
+                        let radius = r.width() / 2.5;
+                        let (bottom, top) = (r.bottom() - radius, r.top() + radius);
+                        let t = (*value + eq::RANGE_DB) / (2.0 * eq::RANGE_DB);
+                        let knob = pos2(r.center().x, egui::lerp(bottom..=top, t));
+                        ui.label(RichText::new(label).size(11.0));
+                        if response.double_clicked()
+                            || tool(
+                                ui,
+                                tr!("Back to 0", "Вернуть 0"),
+                                *value != 0.0,
+                                Icon::RotateLeft,
+                            )
+                            .clicked()
+                        {
+                            *value = 0.0;
+                        }
+                        (knob, (top, bottom))
+                    },
+                )
+                .inner
+            };
+            let (_, t) = band(ui, &mut dsp.preamp, tr!("Pre", "Пред.").to_owned(), None);
+            travel = Some(t);
+            let (gutter, _) = ui.allocate_exact_size(vec2(scale, 10.0), Sense::hover());
+            for (i, &hz) in eq::BANDS.iter().enumerate() {
+                let label = if hz >= 1000.0 {
+                    format!("{}k", hz / 1000.0)
+                } else {
+                    format!("{hz}")
+                };
+                let (knob, _) = band(ui, &mut dsp.bands[i], label, Some(hz));
+                knobs.push(knob);
+            }
+            if let Some((top, bottom)) = travel {
+                let x = gutter.right() - 6.0;
+                let font = FontId::proportional(10.0);
+                let painter = ui.painter();
+                for (y, text) in [(top, "+12"), ((top + bottom) / 2.0, "0"), (bottom, "−12")] {
+                    painter.text(
+                        pos2(x, y),
+                        Align2::RIGHT_CENTER,
+                        text,
+                        font.clone(),
+                        palette::TEXT_WEAK,
+                    );
+                }
+            }
+        });
+        let mut shapes = Vec::new();
+        if let (Some((top, bottom)), Some(first), Some(last)) =
+            (travel, knobs.first(), knobs.last())
+        {
+            let zero = (top + bottom) / 2.0;
+            let span = (first.x - column / 2.0)..=(last.x + column / 2.0);
+            shapes.push(egui::Shape::hline(
+                span,
+                zero,
+                Stroke::new(1.0, palette::LINE),
+            ));
+        }
+        let curve = if on {
+            palette::ACCENT.gamma_multiply(0.8)
+        } else {
+            palette::TEXT_WEAK.gamma_multiply(0.4)
+        };
+        shapes.push(egui::Shape::line(smooth(&knobs), Stroke::new(2.0, curve)));
+        ui.painter().set(under, egui::Shape::Vec(shapes));
+    });
+    ui.add_space(4.0);
+}
+
+/// A curve through `points` (Catmull-Rom, eight steps a span).
+fn smooth(points: &[egui::Pos2]) -> Vec<egui::Pos2> {
+    if points.len() < 3 {
+        return points.to_vec();
+    }
+    let at = |i: isize| points[i.clamp(0, points.len() as isize - 1) as usize].to_vec2();
+    let mut out = Vec::new();
+    for i in 0..points.len() as isize - 1 {
+        let (p0, p1, p2, p3) = (at(i - 1), at(i), at(i + 1), at(i + 2));
+        for step in 0..8 {
+            let t = step as f32 / 8.0;
+            let (t2, t3) = (t * t, t * t * t);
+            let v = 0.5
+                * ((2.0 * p1)
+                    + (p2 - p0) * t
+                    + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+                    + (3.0 * p1 - p0 - 3.0 * p2 + p3) * t3);
+            out.push(v.to_pos2());
+        }
+    }
+    out.push(*points.last().expect("three points or more"));
+    out
 }
 
 /// `text` cut to `chars` with an ellipsis.
