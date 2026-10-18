@@ -144,7 +144,10 @@ impl Decoder {
                 }
                 floats.drain(..skip);
                 self.skip_to = None;
-                self.at = (i128::from(to) * i128::from(self.rate) / i128::from(SECOND)) as u64;
+                // The first sample kept: the one sought, or the block's first
+                // when the reader came out past it.
+                self.at =
+                    (i128::from(to.max(time)) * i128::from(self.rate) / i128::from(SECOND)) as u64;
             }
             let Some(trim) = self.trim else {
                 return Ok(Some(floats));

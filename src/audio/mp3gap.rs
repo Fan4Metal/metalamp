@@ -6,12 +6,14 @@
 //! clicks or gaps between tracks.
 
 /// Samples Media Foundation's MP3 decoder gives before the encoder's
-/// delay: it decodes the Xing/Info frame as silence (1152) and leaves out
-/// the first 528 of its own delay (529). Measured with `--bench gapless`:
-/// it gives the frames' samples plus 624 (1152 - 528), the end ends
-/// `padding - 529` samples into the padding, and the music starts 1153 +
-/// the delay into what it gives.
-pub const DECODER_OFFSET: u64 = 1153;
+/// delay, past those of the Xing/Info frame, which it decodes as silence
+/// (a frame's: 1152 for MPEG-1, 576 for MPEG-2 and 2.5, 16 to 24 kHz): it
+/// leaves out the first 528 of its own delay (529). Measured with
+/// `--bench gapless`: it gives the frames' samples plus a frame less 528
+/// (624 for MPEG-1, 48 for MPEG-2), the end ends `padding - 529` samples
+/// into the padding, and the music starts a frame + 1 + the delay into
+/// what it gives (1153 + the delay for MPEG-1, 577 + it for MPEG-2).
+pub const DECODER_OFFSET: u64 = 1;
 
 /// The music's place among the samples the decoder gives: from `start`,
 /// `length` samples.
@@ -29,7 +31,7 @@ pub fn trim_of(info: &GapInfo) -> Option<Trim> {
         return None;
     }
     Some(Trim {
-        start: DECODER_OFFSET + u64::from(info.delay),
+        start: u64::from(info.samples_per_frame) + DECODER_OFFSET + u64::from(info.delay),
         length: info.music_samples()?,
     })
 }
