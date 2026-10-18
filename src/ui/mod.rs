@@ -188,6 +188,20 @@ fn notches(kept: &mut (f32, f64), delta: f32, time: f64) -> i32 {
     whole as i32
 }
 
+/// The key that let a text field go (Enter, Esc) taken: egui leaves it in
+/// the frame's input, where the window's own use of it would act too (a
+/// modal closing, the pane last clicked playing its selection). True when
+/// `field` was let go by Enter.
+pub fn take_leaving_key(ui: &Ui, field: &egui::Response) -> bool {
+    if !field.lost_focus() {
+        return false;
+    }
+    ui.input_mut(|i| {
+        i.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
+        i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::notches;

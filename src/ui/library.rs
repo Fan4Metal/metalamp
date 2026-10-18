@@ -637,7 +637,11 @@ fn top_bar(
     if std::mem::take(&mut lv.focus_search) {
         resp.request_focus();
     }
-    if resp.has_focus() && ui.input(|i| i.key_pressed(Key::Escape)) {
+    // egui lets the field go at Esc before it is drawn.
+    let escape =
+        (resp.has_focus() || resp.lost_focus()) && ui.input(|i| i.key_pressed(Key::Escape));
+    super::take_leaving_key(ui, &resp);
+    if escape {
         lv.query.clear();
         resp.surrender_focus();
     }

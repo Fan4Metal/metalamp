@@ -135,7 +135,11 @@ pub fn show(
         .hint_text(tr!("Search in the playlist", "Поиск в плейлисте"))
         .desired_width(f32::INFINITY);
     let resp = bar.add(edit);
-    if resp.has_focus() && bar.input(|i| i.key_pressed(Key::Escape)) {
+    // egui lets the field go at Esc before it is drawn.
+    let escape =
+        (resp.has_focus() || resp.lost_focus()) && bar.input(|i| i.key_pressed(Key::Escape));
+    super::take_leaving_key(&bar, &resp);
+    if escape {
         pv.query.clear();
         resp.surrender_focus();
     }

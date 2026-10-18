@@ -909,14 +909,18 @@ fn name_row(
             field.request_focus();
         }
         let filled = !name.trim().is_empty();
-        let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        // Esc lets the field go before it is drawn.
+        let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        let enter = super::take_leaving_key(ui, &field);
         let ok = tool(ui, tr!("Save", "Сохранить"), filled, Icon::Check);
         if (enter || ok.clicked()) && filled {
             saved = Some(name.trim().to_owned());
             done = true;
         }
         let cancel = tool(ui, tr!("Cancel", "Отмена"), true, Icon::Close);
-        if cancel.clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if cancel.clicked() || escape {
+            // Not the window's Esc too.
+            ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
             done = true;
         }
     });
@@ -1250,6 +1254,7 @@ fn own_colour(ui: &mut Ui, accent: &mut Accent, chosen: bool) -> bool {
                     .unwrap_or_else(|| mode.show([base.r(), base.g(), base.b()]));
                 let width = PICKER - label.rect.width() - ui.spacing().item_spacing.x;
                 let field = ui.add(egui::TextEdit::singleline(&mut text).desired_width(width));
+                super::take_leaving_key(ui, &field);
                 if field.changed()
                     && let Some(typed) = Accent::typed(&text)
                 {
@@ -1275,7 +1280,9 @@ fn own_colour(ui: &mut Ui, accent: &mut Accent, chosen: bool) -> bool {
                         .speed(0.5)
                         .range(0..=255)
                         .prefix(name);
-                    edited |= ui.add_sized(size, field).changed();
+                    let field = ui.add_sized(size, field);
+                    super::take_leaving_key(ui, &field);
+                    edited |= field.changed();
                 }
                 if edited {
                     *accent = custom(rgb);
