@@ -5,12 +5,14 @@
 
 use std::path::Path;
 
+use windows::Win32::Foundation::E_FAIL;
 use windows::Win32::Media::MediaFoundation::{
     IMFSourceReader, MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_MAJOR_TYPE,
     MF_MT_SUBTYPE, MF_PD_DURATION, MF_SOURCE_READER_ALL_STREAMS,
     MF_SOURCE_READER_FIRST_AUDIO_STREAM, MF_SOURCE_READER_MEDIASOURCE,
-    MF_SOURCE_READERF_ENDOFSTREAM, MFAudioFormat_Float, MFCreateMediaType,
-    MFCreateSourceReaderFromURL, MFMediaType_Audio,
+    MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED, MF_SOURCE_READERF_ENDOFSTREAM,
+    MF_SOURCE_READERF_ERROR, MFAudioFormat_Float, MFCreateMediaType, MFCreateSourceReaderFromURL,
+    MFMediaType_Audio,
 };
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
 use windows::core::{GUID, PCWSTR, Result};
@@ -33,6 +35,9 @@ pub struct Decoder {
     trim: Option<super::mp3gap::Trim>,
     /// The index of the next sample the reader gives (per channel).
     at: u64,
+    /// The first block, read at the opening to learn the format the
+    /// decoder settles on (`first_block`).
+    pending: Option<Vec<f32>>,
 }
 
 const STREAM: u32 = MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32;
@@ -50,9 +55,7 @@ impl Decoder {
             float.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_Float)?;
             reader.SetCurrentMediaType(STREAM, None, &float)?;
         }
-        let current = unsafe { reader.GetCurrentMediaType(STREAM)? };
-        let rate = unsafe { current.GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND)? };
-        let channels = unsafe { current.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS)? } as u16;
+        let (mut rate, mut channels) = format_of(&reader)?;
         let duration = unsafe {
             reader.GetPresentationAttribute(MF_SOURCE_READER_MEDIASOURCE.0 as u32, &MF_PD_DURATION)
         }
@@ -68,6 +71,19 @@ impl Decoder {
         } else {
             None
         };
+        // An AAC with SBR not signalled in its header (HE-AAC) is decoded
+        // at twice the rate the file says, which the reader tells with the
+        // first sample: read, so the output is opened for what comes. Not
+        // an MP3, whose samples are counted from the start for the trim.
+        let mut pending = None;
+        if !is_mp3 {
+            let (block, changed) = first_block(&reader)?;
+            if changed {
+                (rate, channels) = format_of(&reader)?;
+                log::debug!("{}: decoded as {rate} Hz, {channels} ch", path.display());
+            }
+            pending = block;
+        }
         // The music's length, not the encoder's padding with it.
         let duration = match trim {
             Some(t) if rate > 0 => {
@@ -83,6 +99,7 @@ impl Decoder {
             skip_to: None,
             trim,
             at: 0,
+            pending,
         })
     }
 
@@ -102,38 +119,19 @@ impl Decoder {
         let position = PROPVARIANT::from(time);
         unsafe { self.reader.SetCurrentPosition(&GUID::zeroed(), &position)? };
         self.skip_to = Some(time);
+        self.pending = None;
         Ok(())
     }
 
     /// The next block of samples; `None` at the end.
     pub fn next(&mut self) -> Result<Option<Vec<f32>>> {
+        if let Some(block) = self.pending.take() {
+            return Ok(Some(block));
+        }
         loop {
-            let (mut flags, mut time, mut sample) = (0u32, 0i64, None);
-            unsafe {
-                self.reader.ReadSample(
-                    STREAM,
-                    0,
-                    None,
-                    Some(&mut flags),
-                    Some(&mut time),
-                    Some(&mut sample),
-                )?
-            };
-            if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+            let Some((mut floats, time)) = read(&self.reader)? else {
                 return Ok(None);
-            }
-            let Some(sample) = sample else { continue };
-            let buffer = unsafe { sample.ConvertToContiguousBuffer()? };
-            let (mut data, mut length) = (std::ptr::null_mut(), 0u32);
-            unsafe { buffer.Lock(&mut data, None, Some(&mut length))? };
-            let bytes = unsafe { std::slice::from_raw_parts(data, length as usize) };
-            let mut floats: Vec<f32> = bytes
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|b| f32::from_le_bytes(*b))
-                .collect();
-            unsafe { buffer.Unlock()? };
+            };
             if let Some(to) = self.skip_to {
                 // What comes before the time sought, in the block that
                 // holds it.
@@ -170,5 +168,67 @@ impl Decoder {
             floats.drain(..keep_from * channels);
             return Ok(Some(floats));
         }
+    }
+}
+
+/// The rate and channels the reader gives now.
+fn format_of(reader: &IMFSourceReader) -> Result<(u32, u16)> {
+    let current = unsafe { reader.GetCurrentMediaType(STREAM)? };
+    let rate = unsafe { current.GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND)? };
+    let channels = unsafe { current.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS)? } as u16;
+    Ok((rate, channels))
+}
+
+/// The first block and whether the reader changed its format before it.
+fn first_block(reader: &IMFSourceReader) -> Result<(Option<Vec<f32>>, bool)> {
+    let mut changed = false;
+    let block = read_with(reader, &mut |flags| {
+        changed |= flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0 as u32 != 0;
+    })?;
+    Ok((block.map(|(floats, _)| floats), changed))
+}
+
+/// The next sample's floats and time; `None` at the end. An error the
+/// reader reports in its flags is an error: it gives nothing more.
+fn read(reader: &IMFSourceReader) -> Result<Option<(Vec<f32>, i64)>> {
+    read_with(reader, &mut |_| {})
+}
+
+fn read_with(
+    reader: &IMFSourceReader,
+    seen: &mut dyn FnMut(u32),
+) -> Result<Option<(Vec<f32>, i64)>> {
+    loop {
+        let (mut flags, mut time, mut sample) = (0u32, 0i64, None);
+        unsafe {
+            reader.ReadSample(
+                STREAM,
+                0,
+                None,
+                Some(&mut flags),
+                Some(&mut time),
+                Some(&mut sample),
+            )?
+        };
+        seen(flags);
+        if flags & MF_SOURCE_READERF_ERROR.0 as u32 != 0 {
+            return Err(E_FAIL.into());
+        }
+        if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+            return Ok(None);
+        }
+        let Some(sample) = sample else { continue };
+        let buffer = unsafe { sample.ConvertToContiguousBuffer()? };
+        let (mut data, mut length) = (std::ptr::null_mut(), 0u32);
+        unsafe { buffer.Lock(&mut data, None, Some(&mut length))? };
+        let bytes = unsafe { std::slice::from_raw_parts(data, length as usize) };
+        let floats: Vec<f32> = bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
+            .collect();
+        unsafe { buffer.Unlock()? };
+        return Ok(Some((floats, time)));
     }
 }
