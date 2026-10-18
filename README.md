@@ -98,6 +98,7 @@ The playlist on the right (`Alt+E` shows or hides it) lists "Artist – Title" w
 | `Alt+E` | Show or hide the playlist |
 | `I`, `Alt+3` | File info of the selected track (else of the one playing) |
 | Arrows, `Page Up`, `Page Down`, `Home`, `End` | Move in the pane clicked last |
+| Letters, with the pointer over the artists | Go to the first artist starting with them (the same letter again goes on to the next one) |
 | `Enter` | Play the selection |
 | `Delete` | Remove from the playlist |
 | `F1` | About (also a click on the icon in the title row) |

@@ -395,12 +395,16 @@ impl App {
     }
 
     /// The player's keys, when no text field takes them: Space, Z X C V B
-    /// (Winamp's), Ctrl+arrows, Shift+arrows, M, R, S.
-    fn player_keys(&mut self, ctx: &egui::Context) {
+    /// (Winamp's), Ctrl+arrows, Shift+arrows, M, R, S; the letters not
+    /// while `letters` (they go to an artist).
+    fn player_keys(&mut self, ctx: &egui::Context, letters: bool) {
         if ctx.memory(|m| m.focused().is_some()) {
             return;
         }
-        let pressed = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_key(m, k));
+        let pressed = |m: Modifiers, k: Key| {
+            let letter = m == Modifiers::NONE && k != Key::Space;
+            !(letters && letter) && ctx.input_mut(|i| i.consume_key(m, k))
+        };
         if pressed(Modifiers::NONE, Key::Space) || pressed(Modifiers::NONE, Key::C) {
             self.player.toggle_pause();
         }
@@ -747,10 +751,17 @@ impl eframe::App for App {
         let modal = self.about.open || self.file_info.open;
         // The file info: Alt+3 as Winamp's, or I (not while typing).
         let typing = ctx.memory(|m| m.focused().is_some());
+        // Letters typed over the artists' pane go to an artist, not to
+        // the keys below.
+        let letters = !modal
+            && !typing
+            && !self.settings.library_folders.is_empty()
+            && self.library_view.pointer_over_artists(&ctx);
+        self.library_view.letters = letters;
         if !modal
             && ctx.input_mut(|i| {
                 i.consume_key(Modifiers::ALT, Key::Num3)
-                    || (!typing && i.consume_key(Modifiers::NONE, Key::I))
+                    || (!typing && !letters && i.consume_key(Modifiers::NONE, Key::I))
             })
         {
             self.info_request = self.info_path();
@@ -778,7 +789,7 @@ impl eframe::App for App {
         }
         self.take_dropped(&ctx);
         if !modal {
-            self.player_keys(&ctx);
+            self.player_keys(&ctx, letters);
         }
         if !frameless::is_maximized(&ctx) {
             frameless::resize_edges(root_ui);

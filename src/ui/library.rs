@@ -111,6 +111,74 @@ pub struct LibraryView {
     /// Play every track shown once the view is built (an artist double
     /// clicked).
     play_shown: bool,
+    /// The artists' pane in the frame before, for `pointer_over_artists`.
+    artists_rect: Option<Rect>,
+    /// Letters typed over the artists' pane go to an artist (set by the
+    /// app before its own keys, which then leave the letters alone).
+    pub letters: bool,
+    typed: TypeAhead,
+}
+
+/// The letters typed in a row, as in Windows' lists: each within
+/// `TypeAhead::PAUSE` of the one before adds to the text looked for.
+#[derive(Default)]
+struct TypeAhead {
+    text: String,
+    at: Option<Instant>,
+}
+
+impl TypeAhead {
+    const PAUSE: Duration = Duration::from_secs(1);
+
+    /// Takes the letters typed this frame; true when there were any.
+    fn feed(&mut self, ui: &Ui) -> bool {
+        let typed: String = ui.input(|i| {
+            if i.modifiers.alt || i.modifiers.command {
+                return String::new();
+            }
+            i.events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Text(t) => Some(t.as_str()),
+                    _ => None,
+                })
+                .collect()
+        });
+        let typed: String = typed.chars().filter(|c| !c.is_whitespace()).collect();
+        if typed.is_empty() {
+            return false;
+        }
+        let now = Instant::now();
+        if self
+            .at
+            .is_none_or(|at| now.duration_since(at) > Self::PAUSE)
+        {
+            self.text.clear();
+        }
+        self.at = Some(now);
+        self.text.extend(typed.chars().flat_map(char::to_lowercase));
+        true
+    }
+}
+
+/// The place among `names` (lower-case, in the order shown) that typing
+/// `typed` (lower-case) goes to: the first name starting with it; one
+/// letter typed again and again goes on through the names starting with
+/// it, as in Windows' lists.
+fn type_ahead(names: &[String], typed: &str) -> Option<usize> {
+    let mut chars = typed.chars();
+    let first = chars.next()?;
+    let repeats = chars.clone().count();
+    if repeats > 0 && chars.all(|c| c == first) {
+        let starting: Vec<usize> = (0..names.len())
+            .filter(|&i| names[i].starts_with(first))
+            .collect();
+        if starting.is_empty() {
+            return None;
+        }
+        return Some(starting[repeats % starting.len()]);
+    }
+    names.iter().position(|n| n.starts_with(typed))
 }
 
 impl LibraryView {
@@ -129,7 +197,22 @@ impl LibraryView {
             scroll: [None; 3],
             reset_tracks: false,
             play_shown: false,
+            artists_rect: None,
+            letters: false,
+            typed: TypeAhead::default(),
         }
+    }
+
+    /// Whether the pointer is over the artists' pane (with nothing laid
+    /// over it there), where typed letters go to an artist.
+    pub fn pointer_over_artists(&self, ctx: &egui::Context) -> bool {
+        let (Some(rect), Some(pos)) = (self.artists_rect, ctx.pointer_hover_pos()) else {
+            return false;
+        };
+        rect.contains(pos)
+            && ctx
+                .layer_id_at(pos)
+                .is_none_or(|l| l.order == egui::Order::Background)
     }
 
     /// The track selected last in the tracks' table, if any.
@@ -673,6 +756,7 @@ fn artists_pane(
     actions: &mut Vec<LibraryAction>,
     changed: &mut bool,
 ) {
+    lv.artists_rect = Some(rect);
     let Some(view) = &lv.view else { return };
     let columns = [
         Column::left(tr!("Artist", "Исполнитель")),
@@ -748,6 +832,21 @@ fn artists_pane(
     {
         choose = Some(row);
         lv.scroll[0] = Some(row);
+    }
+    // Letters typed over the pane: the first artist starting with them.
+    if lv.letters && lv.typed.feed(&ui) {
+        let names: Vec<String> = view
+            .artists
+            .iter()
+            .map(|a| {
+                shown_name(&library.artists[a.id as usize].name, unknown_artist()).to_lowercase()
+            })
+            .collect();
+        if let Some(i) = type_ahead(&names, &lv.typed.text) {
+            choose = Some(i + 1);
+            lv.scroll[0] = Some(i + 1);
+            lv.focus = Pane::Artists;
+        }
     }
     let id_of = |row: usize| (row > 0).then(|| view.artists[row - 1].id);
     let enter = keys_free && lv.focus == Pane::Artists && ui.input(|i| i.key_pressed(Key::Enter));
@@ -1424,6 +1523,30 @@ fn play_selection(view: &View, selected: &BTreeSet<usize>) -> LibraryAction {
 mod tests {
     use super::*;
     use crate::library::Track;
+
+    #[test]
+    fn typed_letters_go_to_the_first_name_and_then_on() {
+        let names: Vec<String> = [
+            "all",
+            "arion",
+            "auri",
+            "battle beast",
+            "beast in black",
+            "billy idol",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(type_ahead(&names, "b"), Some(3));
+        assert_eq!(type_ahead(&names, "be"), Some(4));
+        assert_eq!(type_ahead(&names, "bi"), Some(5));
+        assert_eq!(type_ahead(&names, "bb"), Some(4));
+        assert_eq!(type_ahead(&names, "bbb"), Some(5));
+        assert_eq!(type_ahead(&names, "bbbb"), Some(3));
+        assert_eq!(type_ahead(&names, "c"), None);
+        assert_eq!(type_ahead(&names, "bx"), None);
+        assert_eq!(type_ahead(&names, ""), None);
+    }
 
     fn lib() -> Library {
         let t = |path: &str, artist: &str, album: &str, year: u16, n: u16| Track {
