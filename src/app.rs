@@ -1076,8 +1076,7 @@ impl eframe::App for App {
                 }
             }
         } else {
-            // A hidden playlist gives the keys back to the library.
-            self.playlist_view.focused = false;
+            self.playlist_view.hidden();
         }
         egui::Panel::bottom("status")
             .exact_size(crate::ui::status::HEIGHT)

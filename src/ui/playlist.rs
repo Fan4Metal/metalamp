@@ -35,6 +35,9 @@ pub struct PlaylistView {
     pub focused: bool,
     /// Rows being dragged: where the drag started.
     dragging: bool,
+    /// Shift+arrows: the entry the range grows from and the one the keys
+    /// left it at (the anchor then; a click elsewhere starts anew).
+    shift_range: Option<(usize, usize)>,
     scroll_to: Option<usize>,
     /// The playlist's revision the selection belongs to.
     revision: u64,
@@ -85,6 +88,13 @@ impl Rows {
 }
 
 impl PlaylistView {
+    /// The playlist is not shown: the keys go back to the library, and a
+    /// drag under way is given up.
+    pub fn hidden(&mut self) {
+        self.focused = false;
+        self.dragging = false;
+    }
+
     /// The entry selected last, if any.
     pub fn selected_entry(&self) -> Option<usize> {
         self.anchor
@@ -139,6 +149,7 @@ pub fn show(
         // The list changed elsewhere: indices no longer mean the same rows.
         pv.selected.clear();
         pv.anchor = None;
+        pv.shift_range = None;
         pv.revision = player.queue.revision;
     }
     let full = ui.available_rect_before_wrap();
@@ -378,23 +389,43 @@ pub fn show(
                 pv.dragging = true;
             }
         }
-        // While dragging: the slot under the pointer, shown as a line.
+        // While dragging over the list: the slot under the pointer, shown
+        // as a line (let go elsewhere, nothing moves); near its top or
+        // bottom edge the list scrolls.
         if pv.dragging
             && let Some(p) = ui.ctx().pointer_interact_pos()
+            && body.x_range().contains(p.x)
         {
-            let slot =
-                (((p.y - area.top()) / ROW_HEIGHT).round().max(0.0) as usize).min(shown.len());
-            let y = area.top() + slot as f32 * ROW_HEIGHT;
-            painter.line_segment(
-                [pos2(area.left(), y), pos2(area.right(), y)],
-                egui::Stroke::new(2.0, palette::accent()),
-            );
-            drop_slot = Some(slot);
+            if body.contains(p) {
+                let slot =
+                    (((p.y - area.top()) / ROW_HEIGHT).round().max(0.0) as usize).min(shown.len());
+                let y = area.top() + slot as f32 * ROW_HEIGHT;
+                painter.line_segment(
+                    [pos2(area.left(), y), pos2(area.right(), y)],
+                    egui::Stroke::new(2.0, palette::accent()),
+                );
+                drop_slot = Some(slot);
+            }
+            let step = if p.y < body.top() + ROW_HEIGHT {
+                6.0
+            } else if p.y > body.bottom() - ROW_HEIGHT {
+                -6.0
+            } else {
+                0.0
+            };
+            if step != 0.0 {
+                ui.scroll_with_delta(vec2(0.0, step));
+                ui.ctx().request_repaint();
+            }
         }
         area_resp
     });
     ui.ctx()
         .data_mut(|d| d.insert_temp(egui::Id::new("playlist_offset"), out.state.offset.y));
+    // Esc gives the drag up.
+    if pv.dragging && ui.input(|i| i.key_pressed(Key::Escape)) {
+        pv.dragging = false;
+    }
     if pv.dragging && ui.input(|i| i.pointer.any_released()) {
         pv.dragging = false;
         if let Some(slot) = drop_slot {
@@ -480,9 +511,27 @@ pub fn show(
     if pv.focused && keys_free {
         let rows = shown.len();
         let at = pv.anchor.and_then(|a| shown.iter().position(|&s| s == a));
-        if let Some(row) = table::key_move(ui, at, rows, (body.height() / ROW_HEIGHT) as usize) {
+        let page = ((body.height() / ROW_HEIGHT) as usize).max(1);
+        if let Some(row) = table::key_move(ui, at, rows, page) {
             let i = shown[row];
-            table::click_select(&mut pv.selected, &mut pv.anchor, i, Modifiers::NONE);
+            // Shift+arrows grow a range from where it started, as in the
+            // tables.
+            let start = match pv.shift_range {
+                Some((start, end)) if pv.anchor == Some(end) => Some(start),
+                _ => pv.anchor,
+            }
+            .and_then(|s| shown.iter().position(|&e| e == s));
+            match start {
+                Some(from) if modifiers.shift => {
+                    let (lo, hi) = (from.min(row), from.max(row));
+                    pv.selected = shown[lo..=hi].iter().copied().collect();
+                    pv.shift_range = Some((shown[from], i));
+                    pv.anchor = Some(i);
+                }
+                _ => {
+                    table::click_select(&mut pv.selected, &mut pv.anchor, i, Modifiers::NONE);
+                }
+            }
             pv.scroll_to = Some(i);
         }
         if ui.input(|i| i.key_pressed(Key::Enter))
