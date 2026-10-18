@@ -51,8 +51,9 @@ pub struct Visualizer {
     /// Columns owed to the spectrogram (fractions carried on).
     gram_due: f32,
     gram_texture: Option<egui::TextureHandle>,
-    /// What the texture shows: changed columns or colours make it anew.
-    gram_drawn: Option<(u64, [Color32; 4])>,
+    /// What the texture shows: changed columns, colours or width make it
+    /// anew.
+    gram_drawn: Option<(u64, [Color32; 4], usize)>,
     gram_count: u64,
     /// The oscilloscope's stretch of the wave.
     scope: Vec<f32>,
@@ -365,7 +366,8 @@ impl Visualizer {
             palette::spectrum_high(),
             palette::spectrum_peak(),
         ];
-        let drawn = (self.gram_count, colours);
+        // Also the width: resized while paused, it is drawn anew.
+        let drawn = (self.gram_count, colours, cap);
         if self.gram_drawn != Some(drawn) || self.gram_texture.is_none() {
             // Right-aligned: the newest column at the right edge, the top
             // row the highest band.
