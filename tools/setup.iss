@@ -60,6 +60,8 @@ english.AssocStatus=Registering file types...
 russian.AssocStatus=Регистрация типов файлов...
 english.ChooseDefault=Choose MetalAMP as the default player (opens Windows Settings)
 russian.ChooseDefault=Выбрать MetalAMP проигрывателем по умолчанию (откроются параметры Windows)
+english.DeleteSettings=Delete the settings, the library index and the covers of MetalAMP as well (%1)?
+russian.DeleteSettings=Удалить и настройки, индекс библиотеки и обложки MetalAMP (%1)?
 
 [Tasks]
 Name: "assoc"; Description: "{cm:AssocTask}"; GroupDescription: "{cm:AssocGroup}"
@@ -88,3 +90,36 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}
 [UninstallRun]
 ; Removes everything --register wrote; nothing happens if it was not run.
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--unregister"; RunOnceId: "UnregisterFileTypes"; Flags: runhidden waituntilterminated
+
+[Code]
+// A copy running from the installed folder is closed first, as by its
+// window's cross (its settings saved): else its exe stays behind, and it
+// would write its settings again after they were deleted. Copies elsewhere
+// (a portable one) are left alone.
+function InitializeUninstall(): Boolean;
+var
+  Code: Integer;
+begin
+  Exec('powershell.exe',
+    '-NoProfile -NonInteractive -Command "$p = Get-Process metalamp -ErrorAction SilentlyContinue | ' +
+    'Where-Object { $_.Path -eq ''' + ExpandConstant('{app}\{#MyAppExeName}') + ''' }; ' +
+    '$p | ForEach-Object { [void]$_.CloseMainWindow() }; ' +
+    '$p | Wait-Process -Timeout 5 -ErrorAction SilentlyContinue"',
+    '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Result := True;
+end;
+
+// The settings, the library index and the covers are left unless the user
+// wants them gone (qrec's way); a silent uninstallation leaves them.
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Settings: String;
+begin
+  if CurUninstallStep = usPostUninstall then
+  begin
+    Settings := ExpandConstant('{userappdata}\{#MyAppName}');
+    if DirExists(Settings) and not UninstallSilent then
+      if MsgBox(FmtMessage(CustomMessage('DeleteSettings'), [Settings]), mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
+        DelTree(Settings, True, True, True);
+  end;
+end;
