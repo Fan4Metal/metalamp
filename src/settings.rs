@@ -73,6 +73,16 @@ pub struct Settings {
     pub output_device_name: String,
     /// The sound processing (`audio::dsp`).
     pub dsp: crate::audio::dsp::DspSettings,
+    /// The user's equalizer presets (Winamp's are built in).
+    pub eq_presets: Vec<EqPreset>,
+}
+
+/// An equalizer setting saved under a name.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EqPreset {
+    pub name: String,
+    pub preamp: f32,
+    pub bands: [f32; 10],
 }
 
 /// The player bar's layout.
@@ -132,6 +142,7 @@ impl Default for Settings {
             output_device: String::new(),
             output_device_name: String::new(),
             dsp: Default::default(),
+            eq_presets: Vec::new(),
         }
     }
 }

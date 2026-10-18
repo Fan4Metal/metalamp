@@ -190,7 +190,7 @@ impl App {
         }
     }
 
-    /// Scan the library's folders again (F5, a folder added or removed),
+    /// Scan the library's folders again (Ctrl+R, a folder added or removed),
     /// keeping the tags of unchanged files. A scan under way is dropped.
     pub(crate) fn rescan(&mut self) {
         self.scan_progress = None;
@@ -801,13 +801,16 @@ impl eframe::App for App {
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F1)) {
                 self.about.toggle();
             }
-            if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::P)) {
+            // F5 as metalmpv's, Ctrl+P as Winamp's Preferences.
+            if ctx.input_mut(|i| {
+                i.consume_key(Modifiers::NONE, Key::F5) || i.consume_key(Modifiers::COMMAND, Key::P)
+            }) {
                 self.settings_dialog.toggle();
             }
             if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::O)) {
                 self.pick_folder(frame);
             }
-            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F5)) {
+            if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::R)) {
                 self.rescan();
             }
             if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::F)) {

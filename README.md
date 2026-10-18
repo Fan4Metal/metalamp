@@ -31,7 +31,7 @@ MetalAMP is an audio player for Windows built around a media library in the mann
 - **File info** as Winamp's: every field of a track's tag, its cover and its audio properties, in a window opened by a click on the player's cover or `I` (see [File info](#file-info)).
 - **One window**: files opened from Explorer go to the window already open.
 - **File associations** with an icon for each type, offered by the installer.
-- **English or Russian interface**: it follows the language of Windows and can be changed in the settings window (`Ctrl+P`).
+- **English or Russian interface**: it follows the language of Windows and can be changed in the settings window (`F5`).
 - **Portable**: the [portable archive](#installation) keeps its settings, the library index and the covers next to the program.
 - **Privacy**: no network access beyond the optional update check (see [Update check and privacy](#update-check-and-privacy)).
 
@@ -49,7 +49,7 @@ Windows 10 version 1607 or later is required (its FLAC decoder came with that ve
 
 ### The library
 
-On the first start the window offers to add a music folder: `Ctrl+Shift+O`, or a folder dropped on the window. The folders' button in the library bar lists the folders and removes one. The folders are read on a thread of their own: the tags of each file (title, artist, album artist, album, year, track and disc numbers, genre, length, bit rate) and, where a tag lacks something, what the folders say in the usual layout `Artist\(Year) Album\NN - Title.mp3`. The library fills as it is read; a first reading of 4942 MP3 files on a hard disk took about 50 seconds. The result is kept in an index, so later starts show the library at once and read again only the files whose size or time changed; `F5` or the bar's button reads the folders again.
+On the first start the window offers to add a music folder: `Ctrl+Shift+O`, or a folder dropped on the window. The folders' button in the library bar lists the folders and removes one. The folders are read on a thread of their own: the tags of each file (title, artist, album artist, album, year, track and disc numbers, genre, length, bit rate) and, where a tag lacks something, what the folders say in the usual layout `Artist\(Year) Album\NN - Title.mp3`. The library fills as it is read; a first reading of 4942 MP3 files on a hard disk took about 50 seconds. The result is kept in an index, so later starts show the library at once and read again only the files whose size or time changed; `Ctrl+R` or the bar's button reads the folders again.
 
 Albums are grouped as Winamp groups them: by album artist (else artist) and album title, whatever the years of their tracks; an album's year is the earliest of them. Artists are sorted by name with numbers in their order, each artist's albums by year.
 
@@ -73,11 +73,11 @@ The player bar, in its default layout, is laid out as Winamp's main window. On t
 
 Media Foundation, the media framework of Windows, decodes the files, and the WASAPI shared mode plays them on the default device; a change of the default device or a device unplugged is followed without stopping. The track after the current one is opened in advance, so tracks of one format follow each other without a pause. An MP3 encoder adds silence before the music and after it; MetalAMP reads how much from the file's LAME tag and leaves it out, so an album recorded without pauses plays as one piece.
 
-The sound can be processed on its way to the device, all of it off by default and switched on in the settings window. **The same loudness for every track** measures a track after EBU R128 in the background before its first play (the measurement is kept, so each track is read once) and brings it to −18 LUFS, a quiet track only as far as its peaks allow. The **equalizer** has Winamp's ten bands and a preamp. The **enhancer** has four amounts of 0 to 10: bass (a shelf under 100 Hz and the harmonics of the bass, which small speakers make heard as bass they cannot play), clarity (the air over 6 kHz an MP3's low-pass took away), width (a wider stereo image, the bass kept in the middle) and warmth (a soft rounding of the peaks, as tape does). Whenever any of these is on, a look-ahead limiter after them keeps the sound from clipping. The spectrum analyzer shows the result.
+The sound can be processed on its way to the device, all of it off by default and switched on in the settings window. **The same loudness for every track** measures a track after EBU R128 in the background before its first play (the measurement is kept, so each track is read once) and brings it to −18 LUFS, a quiet track only as far as its peaks allow. The **equalizer** has Winamp's ten bands and a preamp, Winamp's presets (Rock, Pop, Classical and the rest) and the user's own, saved under a name. The **enhancer** has four amounts of 0 to 10: bass (a shelf under 100 Hz and the harmonics of the bass, which small speakers make heard as bass they cannot play), clarity (the air over 6 kHz an MP3's low-pass took away), width (a wider stereo image, the bass kept in the middle) and warmth (a soft rounding of the peaks, as tape does). Whenever any of these is on, a look-ahead limiter after them keeps the sound from clipping. The spectrum analyzer shows the result.
 
 ### Settings
 
-The settings window (`Ctrl+P`, as Winamp's Preferences, or the gear in the library's bar) holds the interface language, the layout of the player bar, the sound output device (Windows' default, which follows the device chosen in Windows, or one of the devices present; a chosen device that is absent when a track starts is replaced by the default one until it is back), the sound processing (loudness, the equalizer, the enhancer) and the update check. **Reset** puts them back to their defaults.
+The settings window (`F5`, or `Ctrl+P` as Winamp's Preferences, or the gear in the library's bar) holds the interface language, the layout of the player bar, the sound output device (Windows' default, which follows the device chosen in Windows, or one of the devices present; a chosen device that is absent when a track starts is replaced by the default one until it is back), the sound processing (loudness, the equalizer, the enhancer) and the update check. **Reset** puts them back to their defaults.
 
 ### The playlist
 
@@ -100,7 +100,7 @@ The playlist on the right (`Alt+E` shows or hides it) lists "Artist – Title" w
 | `Ctrl+F` | Search the library |
 | `Ctrl+O` | Open files |
 | `Ctrl+Shift+O` | Add a music folder |
-| `F5` | Read the library's folders again |
+| `Ctrl+R` | Read the library's folders again |
 | `Alt+E` | Show or hide the playlist |
 | `I`, `Alt+3` | File info of the selected track (else of the one playing) |
 | Arrows, `Page Up`, `Page Down`, `Home`, `End` | Move in the pane clicked last |
@@ -108,7 +108,7 @@ The playlist on the right (`Alt+E` shows or hides it) lists "Artist – Title" w
 | `Enter` | Play the selection |
 | `Delete` | Remove from the playlist |
 | `F1` | About (also a click on the icon in the title row) |
-| `Ctrl+P` | Settings (also the gear in the library's bar) |
+| `F5`, `Ctrl+P` | Settings (also the gear in the library's bar) |
 
 The media keys of keyboards and headsets work while the window is in front.
 

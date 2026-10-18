@@ -646,7 +646,7 @@ fn top_bar(
             ui,
             Icon::Settings,
             false,
-            tr!("Settings (Ctrl+P)", "Настройки (Ctrl+P)"),
+            tr!("Settings (F5)", "Настройки (F5)"),
         )
         .clicked()
         {
@@ -695,7 +695,10 @@ fn top_bar(
             ui,
             Icon::Refresh,
             false,
-            tr!("Read the folders again (F5)", "Перечитать папки (F5)"),
+            tr!(
+                "Read the folders again (Ctrl+R)",
+                "Перечитать папки (Ctrl+R)"
+            ),
         )
         .clicked()
         {

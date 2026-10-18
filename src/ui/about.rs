@@ -100,7 +100,7 @@ impl AboutDialog {
                         .on_hover_text(tr!("Settings are not saved", "Настройки не сохраняются")),
                 };
                 ui.add_space(8.0);
-                ui.weak(tr!("Settings: Ctrl+P", "Настройки: Ctrl+P"));
+                ui.weak(tr!("Settings: F5", "Настройки: F5"));
                 ui.add_space(4.0);
             });
             closed

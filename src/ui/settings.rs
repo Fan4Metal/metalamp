@@ -1,5 +1,5 @@
-//! The settings window (Ctrl+P, as Winamp's Preferences, or the gear in
-//! the library's bar), after metalmpv's: one surface without inner
+//! The settings window (F5 as metalmpv's, Ctrl+P as Winamp's
+//! Preferences, or the gear in the library's bar), after metalmpv's: one surface without inner
 //! frames, the categories in a darker column on the left with Reset and
 //! Close under them, the page of the chosen category on the right in
 //! cards of rows (the name and a hint on the left, the control on the
@@ -14,7 +14,7 @@ use crate::audio::dsp::{DspSettings, eq};
 use crate::audio::output::Device;
 use crate::i18n::LangChoice;
 use crate::palette;
-use crate::settings::{BarLayout, Settings};
+use crate::settings::{BarLayout, EqPreset, Settings};
 use crate::update::{Status, Updates, release_url, version_of};
 
 /// The size of the window's content in points.
@@ -82,6 +82,8 @@ pub struct SettingsDialog {
     page: Page,
     /// The output devices, listed when the window opens.
     devices: Vec<Device>,
+    /// The name a preset is saved under.
+    preset_name: String,
 }
 
 impl SettingsDialog {
@@ -208,7 +210,9 @@ impl SettingsDialog {
                             })
                             .show(ui, |ui| match self.page {
                                 Page::General => general(ui, settings),
-                                Page::Sound => sound(ui, settings, &self.devices),
+                                Page::Sound => {
+                                    sound(ui, settings, &self.devices, &mut self.preset_name)
+                                }
                                 Page::Updates => updates_page(ui, updates),
                             });
                     });
@@ -462,7 +466,7 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
     });
 }
 
-fn sound(ui: &mut Ui, settings: &mut Settings, devices: &[Device]) {
+fn sound(ui: &mut Ui, settings: &mut Settings, devices: &[Device], preset_name: &mut String) {
     section(ui, tr!("Output", "Вывод"), |ui| {
         row(
             ui,
@@ -515,11 +519,16 @@ fn sound(ui: &mut Ui, settings: &mut Settings, devices: &[Device]) {
             },
         );
     });
-    processing(ui, &mut settings.dsp);
+    processing(ui, &mut settings.dsp, &mut settings.eq_presets, preset_name);
 }
 
 /// The loudness, the equalizer and the enhancer.
-fn processing(ui: &mut Ui, dsp: &mut DspSettings) {
+fn processing(
+    ui: &mut Ui,
+    dsp: &mut DspSettings,
+    presets: &mut Vec<EqPreset>,
+    preset_name: &mut String,
+) {
     section(ui, tr!("Loudness", "Громкость"), |ui| {
         row(
             ui,
@@ -547,7 +556,7 @@ fn processing(ui: &mut Ui, dsp: &mut DspSettings) {
             |ui| switch(ui, &mut dsp.eq),
         );
         divider(ui);
-        equalizer(ui, dsp);
+        equalizer(ui, dsp, presets, preset_name);
     });
     section(ui, tr!("Enhancer", "Улучшение звука"), |ui| {
         row(
@@ -612,8 +621,15 @@ fn amount(ui: &mut Ui, title: &str, hint: &str, value: &mut u8) {
 }
 
 /// The preamp and the ten bands as vertical sliders, a value over each
-/// and its frequency under it, and a button that flattens them.
-fn equalizer(ui: &mut Ui, dsp: &mut DspSettings) {
+/// and its frequency under it; under them the presets (Winamp's, then
+/// the user's; the one matching the sliders is named), a field and
+/// Save for the user's own, Delete for the one named, and Flat.
+fn equalizer(
+    ui: &mut Ui,
+    dsp: &mut DspSettings,
+    presets: &mut Vec<EqPreset>,
+    preset_name: &mut String,
+) {
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().slider_width = 96.0;
@@ -648,11 +664,89 @@ fn equalizer(ui: &mut Ui, dsp: &mut DspSettings) {
             column(ui, label, &mut dsp.bands[i]);
         }
     });
-    ui.add_space(4.0);
+    ui.add_space(6.0);
     ui.horizontal(|ui| {
+        // The preset the sliders stand at, if any.
+        let built_in = eq::PRESETS
+            .iter()
+            .find(|(_, _, bands)| *bands == dsp.bands)
+            .map(|(en, ru, _)| tr!(*en, *ru).to_owned());
+        let own = presets
+            .iter()
+            .find(|p| p.bands == dsp.bands && p.preamp == dsp.preamp)
+            .map(|p| p.name.clone());
+        let current = own
+            .or(built_in)
+            .unwrap_or_else(|| tr!("Preset…", "Пресет…").to_owned());
+        egui::ComboBox::from_id_salt("eq_preset")
+            .selected_text(shorten(&current, 22))
+            .width(190.0)
+            .show_ui(ui, |ui| {
+                for (en, ru, bands) in eq::PRESETS {
+                    if ui
+                        .selectable_label(bands == dsp.bands, tr!(en, ru))
+                        .clicked()
+                    {
+                        dsp.bands = bands;
+                        dsp.preamp = 0.0;
+                    }
+                }
+                if !presets.is_empty() {
+                    ui.separator();
+                }
+                for p in presets.iter() {
+                    let on = p.bands == dsp.bands && p.preamp == dsp.preamp;
+                    if ui.selectable_label(on, &p.name).clicked() {
+                        dsp.bands = p.bands;
+                        dsp.preamp = p.preamp;
+                        *preset_name = p.name.clone();
+                    }
+                }
+            });
         if ui.button(tr!("Flat", "Выровнять")).clicked() {
             dsp.preamp = 0.0;
             dsp.bands = [0.0; 10];
+        }
+    });
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(preset_name)
+                .hint_text(tr!("Name", "Имя"))
+                .desired_width(190.0),
+        );
+        let name = preset_name.trim();
+        let exists = presets.iter().position(|p| p.name == name);
+        if ui
+            .add_enabled(
+                !name.is_empty(),
+                egui::Button::new(tr!("Save", "Сохранить")),
+            )
+            .on_hover_text(tr!(
+                "Keep the sliders as a preset of this name",
+                "Сохранить положение ползунков под этим именем"
+            ))
+            .clicked()
+        {
+            let preset = EqPreset {
+                name: name.to_owned(),
+                preamp: dsp.preamp,
+                bands: dsp.bands,
+            };
+            match exists {
+                Some(i) => presets[i] = preset,
+                None => presets.push(preset),
+            }
+        }
+        if ui
+            .add_enabled(
+                exists.is_some(),
+                egui::Button::new(tr!("Delete", "Удалить")),
+            )
+            .clicked()
+            && let Some(i) = exists
+        {
+            presets.remove(i);
         }
     });
     ui.add_space(6.0);
