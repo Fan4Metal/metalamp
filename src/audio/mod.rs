@@ -185,7 +185,17 @@ struct Segment {
     path: PathBuf,
     origin_ms: u64,
     duration_ms: u64,
+    /// The track's loudness gain, for the chain at write time.
+    gain: f32,
 }
+
+/// How far ahead of what is heard the device is kept written, in
+/// seconds: the processing is applied at write time, so a change of its
+/// settings is heard this soon. The device's buffer is larger
+/// (`output::BUFFER`); the ring in memory, a second deep, covers a slow
+/// disk, and this only has to cover the thread's own scheduling (it
+/// polls every 10 ms at Pro Audio priority).
+const WRITE_AHEAD: f32 = 0.15;
 
 struct Player<'a> {
     events: &'a Sender<Event>,
@@ -365,6 +375,9 @@ impl Player<'_> {
                         open.gain = gain;
                     }
                 }
+                for seg in self.segments.iter_mut().filter(|s| s.id == id) {
+                    seg.gain = gain;
+                }
             }
             Cmd::Dsp(settings) => {
                 if let Some(chain) = &mut self.chain {
@@ -440,6 +453,7 @@ impl Player<'_> {
             path: open.path.clone(),
             origin_ms: from_ms,
             duration_ms: (open.decoder.duration / (SECOND / 1000)) as u64,
+            gain: open.gain,
         });
         self.heard_id = None;
         self.decoding = Some(open);
@@ -517,12 +531,7 @@ impl Player<'_> {
                     break;
                 };
                 match open.decoder.next() {
-                    Ok(Some(mut block)) => {
-                        if let Some(chain) = &mut self.chain {
-                            chain.process(&mut block, open.gain);
-                        }
-                        self.ring.extend(block);
-                    }
+                    Ok(Some(block)) => self.ring.extend(block),
                     Ok(None) => self.track_decoded(),
                     Err(e) => {
                         // A damaged end of a file: as if it ended there.
@@ -535,21 +544,27 @@ impl Player<'_> {
             // The device applies the gain to what it plays, so a change is
             // heard at once, not after the buffer written ahead.
             out.set_gain(f32::from_bits(self.shared.gain.load(Relaxed)))?;
+            // Only `WRITE_AHEAD` of the device's buffer is kept filled.
             let room = out.room()? as usize;
-            let frames = room.min(self.ring.len() / channels);
+            let held = (out.buffer_frames() as usize).saturating_sub(room);
+            let ahead = (self.format.0 as f32 * WRITE_AHEAD) as usize;
+            let frames = room
+                .min(ahead.saturating_sub(held))
+                .min(self.ring.len() / channels);
             if frames > 0 {
-                let samples = self.ring.make_contiguous();
-                out.write(&samples[..frames * channels])?;
+                let mut block: Vec<f32> = self.ring.drain(..frames * channels).collect();
+                self.process(&mut block, frames);
+                let out = self.out.as_mut().expect("checked above");
+                out.write(&block)?;
                 self.shared
                     .vis
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .push(&samples[..frames * channels], channels, self.written);
-                self.ring.drain(..frames * channels);
+                    .push(&block, channels, self.written);
                 self.written += frames as u64;
             }
             if !self.started && self.written > 0 {
-                out.start()?;
+                self.out.as_mut().expect("checked above").start()?;
                 self.started = true;
             }
         }
@@ -606,6 +621,34 @@ impl Player<'_> {
         Ok(())
     }
 
+    /// The chain over `block` (`frames` of them) about to be written at
+    /// `self.written`, a piece per track it spans, each with its gain.
+    fn process(&mut self, block: &mut [f32], frames: usize) {
+        let Some(chain) = &mut self.chain else { return };
+        let channels = usize::from(self.format.1.max(1));
+        let mut at = 0;
+        while at < frames {
+            let abs = self.written + at as u64;
+            // The segment holding this frame: the last one starting at or
+            // before it; the piece ends where the next one starts.
+            let idx = self
+                .segments
+                .iter()
+                .rposition(|s| s.start <= abs)
+                .unwrap_or(0);
+            let gain = self.segments.get(idx).map_or(1.0, |s| s.gain);
+            let end = self
+                .segments
+                .get(idx + 1)
+                .map_or(frames, |s| {
+                    (s.start.saturating_sub(self.written) as usize).min(frames)
+                })
+                .max(at + 1);
+            chain.process(&mut block[at * channels..end * channels], gain);
+            at = end;
+        }
+    }
+
     /// The decoding track ended: the next one goes on in the same ring if
     /// it has the same format.
     fn track_decoded(&mut self) {
@@ -618,6 +661,7 @@ impl Player<'_> {
                     path: next.path.clone(),
                     origin_ms: 0,
                     duration_ms: (next.decoder.duration / (SECOND / 1000)) as u64,
+                    gain: next.gain,
                 });
                 self.decoding = Some(next);
             }
