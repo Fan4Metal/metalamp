@@ -224,8 +224,12 @@ pub fn listen(ctx: &egui::Context, main: isize) {
             );
             return;
         }
-        // A copy running elevated still takes files from Explorer (UIPI).
-        ChangeWindowMessageFilterEx(window, WM_COPYDATA, MSGFLT_ALLOW, std::ptr::null_mut());
+        // A copy running elevated still takes files from Explorer (UIPI);
+        // one that is not leaves the filter closed to processes below it
+        // (a browser's sandbox).
+        if crate::win::is_elevated() {
+            ChangeWindowMessageFilterEx(window, WM_COPYDATA, MSGFLT_ALLOW, std::ptr::null_mut());
+        }
     }
 }
 

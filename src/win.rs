@@ -10,6 +10,35 @@ pub fn wide(s: impl AsRef<OsStr>) -> Vec<u16> {
     s.as_ref().encode_wide().chain(std::iter::once(0)).collect()
 }
 
+/// Whether this process runs elevated (as administrator): only then are
+/// Explorer's messages to it, from below, held back (UIPI) and let
+/// through by hand.
+pub fn is_elevated() -> bool {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::Security::{
+        GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    static ELEVATED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ELEVATED.get_or_init(|| unsafe {
+        let mut token = std::ptr::null_mut();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+            return false;
+        }
+        let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+        let mut len = 0u32;
+        let ok = GetTokenInformation(
+            token,
+            TokenElevation,
+            (&raw mut elevation).cast(),
+            size_of::<TOKEN_ELEVATION>() as u32,
+            &mut len,
+        );
+        CloseHandle(token);
+        ok != 0 && elevation.TokenIsElevated != 0
+    })
+}
+
 /// `bytes` in the ANSI code page of Windows (Windows-1251 on a Russian
 /// one) as text.
 pub fn from_ansi(bytes: &[u8]) -> String {
@@ -401,13 +430,22 @@ pub fn hook_window(hwnd: isize, wake: impl Fn() + Send + Sync + 'static) {
             ) -> i32;
         }
         const MSGFLT_ALLOW: u32 = 1;
-        for message in [
-            message,
-            windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND,
-        ] {
-            unsafe {
-                ChangeWindowMessageFilterEx(hwnd as _, message, MSGFLT_ALLOW, std::ptr::null_mut())
-            };
+        // Not elevated, Explorer's messages come through anyway, and the
+        // filter is left as it is (closed to processes below this one).
+        if is_elevated() {
+            for message in [
+                message,
+                windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND,
+            ] {
+                unsafe {
+                    ChangeWindowMessageFilterEx(
+                        hwnd as _,
+                        message,
+                        MSGFLT_ALLOW,
+                        std::ptr::null_mut(),
+                    )
+                };
+            }
         }
         unsafe { SetWindowSubclass(hwnd as _, Some(window_proc), 1, 0) };
     });
