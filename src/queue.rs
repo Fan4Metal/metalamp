@@ -113,8 +113,10 @@ impl Queue {
     }
 
     /// Removes the entries at `indices`; the current one stays current if
-    /// it is kept.
-    pub fn remove(&mut self, indices: &[usize]) {
+    /// it is kept. When it is not, returns the kept entry that came after
+    /// it in the order of play (round to the first with repeat all), to go
+    /// on with. The order of play stays as it was for the rest.
+    pub fn remove(&mut self, indices: &[usize]) -> Option<usize> {
         let mut keep = vec![true; self.entries.len()];
         for &i in indices {
             if i < keep.len() {
@@ -122,11 +124,27 @@ impl Queue {
             }
         }
         let current_id = self.current_entry().map(|e| e.id);
+        let next_id = self.current.filter(|&c| !keep[c]).and_then(|c| {
+            let order = self.play_order();
+            let p = order.iter().position(|&o| o == c)?;
+            let round = if self.repeat == Repeat::All {
+                &order[..p]
+            } else {
+                &[]
+            };
+            order[p + 1..]
+                .iter()
+                .chain(round)
+                .find(|&&i| keep[i])
+                .map(|&i| self.entries[i].id)
+        });
+        let ids = self.order_ids();
         let mut k = keep.iter();
         self.entries.retain(|_| *k.next().unwrap_or(&true));
         self.current = current_id.and_then(|id| self.index_of(id));
-        self.reshuffle();
+        self.reorder(&ids);
         self.revision += 1;
+        next_id.and_then(|id| self.index_of(id))
     }
 
     pub fn clear(&mut self) {
@@ -145,6 +163,7 @@ impl Queue {
         sorted.sort_unstable();
         sorted.dedup();
         let current_id = self.current_entry().map(|e| e.id);
+        let ids = self.order_ids();
         let before = sorted.iter().filter(|&&i| i < slot).count();
         let moved: Vec<Entry> = sorted.iter().map(|&i| self.entries[i].clone()).collect();
         for &i in sorted.iter().rev() {
@@ -155,7 +174,7 @@ impl Queue {
             self.entries.insert(at + k, e);
         }
         self.current = current_id.and_then(|id| self.index_of(id));
-        self.reshuffle();
+        self.reorder(&ids);
         self.revision += 1;
         at
     }
@@ -180,11 +199,7 @@ impl Queue {
         {
             return Some(i);
         }
-        let order: Vec<usize> = if self.shuffle {
-            self.order.clone()
-        } else {
-            (0..n).collect()
-        };
+        let order = self.play_order();
         let pos = from.and_then(|i| order.iter().position(|&o| o == i));
         match pos {
             None => order.first().copied(),
@@ -200,11 +215,7 @@ impl Queue {
         if n == 0 {
             return None;
         }
-        let order: Vec<usize> = if self.shuffle {
-            self.order.clone()
-        } else {
-            (0..n).collect()
-        };
+        let order = self.play_order();
         let pos = from.and_then(|i| order.iter().position(|&o| o == i));
         match pos {
             Some(p) if p > 0 => Some(order[p - 1]),
@@ -218,6 +229,42 @@ impl Queue {
         self.shuffle = on;
         self.reshuffle();
         self.revision += 1;
+    }
+
+    /// The indices in the order of play.
+    fn play_order(&self) -> Vec<usize> {
+        if self.shuffle {
+            self.order.clone()
+        } else {
+            (0..self.entries.len()).collect()
+        }
+    }
+
+    /// The shuffled order as the entries' ids, to keep it through a change
+    /// of the list ([`Queue::reorder`]).
+    fn order_ids(&self) -> Vec<u64> {
+        self.order
+            .iter()
+            .filter_map(|&i| self.entries.get(i))
+            .map(|e| e.id)
+            .collect()
+    }
+
+    /// The shuffled order of `ids` (from [`Queue::order_ids`]) kept after
+    /// entries were removed or moved: the tracks heard stay heard, those to
+    /// come keep their turn.
+    fn reorder(&mut self, ids: &[u64]) {
+        if !self.shuffle {
+            self.order.clear();
+            return;
+        }
+        let index: std::collections::HashMap<u64, usize> = self
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.id, i))
+            .collect();
+        self.order = ids.iter().filter_map(|id| index.get(id).copied()).collect();
     }
 
     /// A new order of play: the current entry first, the rest at random.
@@ -288,6 +335,50 @@ mod tests {
         let mut q = Queue::default();
         q.replace((0..n).map(|i| PathBuf::from(format!("{i}.mp3"))).collect());
         q
+    }
+
+    #[test]
+    fn removing_the_current_entry_names_the_one_after_it() {
+        let mut q = queue(10);
+        q.set_current(Some(5));
+        // The current one and one before it: the old 6 goes on, now 4.
+        assert_eq!(q.remove(&[1, 5]), Some(4));
+        assert_eq!(q.entries()[4].path, PathBuf::from("6.mp3"));
+        assert_eq!(q.current(), None);
+        // The current one kept: nothing to go on with.
+        q.set_current(Some(2));
+        assert_eq!(q.remove(&[0]), None);
+        assert_eq!(q.current(), Some(1));
+        // The last removed: none after it, or the first with repeat all.
+        let mut q = queue(3);
+        q.set_current(Some(2));
+        assert_eq!(q.remove(&[2]), None);
+        q.repeat = Repeat::All;
+        q.set_current(Some(1));
+        assert_eq!(q.remove(&[1]), Some(0));
+    }
+
+    #[test]
+    fn the_shuffled_order_stays_through_removes_and_moves() {
+        let mut q = queue(12);
+        q.set_current(Some(0));
+        q.set_shuffle(true);
+        let names = |q: &Queue| -> Vec<PathBuf> {
+            q.order
+                .iter()
+                .map(|&i| q.entries()[i].path.clone())
+                .collect()
+        };
+        let before = names(&q);
+        let gone = q.entries()[q.order[3]].path.clone();
+        let third = q.order[3];
+        q.remove(&[third]);
+        let mut expected = before.clone();
+        expected.retain(|p| *p != gone);
+        assert_eq!(names(&q), expected);
+        q.move_to(&[0, 1], 8);
+        assert_eq!(names(&q), expected);
+        assert_eq!(q.order.len(), q.len());
     }
 
     #[test]

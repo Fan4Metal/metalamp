@@ -511,12 +511,15 @@ fn remove_selected(pv: &mut PlaylistView, player: &mut Player) {
         .and_then(|id| player.queue.index_of(id))
         .is_some_and(|i| pv.selected.contains(&i));
     let first = indices[0];
-    player.queue.remove(&indices);
+    let next = player.queue.remove(&indices);
     if playing_removed {
-        // The entry heard was removed: what was after it plays on.
+        // The entry heard was removed: what came after it plays on, or,
+        // paused, is the one Play starts.
+        let was_playing = player.status == crate::player::Status::Playing;
         player.stop();
-        if first < player.queue.len() {
-            player.play_index(first);
+        match next {
+            Some(i) if was_playing => player.play_index(i),
+            next => player.queue.set_current(next),
         }
     } else {
         player.refresh_preload();
