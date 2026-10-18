@@ -901,11 +901,19 @@ impl eframe::App for App {
         if self.player.poll().track {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
         }
-        // The visualization moves: 50 frames a second; without one (off,
-        // or the compact bar) only the time and the seek bar move.
+        // The visualization moves: 50 frames a second while playing, and
+        // after a stop while it falls; paused, it stands. Without one (off,
+        // the compact bar, the window minimized) only the time, the seek
+        // bar and the taskbar's progress move.
         let shown = self.settings.bar_layout == crate::settings::BarLayout::Full
-            && self.settings.visualization != crate::settings::Visual::Off;
-        if shown && (self.player.status == crate::player::Status::Playing || self.visual.active()) {
+            && self.settings.visualization != crate::settings::Visual::Off
+            && ctx.input(|i| i.viewport().minimized) != Some(true);
+        let moving = match self.player.status {
+            crate::player::Status::Playing => true,
+            crate::player::Status::Paused => false,
+            crate::player::Status::Stopped => self.visual.active(),
+        };
+        if shown && moving {
             ctx.request_repaint_after(Duration::from_millis(20));
         } else if self.player.status == crate::player::Status::Playing {
             ctx.request_repaint_after(Duration::from_millis(250));
