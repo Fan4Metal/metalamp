@@ -1,7 +1,8 @@
 //! A table of the media library: a header whose columns sort
 //! when clicked (again: the other way) and change width when their right
 //! edge is dragged (a double click there fits the column to its widest
-//! text, as Windows' lists do), rows of one height painted only where they are seen
+//! text, as Windows' lists do), rows (a text too long for its cell cut
+//! with "…", whole in a tooltip) of one height painted only where they are seen
 //! (`ScrollArea::show_viewport`: thousands of rows cost what a screenful
 //! does), stripes, the selection, the row playing. Columns wider together
 //! than the table scroll sideways, the header with them. The caller keeps
@@ -143,6 +144,7 @@ impl Table<'_> {
                 let r = Rect::from_min_size(pos2(area_rect.left(), top), vec2(width, ROW_HEIGHT));
                 let resp = ui.interact(r, self.id.with(("row", row)), Sense::click());
                 let (selected, playing) = style(row);
+                let mut tip = None;
                 let fill = if selected {
                     Some(palette::selected_bg())
                 } else if resp.hovered() {
@@ -172,18 +174,30 @@ impl Table<'_> {
                         continue;
                     }
                     let text = cell(row, i);
-                    let galley = painter.layout_no_wrap(text, font.clone(), color);
-                    // Right-aligned text that does not fit is cut at its end.
+                    // The whole text, for the tooltip of a cut cell under
+                    // the pointer.
+                    let here = resp.hovered()
+                        && ui
+                            .ctx()
+                            .pointer_hover_pos()
+                            .is_some_and(|p| (left..right).contains(&p.x));
+                    let whole = here.then(|| text.clone());
+                    let galley =
+                        crate::ui::elided(painter, text, font.clone(), color, clip.width());
+                    if galley.elided {
+                        tip = tip.or(whole);
+                    }
                     let x = match col.align {
-                        Align::Right if galley.size().x <= clip.width() => {
-                            clip.right() - galley.size().x
-                        }
-                        _ => clip.left(),
+                        Align::Right => clip.right() - galley.size().x,
+                        Align::Left => clip.left(),
                     };
                     let pos = pos2(x, clip.center().y - galley.size().y / 2.0);
                     painter
                         .with_clip_rect(clip.intersect(viewport_rect(ui)))
                         .galley(pos, galley, color);
+                }
+                if let Some(tip) = tip {
+                    resp.clone().on_hover_text(tip);
                 }
                 if crate::ui::double_clicked(&resp) {
                     out.double_clicked = Some(row);
@@ -302,13 +316,15 @@ pub fn header_row(
         }
         let clip = Rect::from_min_max(clip.min, pos2(text_right.max(clip.left()), clip.bottom()))
             .intersect(header);
-        cell_text(
+        if cell_text(
             &painter,
             clip,
             &col.title,
             col.align,
             palette::header_text(),
-        );
+        ) {
+            resp.on_hover_text(&col.title);
+        }
         painter.line_segment(
             [
                 pos2(right - 0.5, r.top() + 4.0),
@@ -391,18 +407,24 @@ fn column_edges(left: f32, total: f32, widths: &[f32]) -> Vec<(f32, f32)> {
 
 /// A header's title in `clip`: right-aligned titles that do not fit are
 /// cut at their end, as left-aligned ones, not at their start.
-fn cell_text(painter: &egui::Painter, clip: Rect, text: &str, align: Align, color: egui::Color32) {
-    let galley = painter.layout_no_wrap(
-        text.to_owned(),
-        FontId::proportional(FONT_SIZE - 0.5),
-        color,
-    );
+/// A title in `clip`, cut with "…" when longer; whether it was cut.
+fn cell_text(
+    painter: &egui::Painter,
+    clip: Rect,
+    text: &str,
+    align: Align,
+    color: egui::Color32,
+) -> bool {
+    let font = FontId::proportional(FONT_SIZE - 0.5);
+    let galley = crate::ui::elided(painter, text.to_owned(), font, color, clip.width());
+    let cut = galley.elided;
     let x = match align {
-        Align::Right if galley.size().x <= clip.width() => clip.right() - galley.size().x,
-        _ => clip.left(),
+        Align::Right => clip.right() - galley.size().x,
+        Align::Left => clip.left(),
     };
     let pos = pos2(x, clip.center().y - galley.size().y / 2.0);
     painter.with_clip_rect(clip).galley(pos, galley, color);
+    cut
 }
 
 /// The new selection after a click on `row` with the modifiers held: Ctrl

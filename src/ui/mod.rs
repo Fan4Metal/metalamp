@@ -125,6 +125,21 @@ pub fn close_cross(ui: &mut Ui) -> bool {
 
 /// A double click, also when it is the start of a triple one (egui reports
 /// the third click as a triple click instead of a second double click).
+/// `text` on one line at most `width` wide: a longer one cut with "…"
+/// (`Galley::elided`), as Windows' lists cut it; the caller shows the
+/// whole text as a tooltip then.
+pub fn elided(
+    painter: &egui::Painter,
+    text: String,
+    font: egui::FontId,
+    color: egui::Color32,
+    width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(text, font, color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(0.0));
+    painter.layout_job(job)
+}
+
 pub fn double_clicked(response: &Response) -> bool {
     response.double_clicked() || response.triple_clicked()
 }

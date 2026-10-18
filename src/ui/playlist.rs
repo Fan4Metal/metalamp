@@ -302,7 +302,11 @@ pub fn show(
             let len_x = r.right() - 8.0 - len.size().x;
             let text_left = r.left() + 6.0 + number_w;
             let clip = Rect::from_min_max(pos2(text_left, r.top()), pos2(len_x - 8.0, r.bottom()));
-            let g = painter.layout_no_wrap(text.clone(), font.clone(), color);
+            // Too long: cut with "…", whole in a tooltip.
+            let g = crate::ui::elided(painter, text.clone(), font.clone(), color, clip.width());
+            if g.elided {
+                resp.clone().on_hover_text(text);
+            }
             painter
                 .with_clip_rect(clip.intersect(ui.clip_rect()))
                 .galley(pos2(text_left, r.center().y - g.size().y / 2.0), g, color);
