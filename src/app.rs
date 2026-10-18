@@ -93,7 +93,7 @@ impl App {
         let _ = wake.set(ctx.clone());
         // Before any text is made.
         crate::i18n::set_lang(settings.language.resolve());
-        palette::set(settings.theme, settings.accent, settings.selection);
+        palette::set(settings.look());
         palette::apply(ctx);
         ctx.options_mut(|o| {
             // Ctrl+plus and Ctrl+minus are the app's, not egui's zoom.
@@ -1098,11 +1098,7 @@ impl eframe::App for App {
             self.player.set_dsp(&self.settings.dsp);
         }
         if changed.look {
-            palette::set(
-                self.settings.theme,
-                self.settings.accent,
-                self.settings.selection,
-            );
+            palette::set(self.settings.look());
             palette::apply(&ctx);
             if let Some(hwnd) = self.hwnd {
                 crate::caption::set_dark(hwnd, self.settings.theme.is_dark());

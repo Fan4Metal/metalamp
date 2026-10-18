@@ -85,8 +85,21 @@ pub struct Settings {
     /// The look: the base theme and the controls' colour.
     pub theme: crate::palette::Theme,
     pub accent: crate::palette::Accent,
-    /// The selected rows' ground.
-    pub selection: crate::palette::Selection,
+    /// The selected rows' ground and the track playing's text.
+    pub selection: crate::palette::Tint,
+    pub playing: crate::palette::Tint,
+}
+
+impl Settings {
+    /// What the palette is made of.
+    pub fn look(&self) -> crate::palette::Look {
+        crate::palette::Look {
+            theme: self.theme,
+            accent: self.accent,
+            selection: self.selection,
+            playing: self.playing,
+        }
+    }
 }
 
 /// When the media keys (of keyboards, headsets, remotes) control the
@@ -227,6 +240,7 @@ impl Default for Settings {
             theme: Default::default(),
             accent: Default::default(),
             selection: Default::default(),
+            playing: Default::default(),
         }
     }
 }

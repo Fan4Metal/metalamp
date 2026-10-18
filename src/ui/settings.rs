@@ -16,7 +16,7 @@ use crate::audio::dsp::{DspSettings, eq};
 use crate::audio::output::Device;
 use crate::i18n::LangChoice;
 use crate::palette;
-use crate::palette::{Accent, Selection, Theme};
+use crate::palette::{Accent, Palette, Theme, Tint};
 use crate::settings::{BarLayout, EqPreset, MediaKeys, Settings};
 use crate::ui::icons::{self, Icon};
 use crate::update::{Status, Updates, release_url, version_of};
@@ -253,9 +253,7 @@ impl SettingsDialog {
         }
         changed.device = settings.output_device != before.output_device;
         changed.dsp = settings.dsp != before.dsp;
-        changed.look = settings.theme != before.theme
-            || settings.accent != before.accent
-            || settings.selection != before.selection;
+        changed.look = settings.look() != before.look();
         changed.any = *settings != before;
         changed
     }
@@ -513,7 +511,32 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
                 "Фон выбранных строк: из цвета выше, своего оттенка или своего цвета как есть."
             )),
             ACCENTS_WIDTH,
-            |ui| selections(ui, settings.theme, settings.accent, &mut settings.selection),
+            |ui| {
+                let look = settings.look();
+                tints(ui, &mut settings.selection, look.accent, |t| {
+                    Palette::of(palette::Look {
+                        selection: t,
+                        ..look
+                    })
+                    .selected_bg
+                });
+            },
+        );
+        divider(ui);
+        row(
+            ui,
+            tr!("Track playing", "Играющий трек"),
+            Some(tr!(
+                "Its text in the lists and the playlist: mixed from the colour above, from one of its own, or one's own colour as it is.",
+                "Его текст в списках и плейлисте: из цвета выше, своего оттенка или своего цвета как есть."
+            )),
+            ACCENTS_WIDTH,
+            |ui| {
+                let look = settings.look();
+                tints(ui, &mut settings.playing, look.accent, |t| {
+                    Palette::of(palette::Look { playing: t, ..look }).playing
+                });
+            },
         );
         divider(ui);
         row(
@@ -1112,48 +1135,40 @@ fn custom([r, g, b]: [u8; 3]) -> Accent {
     Accent::Custom(u32::from_be_bytes([0, r, g, b]))
 }
 
-/// The selection's grounds as round swatches, each as the lists show it
-/// in this theme, the chosen one ringed; the first, mixed from the accent,
-/// with the accent's dot in it; last the user's own colour, as for the
-/// accent.
-fn selections(ui: &mut Ui, theme: Theme, accent: Accent, selection: &mut Selection) {
+/// A shade's choices (the selection's ground, the track playing's text)
+/// as round swatches, each as the lists show it (`colour_of`) in this
+/// theme, the chosen one ringed; the first, mixed from the accent, with
+/// the accent's dot in it; last the user's own colour, as for the accent,
+/// its picker starting from the shade in use.
+fn tints(ui: &mut Ui, tint: &mut Tint, accent: Accent, colour_of: impl Fn(Tint) -> Color32) {
     ui.spacing_mut().item_spacing.x = 5.0;
-    let mut own = match *selection {
-        Selection::Custom(c) => Accent::Custom(c),
-        _ => Accent::Custom(
-            palette::Palette::selection_of(theme, accent, *selection)
-                .to_srgba_unmultiplied()
-                .into_iter()
-                .take(3)
-                .fold(0, |c, v| c << 8 | u32::from(v)),
-        ),
+    let mut own = match *tint {
+        Tint::Custom(c) => Accent::Custom(c),
+        t => {
+            let c = colour_of(t);
+            custom([c.r(), c.g(), c.b()])
+        }
     };
-    let chosen = matches!(selection, Selection::Custom(_));
+    let chosen = matches!(tint, Tint::Custom(_));
     if own_colour(ui, &mut own, chosen)
         && let Accent::Custom(c) = own
     {
-        *selection = Selection::Custom(c);
+        *tint = Tint::Custom(c);
     }
-    for s in Selection::ALL.into_iter().rev() {
+    for s in Tint::ALL.into_iter().rev() {
         let (rect, response) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
         let response = response.on_hover_text(s.label());
-        let fill = palette::Palette::selection_of(theme, accent, s);
-        swatch(
-            ui,
-            rect,
-            *selection == s,
-            response.hovered(),
-            |p, centre, r| {
-                // Outlined: a dark ground is hardly seen on a dark card.
-                let edge = palette::text_weak().gamma_multiply(0.7);
-                p.circle(centre, r, fill, Stroke::new(1.0, edge));
-                if s == Selection::Accent {
-                    p.circle_filled(centre, r * 0.35, accent.base());
-                }
-            },
-        );
+        let fill = colour_of(s);
+        swatch(ui, rect, *tint == s, response.hovered(), |p, centre, r| {
+            // Outlined: a dark ground is hardly seen on a dark card.
+            let edge = palette::text_weak().gamma_multiply(0.7);
+            p.circle(centre, r, fill, Stroke::new(1.0, edge));
+            if s == Tint::Accent {
+                p.circle_filled(centre, r * 0.35, accent.base());
+            }
+        });
         if response.clicked() {
-            *selection = s;
+            *tint = s;
         }
     }
 }
@@ -1475,6 +1490,7 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     settings.theme = d.theme;
     settings.accent = d.accent;
     settings.selection = d.selection;
+    settings.playing = d.playing;
     settings.media_keys = d.media_keys;
     settings.output_device = d.output_device;
     settings.output_device_name = d.output_device_name;

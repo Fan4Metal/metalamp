@@ -49,6 +49,16 @@ fn luminance(c: Color32) -> f32 {
     0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
 }
 
+/// What the palette is made of: the settings `theme`, `accent`,
+/// `selection` and `playing`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Look {
+    pub theme: Theme,
+    pub accent: Accent,
+    pub selection: Tint,
+    pub playing: Tint,
+}
+
 /// The base of the look.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -212,14 +222,16 @@ impl Accent {
     }
 }
 
-/// The ground of the selected rows: mixed from the accent (the default),
-/// from a colour of its own, or the user's colour as it is. Amber over a
-/// dark ground mixes to a brown the user found dirty; this lets the
-/// selection go its own way. Kept in the settings by name (`accent`,
-/// `grey`, `#2B3442`), an unknown one read as the default.
+/// Where a shade comes from: the selected rows' ground (`Look::selection`)
+/// and the track playing's text (`Look::playing`) are mixed from the
+/// accent (the default), from a colour of their own, or are the user's
+/// colour as it is. Amber over a dark ground mixes to a brown the user
+/// found dirty; this lets them go their own way. Kept in the settings by
+/// name (`accent`, `grey`, `#2B3442`), an unknown one read as the
+/// default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
-pub enum Selection {
+pub enum Tint {
     #[default]
     Accent,
     Grey,
@@ -231,71 +243,71 @@ pub enum Selection {
     Custom(u32),
 }
 
-impl From<String> for Selection {
+impl From<String> for Tint {
     fn from(name: String) -> Self {
-        Selection::from_name(&name).unwrap_or_default()
+        Tint::from_name(&name).unwrap_or_default()
     }
 }
 
-impl From<Selection> for String {
-    fn from(selection: Selection) -> Self {
+impl From<Tint> for String {
+    fn from(selection: Tint) -> Self {
         selection.name()
     }
 }
 
-impl Selection {
+impl Tint {
     /// The ready ones (not the user's own).
-    pub const ALL: [Selection; 6] = [
-        Selection::Accent,
-        Selection::Grey,
-        Selection::Slate,
-        Selection::Blue,
-        Selection::Teal,
-        Selection::Purple,
+    pub const ALL: [Tint; 6] = [
+        Tint::Accent,
+        Tint::Grey,
+        Tint::Slate,
+        Tint::Blue,
+        Tint::Teal,
+        Tint::Purple,
     ];
 
     pub fn name(self) -> String {
         let name = match self {
-            Selection::Accent => "accent",
-            Selection::Grey => "grey",
-            Selection::Slate => "slate",
-            Selection::Blue => "blue",
-            Selection::Teal => "teal",
-            Selection::Purple => "purple",
-            Selection::Custom(c) => return format!("#{:06X}", c & 0xffffff),
+            Tint::Accent => "accent",
+            Tint::Grey => "grey",
+            Tint::Slate => "slate",
+            Tint::Blue => "blue",
+            Tint::Teal => "teal",
+            Tint::Purple => "purple",
+            Tint::Custom(c) => return format!("#{:06X}", c & 0xffffff),
         };
         name.to_owned()
     }
 
     pub fn from_name(name: &str) -> Option<Self> {
         if let Some([r, g, b]) = parse_hex(name) {
-            return Some(Selection::Custom(u32::from_be_bytes([0, r, g, b])));
+            return Some(Tint::Custom(u32::from_be_bytes([0, r, g, b])));
         }
         Self::ALL.into_iter().find(|s| s.name() == name)
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            Selection::Accent => tr!("Of the colour above", "Из цвета выше"),
-            Selection::Grey => tr!("Grey", "Серый"),
-            Selection::Slate => tr!("Slate", "Сланцевый"),
-            Selection::Blue => tr!("Blue", "Синий"),
-            Selection::Teal => tr!("Teal", "Бирюзовый"),
-            Selection::Purple => tr!("Purple", "Фиолетовый"),
-            Selection::Custom(_) => tr!("Your own colour", "Свой цвет"),
+            Tint::Accent => tr!("Of the colour above", "Из цвета выше"),
+            Tint::Grey => tr!("Grey", "Серый"),
+            Tint::Slate => tr!("Slate", "Сланцевый"),
+            Tint::Blue => tr!("Blue", "Синий"),
+            Tint::Teal => tr!("Teal", "Бирюзовый"),
+            Tint::Purple => tr!("Purple", "Фиолетовый"),
+            Tint::Custom(_) => tr!("Your own colour", "Свой цвет"),
         }
     }
 
-    /// The colour the ground is mixed from (`None`: the accent's; the
+    /// The colour the shade is mixed from (`None`: the accent's; the
     /// user's own is not mixed).
     fn base(self) -> Option<Color32> {
         Some(hex(match self {
-            Selection::Accent | Selection::Custom(_) => return None,
-            Selection::Grey => 0x8b919c,
-            Selection::Slate => 0x5a7aa6,
-            Selection::Blue => 0x2f7cf0,
-            Selection::Teal => 0x0d9488,
-            Selection::Purple => 0x7c3aed,
+            Tint::Accent | Tint::Custom(_) => return None,
+            Tint::Grey => 0x8b919c,
+            Tint::Slate => 0x5a7aa6,
+            Tint::Blue => 0x2f7cf0,
+            Tint::Teal => 0x0d9488,
+            Tint::Purple => 0x7c3aed,
         }))
     }
 }
@@ -502,7 +514,13 @@ pub struct Palette {
 }
 
 impl Palette {
-    pub fn of(theme: Theme, accent: Accent, selection: Selection) -> Palette {
+    pub fn of(look: Look) -> Palette {
+        let Look {
+            theme,
+            accent,
+            selection,
+            playing,
+        } = look;
         let mut p = match theme {
             Theme::Dark => Palette {
                 dark: true,
@@ -708,13 +726,23 @@ impl Palette {
         } else {
             white
         };
-        if let Selection::Custom(c) = selection {
+        if let Tint::Custom(c) = selection {
             p.selected_bg = hex(c & 0xffffff);
         } else if let Some(base) = selection.base() {
             p.selected_bg = if p.dark {
                 mix(p.list_bg, base, 0.26)
             } else {
                 mix(p.list_bg, base, 0.2)
+            };
+        }
+        // The track playing's text, as the accent's is mixed.
+        if let Tint::Custom(c) = playing {
+            p.playing = hex(c & 0xffffff);
+        } else if let Some(base) = playing.base() {
+            p.playing = if p.dark {
+                mix(base, white, 0.45)
+            } else {
+                mix(base, black, 0.3)
             };
         }
         // The theme's bright text, unless the user's own colour is too
@@ -728,12 +756,6 @@ impl Palette {
                 white
             });
         p
-    }
-
-    /// The selection's ground for `selection` in this palette's theme and
-    /// accent, as its swatch shows it.
-    pub fn selection_of(theme: Theme, accent: Accent, selection: Selection) -> Color32 {
-        Palette::of(theme, accent, selection).selected_bg
     }
 
     const BLANK: Palette = Palette {
@@ -775,10 +797,9 @@ impl Palette {
 /// The palette in use.
 static CURRENT: RwLock<Option<Palette>> = RwLock::new(None);
 
-/// Use `theme`, `accent` and `selection` from now on (then `apply` for
-/// egui's own).
-pub fn set(theme: Theme, accent: Accent, selection: Selection) {
-    let p = Palette::of(theme, accent, selection);
+/// Use `look` from now on (then `apply` for egui's own).
+pub fn set(look: Look) {
+    let p = Palette::of(look);
     if let Ok(mut current) = CURRENT.write() {
         *current = Some(p);
     }
@@ -790,7 +811,7 @@ pub fn current() -> Palette {
         .read()
         .ok()
         .and_then(|p| *p)
-        .unwrap_or_else(|| Palette::of(Theme::default(), Accent::default(), Selection::default()))
+        .unwrap_or_else(|| Palette::of(Look::default()))
 }
 
 macro_rules! colours {
@@ -891,7 +912,12 @@ mod tests {
 
     #[test]
     fn the_default_is_dark_amber_its_shades_amber_too() {
-        let p = Palette::of(Theme::Dark, Accent::Amber, Selection::Accent);
+        let p = Palette::of(Look {
+            theme: Theme::Dark,
+            accent: Accent::Amber,
+            selection: Tint::Accent,
+            playing: Tint::Accent,
+        });
         assert_eq!(p.accent, hex(0xf5a623));
         assert_eq!(p.list_bg, hex(0x16171a));
         assert_eq!(p.on_accent, hex(0x1a1b1f));
@@ -906,7 +932,10 @@ mod tests {
         // The window's mean luminance: the lists take most of it, then
         // the panels around them, then the player bar.
         let light = |t: Theme| {
-            let p = Palette::of(t, Accent::default(), Selection::default());
+            let p = Palette::of(Look {
+                theme: t,
+                ..Look::default()
+            });
             assert_eq!(p.dark, t.is_dark(), "{t:?}");
             0.6 * luminance(p.list_bg) + 0.25 * luminance(p.panel_bg) + 0.15 * luminance(p.bar_bg)
         };
@@ -925,37 +954,84 @@ mod tests {
     fn every_selection_can_be_read() {
         let own = [0xffffff, 0x000000, 0x777777, 0xffd700, 0x2b3442, 0x00ff00];
         for theme in Theme::ALL {
-            for selection in Selection::ALL.into_iter().chain(own.map(Selection::Custom)) {
-                let p = Palette::of(theme, Accent::Amber, selection);
+            for selection in Tint::ALL.into_iter().chain(own.map(Tint::Custom)) {
+                let p = Palette::of(Look {
+                    theme,
+                    accent: Accent::Amber,
+                    selection,
+                    playing: Tint::Accent,
+                });
                 let what = format!("{theme:?} {selection:?}");
                 assert!(
                     contrast(p.selected_text, p.selected_bg) >= 4.5,
                     "{what}: selected text"
                 );
-                if !matches!(selection, Selection::Custom(_)) {
+                if !matches!(selection, Tint::Custom(_)) {
                     assert!(contrast(p.text, p.selected_bg) >= 4.5, "{what}: text");
                 }
             }
         }
         // Grey is grey whatever the accent; the user's own is as chosen.
-        let grey = Palette::of(Theme::Dark, Accent::Amber, Selection::Grey).selected_bg;
+        let grey = Palette::of(Look {
+            theme: Theme::Dark,
+            accent: Accent::Amber,
+            selection: Tint::Grey,
+            playing: Tint::Accent,
+        })
+        .selected_bg;
         assert_eq!(
             grey,
-            Palette::of(Theme::Dark, Accent::Red, Selection::Grey).selected_bg
+            Palette::of(Look {
+                theme: Theme::Dark,
+                accent: Accent::Red,
+                selection: Tint::Grey,
+                playing: Tint::Accent
+            })
+            .selected_bg
         );
         assert_eq!(
-            Palette::of(Theme::Light, Accent::Amber, Selection::Custom(0x2b3442)).selected_bg,
+            Palette::of(Look {
+                theme: Theme::Light,
+                accent: Accent::Amber,
+                selection: Tint::Custom(0x2b3442),
+                playing: Tint::Accent
+            })
+            .selected_bg,
             hex(0x2b3442)
         );
-        assert_eq!(Selection::from_name("grey"), Some(Selection::Grey));
+        assert_eq!(Tint::from_name("grey"), Some(Tint::Grey));
         assert_eq!(
-            serde_json::to_string(&Selection::Custom(0x2b3442)).unwrap(),
+            serde_json::to_string(&Tint::Custom(0x2b3442)).unwrap(),
             "\"#2B3442\""
         );
         assert_eq!(
-            serde_json::from_str::<Selection>("\"pink\"").unwrap(),
-            Selection::Accent
+            serde_json::from_str::<Tint>("\"pink\"").unwrap(),
+            Tint::Accent
         );
+    }
+
+    #[test]
+    fn the_track_playing_can_be_read() {
+        for theme in Theme::ALL {
+            for playing in Tint::ALL {
+                let p = Palette::of(Look {
+                    theme,
+                    playing,
+                    ..Look::default()
+                });
+                assert!(
+                    contrast(p.playing, p.list_bg) >= 3.0,
+                    "{theme:?} {playing:?}"
+                );
+            }
+        }
+        // The user's own as it is; the selection does not move it.
+        let own = Look {
+            playing: Tint::Custom(0x8fc3ff),
+            selection: Tint::Grey,
+            ..Look::default()
+        };
+        assert_eq!(Palette::of(own).playing, hex(0x8fc3ff));
     }
 
     #[test]
@@ -1027,7 +1103,12 @@ mod tests {
     fn every_palette_can_be_read() {
         for theme in Theme::ALL {
             for accent in Accent::ALL {
-                let p = Palette::of(theme, accent, Selection::Accent);
+                let p = Palette::of(Look {
+                    theme,
+                    accent,
+                    selection: Tint::Accent,
+                    playing: Tint::Accent,
+                });
                 let what = format!("{theme:?} {accent:?}");
                 assert!(contrast(p.text, p.list_bg) >= 7.0, "{what}: text");
                 assert!(contrast(p.list_text, p.list_bg) >= 7.0, "{what}: lists");
