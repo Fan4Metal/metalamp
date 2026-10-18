@@ -112,10 +112,14 @@ pub enum Icon {
     /// Two arrows round a loop (metalmpv); `RepeatOne` with a 1 inside.
     Repeat,
     RepeatOne,
-    /// A circular arrow: scan or load again.
+    /// Two arcs round a centre, each ending in an open arrow head, with
+    /// clear gaps between them: scan or load again.
     Refresh,
     /// A picture: a frame with a sun and hills (the cover's toggle).
     Image,
+    /// Books on a shelf, filled, the last one leaning on its neighbour:
+    /// the media library (its folders).
+    Library,
 }
 
 impl Icon {
@@ -176,6 +180,7 @@ impl Icon {
         Icon::RepeatOne,
         Icon::Refresh,
         Icon::Image,
+        Icon::Library,
     ];
 }
 
@@ -245,31 +250,32 @@ pub fn paint(painter: &Painter, icon: Icon, c: Pos2, size: f32, color: Color32, 
             }
         }
         Icon::Refresh => {
-            // Two arcs round the centre, each with its arrow head at its
-            // end: the upper one going right and down, the lower one left
-            // and up (Windows' sync), unlike the single arc of the turns.
-            let r = 5.2 * k;
+            // Two arcs of 125° round the centre, clockwise, each ending in
+            // an open head (a chevron along the line, not a solid wedge):
+            // the gaps of 55° between them stay open, so the two arrows do
+            // not run into one another at 14 points.
+            let r = 5.0 * k;
             for half in [0.0, PI] {
-                let (from, to) = (PI * 1.08 + half, PI * 1.92 + half);
-                let arc: Vec<Pos2> = (0..=14)
-                    .map(|i| {
-                        let a = from + (to - from) * i as f32 / 14.0;
-                        c + r * vec2(a.cos(), a.sin())
-                    })
+                let (from, to) = (PI * 1.12 + half, PI * 1.81 + half);
+                let at = |a: f32| c + r * vec2(a.cos(), a.sin());
+                let arc: Vec<Pos2> = (0..=16)
+                    .map(|i| at(from + (to - from) * i as f32 / 16.0))
                     .collect();
-                round_line(painter, arc, pen(1.5));
-                let tip = c + r * vec2(to.cos(), to.sin());
+                round_line(painter, arc, line);
+                // The head: back along the tangent, out and in along the
+                // radius.
+                let tip = at(to);
                 let along = vec2(-to.sin(), to.cos());
                 let out = vec2(to.cos(), to.sin());
-                painter.add(Shape::convex_polygon(
+                round_line(
+                    painter,
                     vec![
-                        tip + out * 2.3 * k,
-                        tip + along * 2.6 * k,
-                        tip - out * 2.3 * k,
+                        tip - along * 2.4 * k + out * 2.2 * k,
+                        tip,
+                        tip - along * 2.4 * k - out * 2.2 * k,
                     ],
-                    color,
-                    Stroke::NONE,
-                ));
+                    line,
+                );
             }
         }
         Icon::Image => {
@@ -287,6 +293,22 @@ pub fn paint(painter: &Painter, icon: Icon, c: Pos2, size: f32, color: Color32, 
                 (2.3, 0.9),
                 (5.3, 4.3),
             ]));
+        }
+        Icon::Library => {
+            // Three filled spines: two upright of two heights and a third
+            // leaning left on the second, standing on its bottom left
+            // corner. Filled, as Gallery: outlined spines kept no room
+            // inside at 14 points, and bands cut across them read as the
+            // dots of an "i".
+            painter.rect_filled(rect(-6.6, -6.0, 2.8, 12.0), 0.7 * k, color);
+            painter.rect_filled(rect(-2.9, -4.0, 2.8, 10.0), 0.7 * k, color);
+            // Tilted 20°: across (cos, -sin), up (-sin, -cos).
+            let (sn, co) = (20f32.to_radians().sin(), 20f32.to_radians().cos());
+            let at = |x: f32, y: f32| (4.01 + x * co - y * sn, 6.0 - x * sn - y * co);
+            painter.add(solid(
+                &[at(0.0, 0.0), at(2.8, 0.0), at(2.8, 9.4), at(0.0, 9.4)],
+                color,
+            ));
         }
         Icon::Info => {
             painter.circle_stroke(c, 6.0 * k, line);

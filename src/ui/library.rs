@@ -655,7 +655,7 @@ fn top_bar(
         ui.add_space(8.0);
         let folders = crate::ui::icon_button(
             ui,
-            Icon::Folder,
+            Icon::Library,
             false,
             tr!("The library's folders", "Папки библиотеки"),
         );
