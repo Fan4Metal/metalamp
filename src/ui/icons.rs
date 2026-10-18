@@ -112,8 +112,8 @@ pub enum Icon {
     /// Two arrows round a loop (metalmpv); `RepeatOne` with a 1 inside.
     Repeat,
     RepeatOne,
-    /// Two arcs round a centre, each ending in an open arrow head, with
-    /// clear gaps between them: scan or load again.
+    /// Two arcs round a centre, each ending in a solid triangle at three
+    /// and nine o'clock (the common sync sign): scan or load again.
     Refresh,
     /// A picture: a frame with a sun and hills (the cover's toggle).
     Image,
@@ -250,32 +250,29 @@ pub fn paint(painter: &Painter, icon: Icon, c: Pos2, size: f32, color: Color32, 
             }
         }
         Icon::Refresh => {
-            // Two arcs of 125° round the centre, clockwise, each ending in
-            // an open head (a chevron along the line, not a solid wedge):
-            // the gaps of 55° between them stay open, so the two arrows do
-            // not run into one another at 14 points.
-            let r = 5.0 * k;
-            for half in [0.0, PI] {
-                let (from, to) = (PI * 1.12 + half, PI * 1.81 + half);
-                let at = |a: f32| c + r * vec2(a.cos(), a.sin());
+            // As the common sync sign: two arcs of 122° round the centre,
+            // clockwise, each ending in a solid triangle whose flat base
+            // straddles the ring, at three and nine o'clock, pointing down
+            // on the right and up on the left; the arcs start well clear of
+            // the other head.
+            let r = 4.3 * k;
+            for t in [1.0f32, -1.0] {
+                let half = if t > 0.0 { 0.0 } else { PI };
+                let (from, to) = (222f32.to_radians() + half, 344f32.to_radians() + half);
                 let arc: Vec<Pos2> = (0..=16)
-                    .map(|i| at(from + (to - from) * i as f32 / 16.0))
+                    .map(|i| {
+                        let a = from + (to - from) * i as f32 / 16.0;
+                        c + r * vec2(a.cos(), a.sin())
+                    })
                     .collect();
-                round_line(painter, arc, line);
-                // The head: back along the tangent, out and in along the
-                // radius.
-                let tip = at(to);
-                let along = vec2(-to.sin(), to.cos());
-                let out = vec2(to.cos(), to.sin());
-                round_line(
-                    painter,
-                    vec![
-                        tip - along * 2.4 * k + out * 2.2 * k,
-                        tip,
-                        tip - along * 2.4 * k - out * 2.2 * k,
-                    ],
-                    line,
-                );
+                painter.circle_filled(arc[0], 0.725 * k, color);
+                painter.add(Shape::line(arc, pen(1.45)));
+                let q = |x: f32, y: f32| p(x * t, y * t);
+                painter.add(Shape::convex_polygon(
+                    vec![q(2.0, -1.3), q(6.8, -1.3), q(4.4, 2.2)],
+                    color,
+                    Stroke::NONE,
+                ));
             }
         }
         Icon::Image => {
