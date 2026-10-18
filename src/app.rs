@@ -1027,7 +1027,9 @@ impl eframe::App for App {
                 self.place_changed = Some(Instant::now());
             }
         }
-        if self.settings.playlist_visible && !self.settings.library_folders.is_empty() {
+        // Also beside the start screen: files opened from Explorer, Ctrl+O
+        // or dropped play without a library.
+        if self.settings.playlist_visible {
             let cover = self.playing_cover(&ctx);
             let shown_cover = self.settings.playlist_cover;
             let panel = egui::Panel::right("playlist")
