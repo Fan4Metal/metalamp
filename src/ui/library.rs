@@ -316,11 +316,7 @@ impl LibraryView {
 /// that have any of them, each sorted.
 fn build(library: &Library, key: &ViewKey) -> View {
     let start = Instant::now();
-    let words: Vec<String> = key
-        .query
-        .split_whitespace()
-        .map(str::to_lowercase)
-        .collect();
+    let words = crate::library::query_words(&key.query);
     let shown: Vec<bool> = if words.is_empty() {
         vec![true; library.tracks.len()]
     } else {

@@ -218,11 +218,10 @@ impl Library {
                 } else {
                     String::new()
                 };
-                format!(
+                search_form(&format!(
                     "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}",
                     t.artist, t.album_artist, t.album, t.title, t.genre, year
-                )
-                .to_lowercase()
+                ))
             })
             .collect();
         let by_path = tracks
@@ -247,6 +246,17 @@ impl Library {
         let text = &self.search[track as usize];
         words.iter().all(|w| text.contains(w.as_str()))
     }
+}
+
+/// Text as the search compares it: lower case, and "ё" as "е" (both are
+/// typed as "е" more often than not).
+pub fn search_form(text: &str) -> String {
+    text.to_lowercase().replace('ё', "е")
+}
+
+/// The words of a search query, in [`search_form`].
+pub fn query_words(query: &str) -> Vec<String> {
+    query.split_whitespace().map(search_form).collect()
 }
 
 /// The order of tracks within an album: disc, track number, then the file
@@ -345,14 +355,14 @@ mod tests {
 
     #[test]
     fn search_needs_every_word() {
-        let lib = Library::new(vec![track("a/1.mp3", "Ария", "", "Химера", 2001, 1)]);
-        let words = |q: &str| {
-            q.split_whitespace()
-                .map(str::to_lowercase)
-                .collect::<Vec<_>>()
-        };
-        assert!(lib.matches(0, &words("ария химера")));
-        assert!(lib.matches(0, &words("2001")));
-        assert!(!lib.matches(0, &words("ария кипелов")));
+        let lib = Library::new(vec![
+            track("a/1.mp3", "Ария", "", "Химера", 2001, 1),
+            track("b/1.mp3", "Ария", "", "Крещение огнём", 2003, 1),
+        ]);
+        assert!(lib.matches(0, &query_words("ария химера")));
+        assert!(lib.matches(0, &query_words("2001")));
+        assert!(!lib.matches(0, &query_words("ария кипелов")));
+        assert!(lib.matches(1, &query_words("огнем")));
+        assert!(lib.matches(1, &query_words("ОГНЁМ")));
     }
 }

@@ -145,7 +145,7 @@ pub fn show(
     }
 
     // The rows the search leaves, as indices into the playlist.
-    let words: Vec<String> = pv.query.split_whitespace().map(str::to_lowercase).collect();
+    let words = crate::library::query_words(&pv.query);
     let entries = player.queue.entries();
     let count = entries.len();
     let lines: Vec<(String, Option<u32>)> =
@@ -153,7 +153,7 @@ pub fn show(
     let shown: Vec<usize> = (0..entries.len())
         .filter(|&i| {
             words.is_empty() || {
-                let text = lines[i].0.to_lowercase();
+                let text = crate::library::search_form(&lines[i].0);
                 words.iter().all(|w| text.contains(w.as_str()))
             }
         })
