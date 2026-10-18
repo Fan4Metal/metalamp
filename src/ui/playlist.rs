@@ -98,10 +98,10 @@ pub fn show(
     }
     let full = ui.available_rect_before_wrap();
     let painter = ui.painter().clone();
-    painter.rect_filled(full, 0.0, palette::PANEL_BG);
+    painter.rect_filled(full, 0.0, palette::panel_bg());
     painter.line_segment(
         [full.left_top(), full.left_bottom()],
-        egui::Stroke::new(1.0, palette::LINE),
+        egui::Stroke::new(1.0, palette::line()),
     );
 
     // The search field and Clear.
@@ -179,7 +179,7 @@ pub fn show(
             full.bottom() - FOOTER - cover_rect.map_or(0.0, |_| cover_h + COVER_PAD),
         ),
     );
-    painter.rect_filled(body, 0.0, palette::LIST_BG);
+    painter.rect_filled(body, 0.0, palette::list_bg());
     if let Some(r) = cover_rect {
         match cover {
             Some(t) => {
@@ -192,14 +192,14 @@ pub fn show(
                     .paint_at(ui, fit);
             }
             None => {
-                painter.rect_filled(r, 6.0, palette::CARD_BG);
+                painter.rect_filled(r, 6.0, palette::card_bg());
                 icons::paint(
                     &painter,
                     Icon::File,
                     r.center(),
                     side * 0.25,
-                    palette::LINE,
-                    palette::CARD_BG,
+                    palette::line(),
+                    palette::card_bg(),
                 );
             }
         }
@@ -271,30 +271,30 @@ pub fn show(
             );
             let selected = pv.selected.contains(&i);
             if selected {
-                painter.rect_filled(r, 0.0, palette::SELECTED_BG);
+                painter.rect_filled(r, 0.0, palette::selected_bg());
             } else if resp.hovered() {
-                painter.rect_filled(r, 0.0, palette::HOVER);
+                painter.rect_filled(r, 0.0, palette::hover());
             }
             let color = if Some(i) == playing {
-                palette::PLAYING
+                palette::playing()
             } else if selected {
-                palette::TEXT_BRIGHT
+                palette::text_bright()
             } else {
-                palette::TEXT
+                palette::text()
             };
             let (text, length) = &lines[i];
             let length = length
                 .map(|ms| format::time(u64::from(ms)))
                 .unwrap_or_default();
             let num =
-                painter.layout_no_wrap(format!("{}.", i + 1), font.clone(), palette::TEXT_WEAK);
+                painter.layout_no_wrap(format!("{}.", i + 1), font.clone(), palette::text_weak());
             painter.galley(
                 pos2(
                     r.left() + 6.0 + number_w - num.size().x - 6.0,
                     r.center().y - num.size().y / 2.0,
                 ),
                 num,
-                palette::TEXT_WEAK,
+                palette::text_weak(),
             );
             let len = painter.layout_no_wrap(length, font.clone(), color);
             let len_x = r.right() - 8.0 - len.size().x;
@@ -330,7 +330,7 @@ pub fn show(
             let y = area.top() + slot as f32 * ROW_HEIGHT;
             painter.line_segment(
                 [pos2(area.left(), y), pos2(area.right(), y)],
-                egui::Stroke::new(2.0, palette::ACCENT),
+                egui::Stroke::new(2.0, palette::accent()),
             );
             drop_slot = Some(slot);
         }
@@ -459,7 +459,7 @@ pub fn show(
         Align2::LEFT_CENTER,
         text,
         FontId::proportional(12.0),
-        palette::TEXT_WEAK,
+        palette::text_weak(),
     );
     if let Some(i) = playing {
         // Where the entry playing is: a click on the footer shows it.
@@ -469,15 +469,15 @@ pub fn show(
         );
         let resp = ui.interact(r, egui::Id::new("playlist_locate"), Sense::click());
         if resp.hovered() {
-            painter.rect_filled(r, 3.0, palette::HOVER);
+            painter.rect_filled(r, 3.0, palette::hover());
         }
         icons::paint(
             &painter,
             Icon::Play,
             r.center(),
             10.0,
-            palette::ACCENT,
-            palette::PANEL_BG,
+            palette::accent(),
+            palette::panel_bg(),
         );
         if resp
             .on_hover_text(tr!("Show the track playing", "Показать играющий трек"))

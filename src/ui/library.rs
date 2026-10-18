@@ -484,7 +484,7 @@ pub fn show(
         });
     }
     let full = ui.available_rect_before_wrap();
-    ui.painter().rect_filled(full, 0.0, palette::PANEL_BG);
+    ui.painter().rect_filled(full, 0.0, palette::panel_bg());
 
     let bar = Rect::from_min_size(full.min, vec2(full.width(), TOP_BAR));
     top_bar(ui, bar, lv, settings, &mut actions, &mut changed);
@@ -504,7 +504,7 @@ pub fn show(
             Align2::CENTER_CENTER,
             text,
             FontId::proportional(14.0),
-            palette::TEXT_WEAK,
+            palette::text_weak(),
         );
         ui.advance_cursor_after_rect(full);
         return (actions, changed);
@@ -626,8 +626,8 @@ fn top_bar(
         Icon::Search,
         r.center(),
         icons::SIZE,
-        palette::TEXT_WEAK,
-        palette::PANEL_BG,
+        palette::text_weak(),
+        palette::panel_bg(),
     );
     let edit = egui::TextEdit::singleline(&mut lv.query)
         .hint_text(tr!("Search (Ctrl+F)", "Поиск (Ctrl+F)"))
@@ -1143,7 +1143,7 @@ fn albums_grid(
     }
 
     let body = Rect::from_min_max(pos2(rect.left(), header.bottom()), rect.max);
-    ui.painter().rect_filled(body, 0.0, palette::LIST_BG);
+    ui.painter().rect_filled(body, 0.0, palette::list_bg());
     // Ctrl and the wheel over the grid: larger or smaller covers (egui
     // keeps a scroll area still while Ctrl is held).
     if ui.rect_contains_pointer(body) && ui.input(|i| i.modifiers.command) {
@@ -1242,9 +1242,9 @@ fn albums_grid(
                 );
                 let selected = current == Some(i);
                 if selected {
-                    painter.rect_filled(cell, 4.0, palette::SELECTED_BG);
+                    painter.rect_filled(cell, 4.0, palette::selected_bg());
                 } else if resp.hovered() {
-                    painter.rect_filled(cell, 4.0, palette::HOVER);
+                    painter.rect_filled(cell, 4.0, palette::hover());
                 }
                 let cover = Rect::from_min_size(
                     pos2(cell.center().x - cover_side / 2.0, cell.top() + 4.0),
@@ -1265,15 +1265,15 @@ fn albums_grid(
                         );
                     }
                     None => {
-                        painter.rect_filled(cover, 3.0, palette::CARD_BG);
+                        painter.rect_filled(cover, 3.0, palette::card_bg());
                         if lv.covers.is_missing(library, album) {
                             icons::paint(
                                 &painter,
                                 Icon::Play,
                                 cover.center(),
                                 28.0,
-                                palette::TEXT_WEAK,
-                                palette::CARD_BG,
+                                palette::text_weak(),
+                                palette::card_bg(),
                             );
                         }
                     }
@@ -1282,7 +1282,7 @@ fn albums_grid(
                     painter.rect_stroke(
                         cover,
                         3.0,
-                        egui::Stroke::new(2.0, palette::ACCENT),
+                        egui::Stroke::new(2.0, palette::accent()),
                         egui::StrokeKind::Outside,
                     );
                 }
@@ -1311,22 +1311,22 @@ fn albums_grid(
                     title,
                     13.0,
                     if selected {
-                        palette::TEXT_BRIGHT
+                        palette::text_bright()
                     } else {
-                        palette::TEXT
+                        palette::text()
                     },
                 );
-                let g2 = line(second, 11.5, palette::TEXT_WEAK);
+                let g2 = line(second, 11.5, palette::text_weak());
                 let y = cover.bottom() + 6.0;
                 painter.galley(
                     pos2(cell.center().x - g1.size().x / 2.0, y),
                     g1,
-                    palette::TEXT,
+                    palette::text(),
                 );
                 painter.galley(
                     pos2(cell.center().x - g2.size().x / 2.0, y + 17.0),
                     g2,
-                    palette::TEXT_WEAK,
+                    palette::text_weak(),
                 );
                 if crate::ui::double_clicked(&resp) {
                     double = Some(i);

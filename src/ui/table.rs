@@ -92,7 +92,7 @@ impl Table<'_> {
         self.widths.resize(n, 100.0);
         let full = ui.available_rect_before_wrap();
         let painter = ui.painter().clone();
-        painter.rect_filled(full, 0.0, palette::LIST_BG);
+        painter.rect_filled(full, 0.0, palette::list_bg());
 
         let header = Rect::from_min_size(full.min, vec2(full.width(), HEADER_HEIGHT));
         // The columns at their own widths; when they are wider than the
@@ -143,11 +143,11 @@ impl Table<'_> {
                 let resp = ui.interact(r, self.id.with(("row", row)), Sense::click());
                 let (selected, playing) = style(row);
                 let fill = if selected {
-                    Some(palette::SELECTED_BG)
+                    Some(palette::selected_bg())
                 } else if resp.hovered() {
-                    Some(palette::HOVER)
+                    Some(palette::hover())
                 } else if row % 2 == 1 {
-                    Some(palette::LIST_STRIPE)
+                    Some(palette::list_stripe())
                 } else {
                     None
                 };
@@ -155,11 +155,11 @@ impl Table<'_> {
                     painter.rect_filled(r, 0.0, fill);
                 }
                 let color = if playing {
-                    palette::PLAYING
+                    palette::playing()
                 } else if selected {
-                    palette::TEXT_BRIGHT
+                    palette::text_bright()
                 } else {
-                    palette::TEXT
+                    palette::text()
                 };
                 for (i, col) in self.columns.iter().enumerate() {
                     let (left, right) = edges[i];
@@ -245,7 +245,7 @@ pub fn header_row(
     ui.set_clip_rect(header.intersect(ui.clip_rect()));
     let ui = &mut ui;
     let painter = ui.painter().clone();
-    painter.rect_filled(header, 0.0, palette::HEADER_BG);
+    painter.rect_filled(header, 0.0, palette::header_bg());
     let n = columns.len();
     widths.resize(n, 100.0);
     let (mut sorted, mut resized) = (false, false);
@@ -255,7 +255,7 @@ pub fn header_row(
         let r = Rect::from_min_max(pos2(left, header.top()), pos2(right, header.bottom()));
         let resp = ui.interact(r, id.with(("head", i)), Sense::click());
         if resp.hovered() {
-            painter.rect_filled(r, 0.0, palette::HOVER);
+            painter.rect_filled(r, 0.0, palette::hover());
         }
         if resp.clicked() {
             *sort = Some(match *sort {
@@ -288,20 +288,20 @@ pub fn header_row(
             };
             painter.add(egui::Shape::convex_polygon(
                 vec![a, b, tip],
-                palette::TEXT_WEAK,
+                palette::text_weak(),
                 egui::Stroke::NONE,
             ));
             text_right -= 12.0;
         }
         let clip = Rect::from_min_max(clip.min, pos2(text_right.max(clip.left()), clip.bottom()))
             .intersect(header);
-        cell_text(&painter, clip, &col.title, col.align, palette::TEXT_WEAK);
+        cell_text(&painter, clip, &col.title, col.align, palette::text_weak());
         painter.line_segment(
             [
                 pos2(right - 0.5, r.top() + 4.0),
                 pos2(right - 0.5, r.bottom() - 4.0),
             ],
-            egui::Stroke::new(1.0, palette::LINE),
+            egui::Stroke::new(1.0, palette::line()),
         );
         // The right edge resizes the column (not the last one).
         if i + 1 < n {

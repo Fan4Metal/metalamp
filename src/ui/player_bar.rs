@@ -86,10 +86,10 @@ pub fn show(ui: &mut Ui, now: &NowPlaying<'_>, spectrum: &Analyzer) -> Vec<BarCm
     let mut cmds = Vec::new();
     let rect = ui.max_rect();
     let painter = ui.painter().clone();
-    painter.rect_filled(rect, 0.0, palette::BAR_BG);
+    painter.rect_filled(rect, 0.0, palette::bar_bg());
     painter.line_segment(
         [rect.left_bottom(), rect.right_bottom()],
-        egui::Stroke::new(1.0, palette::LINE),
+        egui::Stroke::new(1.0, palette::line()),
     );
     // The free space drags the window, as the title row does.
     crate::frameless::drag_area(ui, rect, ui.id().with("bar_drag"), Sense::hover());
@@ -145,7 +145,11 @@ fn winamp(
             .into_iter()
             .map(|size| {
                 ui.fonts_mut(|f| {
-                    f.layout_no_wrap(text.clone(), FontId::monospace(size), palette::TEXT_BRIGHT)
+                    f.layout_no_wrap(
+                        text.clone(),
+                        FontId::monospace(size),
+                        palette::text_bright(),
+                    )
                 })
             })
             .find(|g| g.size().x <= TIME_WIDTH)
@@ -154,9 +158,9 @@ fn winamp(
             .interact(time_rect, ui.id().with("time"), Sense::click())
             .on_hover_cursor(egui::CursorIcon::PointingHand);
         let color = if resp.hovered() {
-            palette::ACCENT_HOVER
+            palette::accent_hover()
         } else {
-            palette::TEXT_BRIGHT
+            palette::text_bright()
         };
         let pos = pos2(
             time_rect.left(),
@@ -176,12 +180,16 @@ fn winamp(
     let text_left = cover.right() + 12.0;
     let room = (info.right() - text_left).max(0.0);
     if now.has_track() {
-        let g1 = line(ui, now.title, 15.0, palette::TEXT_BRIGHT, room);
-        let g2 = line(ui, now.artist, 12.5, palette::TEXT_WEAK, room);
-        let g3 = line(ui, &facts(now), 11.5, palette::TEXT_WEAK, room);
-        painter.galley(pos2(text_left, info.top() - 1.0), g1, palette::TEXT_BRIGHT);
-        painter.galley(pos2(text_left, info.top() + 19.0), g2, palette::TEXT_WEAK);
-        painter.galley(pos2(text_left, info.top() + 36.0), g3, palette::TEXT_WEAK);
+        let g1 = line(ui, now.title, 15.0, palette::text_bright(), room);
+        let g2 = line(ui, now.artist, 12.5, palette::text_weak(), room);
+        let g3 = line(ui, &facts(now), 11.5, palette::text_weak(), room);
+        painter.galley(
+            pos2(text_left, info.top() - 1.0),
+            g1,
+            palette::text_bright(),
+        );
+        painter.galley(pos2(text_left, info.top() + 19.0), g2, palette::text_weak());
+        painter.galley(pos2(text_left, info.top() + 36.0), g3, palette::text_weak());
     }
 
     // The seek bar, the length at its end.
@@ -198,7 +206,7 @@ fn winamp(
             Align2::RIGHT_CENTER,
             format::time(now.duration_ms),
             FontId::proportional(12.0),
-            palette::TEXT_WEAK,
+            palette::text_weak(),
         );
     }
 
@@ -213,8 +221,8 @@ fn winamp(
         painter.rect(
             display,
             4.0,
-            palette::LIST_BG,
-            egui::Stroke::new(1.0, palette::LINE),
+            palette::list_bg(),
+            egui::Stroke::new(1.0, palette::line()),
             egui::StrokeKind::Inside,
         );
         spectrum.paint(painter, display.shrink(4.0));
@@ -240,10 +248,10 @@ fn classic(
     let text_left = cover.right() + 12.0;
     let room = (right - 16.0 - text_left).max(0.0);
     if now.has_track() {
-        let g1 = line(ui, now.title, 15.0, palette::TEXT_BRIGHT, room);
-        let g2 = line(ui, now.artist, 12.5, palette::TEXT_WEAK, room);
-        painter.galley(pos2(text_left, cy - 19.0), g1, palette::TEXT_BRIGHT);
-        painter.galley(pos2(text_left, cy + 2.0), g2, palette::TEXT_WEAK);
+        let g1 = line(ui, now.title, 15.0, palette::text_bright(), room);
+        let g2 = line(ui, now.artist, 12.5, palette::text_weak(), room);
+        painter.galley(pos2(text_left, cy - 19.0), g1, palette::text_bright());
+        painter.galley(pos2(text_left, cy + 2.0), g2, palette::text_weak());
     }
 
     // The seek bar across the bottom, the times at its ends.
@@ -261,7 +269,7 @@ fn classic(
             Align2::RIGHT_CENTER,
             format::time(shown_ms),
             font.clone(),
-            palette::TEXT_WEAK,
+            palette::text_weak(),
         );
         if now.duration_ms > 0 {
             painter.text(
@@ -269,7 +277,7 @@ fn classic(
                 Align2::LEFT_CENTER,
                 format::time(now.duration_ms),
                 font,
-                palette::TEXT_WEAK,
+                palette::text_weak(),
             );
         }
     }
@@ -358,7 +366,7 @@ fn cover_button(
             );
         }
         None => {
-            painter.rect_filled(cover, 3.0, palette::CARD_BG);
+            painter.rect_filled(cover, 3.0, palette::card_bg());
         }
     }
 }
@@ -380,15 +388,15 @@ fn transport(
         let resp = ui.interact(r, ui.id().with(("bar", tip)), Sense::click());
         let (fill, color) = if round {
             let fill = if resp.hovered() {
-                palette::ACCENT_HOVER
+                palette::accent_hover()
             } else {
-                palette::ACCENT
+                palette::accent()
             };
-            (Some(fill), Color32::from_rgb(0x1a, 0x1b, 0x1f))
+            (Some(fill), palette::on_accent())
         } else if resp.hovered() {
-            (Some(palette::HOVER), palette::TEXT_BRIGHT)
+            (Some(palette::hover()), palette::text_bright())
         } else {
-            (None, palette::TEXT)
+            (None, palette::text())
         };
         if let Some(fill) = fill {
             painter.circle_filled(r.center(), d / 2.0, fill);
@@ -399,7 +407,7 @@ fn transport(
             r.center(),
             size,
             color,
-            fill.unwrap_or(palette::BAR_BG),
+            fill.unwrap_or(palette::bar_bg()),
         );
         if resp.on_hover_text(tip).clicked() {
             cmds.push(cmd);
@@ -463,15 +471,15 @@ fn volume_and_toggles(
     };
     let resp = ui.interact(speaker, ui.id().with("mute"), Sense::click());
     if resp.hovered() {
-        painter.rect_filled(speaker, 4.0, palette::HOVER);
+        painter.rect_filled(speaker, 4.0, palette::hover());
     }
     icons::paint(
         painter,
         vol_icon,
         speaker.center(),
         15.0,
-        palette::TEXT,
-        palette::BAR_BG,
+        palette::text(),
+        palette::bar_bg(),
     );
     if resp
         .on_hover_text(tr!("Mute (M)", "Без звука (M)"))
@@ -488,15 +496,15 @@ fn volume_and_toggles(
     );
     let shown = if now.mute { 0 } else { now.volume };
     let track = Rect::from_center_size(slider.center(), vec2(slider.width(), 4.0));
-    painter.rect_filled(track, 2.0, palette::TRACK);
+    painter.rect_filled(track, 2.0, palette::track());
     let fill_x = track.left() + track.width() * f32::from(shown) / 100.0;
     painter.rect_filled(
         Rect::from_min_max(track.min, pos2(fill_x, track.bottom())),
         2.0,
-        palette::ACCENT,
+        palette::accent(),
     );
     if resp.hovered() || resp.dragged() {
-        painter.circle_filled(pos2(fill_x, track.center().y), 6.0, palette::TEXT_BRIGHT);
+        painter.circle_filled(pos2(fill_x, track.center().y), 6.0, palette::text_bright());
     }
     if (resp.dragged() || resp.clicked())
         && let Some(p) = resp.interact_pointer_pos()
@@ -513,16 +521,16 @@ fn volume_and_toggles(
         right = r.left() - 2.0;
         let resp = ui.interact(r, ui.id().with(("toggle", icon)), Sense::click());
         if on {
-            painter.rect_filled(r, 4.0, palette::SELECTED_BG);
+            painter.rect_filled(r, 4.0, palette::selected_bg());
         } else if resp.hovered() {
-            painter.rect_filled(r, 4.0, palette::HOVER);
+            painter.rect_filled(r, 4.0, palette::hover());
         }
         let color = if on {
-            palette::ACCENT
+            palette::accent()
         } else {
-            palette::TEXT_WEAK
+            palette::text_weak()
         };
-        icons::paint(painter, icon, r.center(), 15.0, color, palette::BAR_BG);
+        icons::paint(painter, icon, r.center(), 15.0, color, palette::bar_bg());
         if resp.on_hover_text(tip).clicked() {
             cmds.push(cmd);
         }
@@ -593,15 +601,15 @@ fn seek_bar(
         0.0
     };
     let line_r = Rect::from_center_size(bar.center(), vec2(bar.width(), 4.0));
-    painter.rect_filled(line_r, 2.0, palette::TRACK);
+    painter.rect_filled(line_r, 2.0, palette::track());
     let x_at = line_r.left() + line_r.width() * share;
     painter.rect_filled(
         Rect::from_min_max(line_r.min, pos2(x_at, line_r.bottom())),
         2.0,
-        palette::ACCENT,
+        palette::accent(),
     );
     if duration > 0 && (resp.hovered() || resp.dragged()) {
-        painter.circle_filled(pos2(x_at, line_r.center().y), 6.0, palette::TEXT_BRIGHT);
+        painter.circle_filled(pos2(x_at, line_r.center().y), 6.0, palette::text_bright());
     }
     if (resp.drag_stopped() || (resp.clicked() && !resp.dragged()))
         && let Some(ms) = target

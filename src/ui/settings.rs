@@ -14,6 +14,7 @@ use crate::audio::dsp::{DspSettings, eq};
 use crate::audio::output::Device;
 use crate::i18n::LangChoice;
 use crate::palette;
+use crate::palette::{Accent, Theme};
 use crate::settings::{BarLayout, EqPreset, MediaKeys, Settings};
 use crate::ui::icons::{self, Icon};
 use crate::update::{Status, Updates, release_url, version_of};
@@ -48,8 +49,8 @@ impl Page {
     fn summary(self) -> &'static str {
         match self {
             Page::General => tr!(
-                "The language, the layout of the player bar and the media keys.",
-                "Язык, вид панели плеера и медиаклавиши."
+                "The language, the theme and colour, the layout of the player bar and the media keys.",
+                "Язык, тема и цвет, вид панели плеера и медиаклавиши."
             ),
             Page::Sound => tr!(
                 "The device the sound goes to; one loudness for every track, the equalizer and the enhancer.",
@@ -70,6 +71,8 @@ pub struct Changed {
     pub device: bool,
     /// The sound processing (`settings.dsp`).
     pub dsp: bool,
+    /// The theme or the accent: `palette::set` and `apply`.
+    pub look: bool,
     /// Anything to save.
     pub any: bool,
 }
@@ -135,7 +138,7 @@ impl SettingsDialog {
         let modal = egui::Modal::new(egui::Id::new("settings"))
             .frame(
                 egui::Frame::popup(&ctx.style_of(egui::Theme::Dark))
-                    .fill(palette::PANEL_BG)
+                    .fill(palette::panel_bg())
                     .corner_radius(RADIUS)
                     .inner_margin(Margin::ZERO),
             )
@@ -157,14 +160,14 @@ impl SettingsDialog {
                         ne: 0,
                         se: 0,
                     },
-                    palette::TITLE_BG,
+                    palette::title_bg(),
                 );
                 ui.painter().text(
                     sidebar.left_top() + vec2(20.0, 20.0),
                     Align2::LEFT_TOP,
                     tr!("Settings", "Настройки"),
                     FontId::proportional(18.0),
-                    palette::TEXT_BRIGHT,
+                    palette::text_bright(),
                 );
                 let list = Rect::from_min_max(
                     sidebar.left_top() + vec2(10.0, 62.0),
@@ -215,10 +218,10 @@ impl SettingsDialog {
                     RichText::new(self.page.title())
                         .size(20.0)
                         .strong()
-                        .color(palette::TEXT_BRIGHT),
+                        .color(palette::text_bright()),
                 );
                 ui.add_space(2.0);
-                ui.label(RichText::new(self.page.summary()).color(palette::TEXT_WEAK));
+                ui.label(RichText::new(self.page.summary()).color(palette::text_weak()));
                 ui.add_space(4.0);
                 let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]);
                 if let Some(offset) = self.scroll_to.take() {
@@ -248,6 +251,7 @@ impl SettingsDialog {
         }
         changed.device = settings.output_device != before.output_device;
         changed.dsp = settings.dsp != before.dsp;
+        changed.look = settings.theme != before.theme || settings.accent != before.accent;
         changed.any = *settings != before;
         changed
     }
@@ -267,9 +271,9 @@ impl SettingsDialog {
             ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
         let selected = self.page == page;
         let fill = if selected {
-            Color32::from_white_alpha(14)
+            palette::pressed()
         } else if response.hovered() {
-            Color32::from_white_alpha(7)
+            palette::hover()
         } else {
             Color32::TRANSPARENT
         };
@@ -278,12 +282,12 @@ impl SettingsDialog {
             // A short accent bar at the left edge marks the page.
             let bar =
                 Rect::from_center_size(pos2(row.left() + 3.0, row.center().y), vec2(3.0, 16.0));
-            ui.painter().rect_filled(bar, 1.5, palette::ACCENT);
+            ui.painter().rect_filled(bar, 1.5, palette::accent());
         }
         let color = if selected {
-            palette::TEXT_BRIGHT
+            palette::text_bright()
         } else {
-            palette::TEXT
+            palette::text()
         };
         ui.painter().text(
             pos2(row.left() + 16.0, row.center().y),
@@ -325,7 +329,7 @@ fn child(ui: &mut Ui, rect: Rect) -> Ui {
 /// A card: a lighter rounded ground without a frame.
 fn card(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     egui::Frame::new()
-        .fill(palette::CARD_BG)
+        .fill(palette::card_bg())
         .corner_radius(8.0)
         .inner_margin(Margin::symmetric(16, 4))
         .show(ui, |ui| {
@@ -337,7 +341,7 @@ fn card(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
 /// A titled group of settings: the title over a card.
 fn section(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
     ui.add_space(16.0);
-    ui.label(RichText::new(title).strong().color(palette::TEXT_BRIGHT));
+    ui.label(RichText::new(title).strong().color(palette::text_bright()));
     ui.add_space(4.0);
     card(ui, add);
 }
@@ -348,7 +352,7 @@ fn divider(ui: &mut Ui) {
     ui.painter().hline(
         rect.x_range(),
         rect.center().y,
-        Stroke::new(1.0, palette::LINE),
+        Stroke::new(1.0, palette::line()),
     );
 }
 
@@ -368,14 +372,14 @@ fn row<R>(
     let title = ui.painter().layout(
         title.to_owned(),
         FontId::proportional(14.0),
-        palette::TEXT,
+        palette::text(),
         text_width,
     );
     let hint = hint.map(|h| {
         ui.painter().layout(
             h.to_owned(),
             FontId::proportional(12.5),
-            palette::TEXT_WEAK,
+            palette::text_weak(),
             text_width,
         )
     });
@@ -385,11 +389,11 @@ fn row<R>(
     let mut y = rect.center().y - text_height / 2.0;
     let title_height = title.size().y;
     ui.painter()
-        .galley(pos2(rect.left(), y), title, palette::TEXT);
+        .galley(pos2(rect.left(), y), title, palette::text());
     y += title_height + 2.0;
     if let Some(hint) = hint {
         ui.painter()
-            .galley(pos2(rect.left(), y), hint, palette::TEXT_WEAK);
+            .galley(pos2(rect.left(), y), hint, palette::text_weak());
     }
     let control_rect = Rect::from_min_max(pos2(rect.right() - control_width, rect.top()), rect.max);
     let mut ui = ui.new_child(
@@ -418,18 +422,18 @@ fn switch(ui: &mut Ui, on: &mut bool) -> Response {
         let painter = ui.painter();
         if *on {
             let fill = if hovered {
-                palette::ACCENT_HOVER
+                palette::accent_hover()
             } else {
-                palette::ACCENT
+                palette::accent()
             };
             painter.rect_filled(rect, radius, fill);
         } else {
-            painter.rect_filled(rect, radius, palette::TRACK);
+            painter.rect_filled(rect, radius, palette::track());
         }
         let knob = if *on || hovered {
-            palette::TEXT_BRIGHT
+            palette::text_bright()
         } else {
-            palette::TEXT_WEAK
+            palette::text_weak()
         };
         let x = egui::lerp(rect.left() + radius..=rect.right() - radius, t);
         painter.circle_filled(pos2(x, rect.center().y), radius - 4.0 + t, knob);
@@ -464,6 +468,37 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
                     crate::i18n::set_lang(choice.resolve());
                 }
             },
+        );
+        divider(ui);
+        row(
+            ui,
+            tr!("Theme", "Тема"),
+            Some(tr!(
+                "The grounds and the text: three dark themes and a light one.",
+                "Фон и текст: три тёмные темы и светлая."
+            )),
+            CONTROL,
+            |ui| {
+                egui::ComboBox::from_id_salt("settings_theme")
+                    .selected_text(settings.theme.label())
+                    .width(CONTROL - 10.0)
+                    .show_ui(ui, |ui| {
+                        for t in Theme::ALL {
+                            ui.selectable_value(&mut settings.theme, t, t.label());
+                        }
+                    });
+            },
+        );
+        divider(ui);
+        row(
+            ui,
+            tr!("Colour", "Цвет"),
+            Some(tr!(
+                "Of the controls, the selection and the track playing.",
+                "Кнопок управления, выделения и играющего трека."
+            )),
+            ACCENTS_WIDTH,
+            |ui| accents(ui, &mut settings.accent),
         );
         divider(ui);
         row(
@@ -670,18 +705,18 @@ fn tool(ui: &mut Ui, tip: &str, enabled: bool, icon: Icon) -> Response {
     };
     let (rect, response) = ui.allocate_exact_size(vec2(TOOL, 24.0), sense);
     let color = if !enabled {
-        palette::TEXT_WEAK.gamma_multiply(0.5)
+        palette::text_weak().gamma_multiply(0.5)
     } else if response.hovered() {
-        palette::TEXT_BRIGHT
+        palette::text_bright()
     } else {
-        palette::TEXT
+        palette::text()
     };
-    let mut fill = palette::CARD_BG;
+    let mut fill = palette::card_bg();
     if enabled && response.hovered() {
         fill = if response.is_pointer_button_down_on() {
-            palette::PRESSED
+            palette::pressed()
         } else {
-            palette::HOVER
+            palette::hover()
         };
         ui.painter().rect_filled(rect, 4.0, fill);
     }
@@ -735,7 +770,7 @@ fn eq_head(
                     ui.label(
                         RichText::new(tr!("Mine", "Мои"))
                             .small()
-                            .color(palette::TEXT_WEAK),
+                            .color(palette::text_weak()),
                     );
                     for (i, p) in presets.iter().enumerate() {
                         if ui.selectable_label(mine == Some(i), &p.name).clicked() {
@@ -841,7 +876,7 @@ fn name_row(
                 "Список полон: самый старый свой уступит место."
             ))
             .size(12.5)
-            .color(palette::TEXT_WEAK),
+            .color(palette::text_weak()),
         );
     }
     if done {
@@ -885,9 +920,9 @@ fn bands(ui: &mut Ui, dsp: &mut DspSettings) {
                     Layout::top_down(Align::Center),
                     |ui| {
                         let color = if *value != 0.0 && on {
-                            palette::ACCENT_HOVER
+                            palette::accent_hover()
                         } else {
-                            palette::TEXT_WEAK
+                            palette::text_weak()
                         };
                         ui.label(RichText::new(gain_text(*value)).size(11.0).color(color));
                         let tip = match hz {
@@ -953,7 +988,7 @@ fn bands(ui: &mut Ui, dsp: &mut DspSettings) {
                         Align2::RIGHT_CENTER,
                         text,
                         font.clone(),
-                        palette::TEXT_WEAK,
+                        palette::text_weak(),
                     );
                 }
             }
@@ -967,13 +1002,13 @@ fn bands(ui: &mut Ui, dsp: &mut DspSettings) {
             shapes.push(egui::Shape::hline(
                 span,
                 zero,
-                Stroke::new(1.0, palette::LINE),
+                Stroke::new(1.0, palette::line()),
             ));
         }
         let curve = if on {
-            palette::ACCENT.gamma_multiply(0.8)
+            palette::accent().gamma_multiply(0.8)
         } else {
-            palette::TEXT_WEAK.gamma_multiply(0.4)
+            palette::text_weak().gamma_multiply(0.4)
         };
         shapes.push(egui::Shape::line(smooth(&knobs), Stroke::new(2.0, curve)));
         ui.painter().set(under, egui::Shape::Vec(shapes));
@@ -1003,6 +1038,40 @@ fn smooth(points: &[egui::Pos2]) -> Vec<egui::Pos2> {
     }
     out.push(*points.last().expect("three points or more"));
     out
+}
+
+/// The width of the accents' row.
+const ACCENTS_WIDTH: f32 = 250.0;
+/// The size of an accent's swatch.
+const SWATCH: f32 = 22.0;
+
+/// The accents as round swatches, the chosen one ringed (metalmpv's,
+/// without the user's own colour).
+fn accents(ui: &mut Ui, accent: &mut Accent) {
+    ui.spacing_mut().item_spacing.x = 5.0;
+    // Right to left: the last first.
+    for a in Accent::ALL.into_iter().rev() {
+        let (rect, response) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
+        let response = response.on_hover_text(a.label());
+        let selected = *accent == a;
+        let painter = ui.painter();
+        let centre = rect.center();
+        let radius = SWATCH / 2.0;
+        if selected {
+            painter.circle_stroke(
+                centre,
+                radius - 1.0,
+                Stroke::new(2.0, palette::text_bright()),
+            );
+            painter.circle_filled(centre, radius - 4.5, a.base());
+        } else {
+            let grow = if response.hovered() { 1.0 } else { 0.0 };
+            painter.circle_filled(centre, radius - 3.0 + grow, a.base());
+        }
+        if response.clicked() {
+            *accent = a;
+        }
+    }
 }
 
 /// `text` cut to `chars` with an ellipsis.
@@ -1061,7 +1130,7 @@ fn updates_page(ui: &mut Ui, updates: &mut Updates) {
             ui.label(RichText::new(tr!(
                 "Only api.github.com is asked, with the program's version in the request; nothing is downloaded or installed. A newer version shows a button in the title row that opens its release page.",
                 "Запрос уходит только к api.github.com и содержит лишь версию программы; ничего не скачивается и не устанавливается. О новой версии сообщает кнопка в строке заголовка, открывающая страницу выпуска."
-            )).color(palette::TEXT_WEAK));
+            )).color(palette::text_weak()));
             ui.add_space(8.0);
         },
     );
@@ -1116,6 +1185,8 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     }
     settings.language = d.language;
     settings.bar_layout = d.bar_layout;
+    settings.theme = d.theme;
+    settings.accent = d.accent;
     settings.media_keys = d.media_keys;
     settings.output_device = d.output_device;
     settings.output_device_name = d.output_device_name;

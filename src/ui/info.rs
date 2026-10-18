@@ -142,7 +142,7 @@ impl InfoView {
         let modal = egui::Modal::new(egui::Id::new("file_info"))
             .frame(
                 egui::Frame::window(&ctx.style_of(egui::Theme::Dark))
-                    .fill(palette::PANEL_BG)
+                    .fill(palette::panel_bg())
                     .inner_margin(egui::Margin::same(20))
                     .corner_radius(10.0),
             )
@@ -162,7 +162,7 @@ impl InfoView {
                         close |= hero(ui, None, &wanted, None);
                         ui.add_space(16.0);
                         ui.colored_label(
-                            palette::ERROR,
+                            palette::error(),
                             tr!(
                                 format!("Cannot read the file: {e}"),
                                 format!("Не удалось прочитать файл: {e}")
@@ -233,7 +233,7 @@ fn hero(ui: &mut Ui, d: Option<&Details>, path: &Path, cover: Option<&TextureHan
                                 RichText::new(title)
                                     .size(22.0)
                                     .strong()
-                                    .color(palette::TEXT_BRIGHT),
+                                    .color(palette::text_bright()),
                             )
                             .truncate(),
                         );
@@ -244,7 +244,7 @@ fn hero(ui: &mut Ui, d: Option<&Details>, path: &Path, cover: Option<&TextureHan
             let artist = value(d, &[ItemKey::TrackArtist, ItemKey::AlbumArtist]);
             if !artist.is_empty() {
                 ui.add(
-                    egui::Label::new(RichText::new(artist).size(16.0).color(palette::TEXT))
+                    egui::Label::new(RichText::new(artist).size(16.0).color(palette::text()))
                         .truncate(),
                 );
             }
@@ -261,7 +261,7 @@ fn hero(ui: &mut Ui, d: Option<&Details>, path: &Path, cover: Option<&TextureHan
                     egui::Label::new(
                         RichText::new(album.join("  ·  "))
                             .size(13.5)
-                            .color(palette::TEXT_WEAK),
+                            .color(palette::text_weak()),
                     )
                     .truncate(),
                 );
@@ -290,20 +290,20 @@ fn cover_box(ui: &mut Ui, cover: Option<&TextureHandle>, side: f32) {
                 rect.center(),
                 vec2(w as f32 * scale, h as f32 * scale),
             );
-            painter.rect_filled(rect, 8.0, palette::LIST_BG);
+            painter.rect_filled(rect, 8.0, palette::list_bg());
             egui::Image::new(egui::load::SizedTexture::new(t.id(), r.size()))
                 .corner_radius(8.0)
                 .paint_at(ui, r);
         }
         None => {
-            painter.rect_filled(rect, 8.0, palette::CARD_BG);
+            painter.rect_filled(rect, 8.0, palette::card_bg());
             crate::ui::icons::paint(
                 painter,
                 crate::ui::icons::Icon::File,
                 rect.center(),
                 side * 0.3,
-                palette::TEXT_WEAK,
-                palette::CARD_BG,
+                palette::text_weak(),
+                palette::card_bg(),
             );
         }
     }
@@ -314,14 +314,14 @@ fn chip(ui: &mut Ui, text: &str) {
     let galley = ui.painter().layout_no_wrap(
         text.to_owned(),
         egui::FontId::proportional(12.0),
-        palette::TEXT,
+        palette::text(),
     );
     let size = galley.size() + vec2(18.0, 8.0);
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     ui.painter()
-        .rect_filled(rect, size.y / 2.0, palette::CARD_BG);
+        .rect_filled(rect, size.y / 2.0, palette::card_bg());
     ui.painter()
-        .galley(rect.min + vec2(9.0, 4.0), galley, palette::TEXT);
+        .galley(rect.min + vec2(9.0, 4.0), galley, palette::text());
 }
 
 /// The chips of the hero: the format, the length, the bit rate, the
@@ -353,7 +353,7 @@ fn body(ui: &mut Ui, d: &Details) {
     ui.add_space(18.0);
     let tags = d.tags.join(" · ");
     section(ui, tr!("Tag", "Тег"), |ui| {
-        ui.label(RichText::new(tags).size(11.0).color(palette::TEXT_WEAK));
+        ui.label(RichText::new(tags).size(11.0).color(palette::text_weak()));
     });
     ui.columns(2, |cols| {
         fields_grid(&mut cols[0], "info_left", &LEFT, d);
@@ -391,7 +391,7 @@ fn body(ui: &mut Ui, d: &Details) {
     if !lyrics.is_empty() {
         ui.add_space(14.0);
         section(ui, tr!("Lyrics", "Текст"), |_| {});
-        ui.add(egui::Label::new(RichText::new(lyrics).color(palette::TEXT)).wrap());
+        ui.add(egui::Label::new(RichText::new(lyrics).color(palette::text())).wrap());
     }
 
     ui.add_space(14.0);
@@ -450,7 +450,7 @@ fn section(ui: &mut Ui, title: &str, right: impl FnOnce(&mut Ui)) {
             RichText::new(title.to_uppercase())
                 .size(11.0)
                 .strong()
-                .color(palette::TEXT_WEAK),
+                .color(palette::text_weak()),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), right);
     });
@@ -458,7 +458,7 @@ fn section(ui: &mut Ui, title: &str, right: impl FnOnce(&mut Ui)) {
     ui.painter().hline(
         r.left()..=r.right(),
         r.top() + 2.0,
-        egui::Stroke::new(1.0, palette::LINE),
+        egui::Stroke::new(1.0, palette::line()),
     );
     ui.add_space(10.0);
 }
@@ -482,11 +482,11 @@ fn fields_grid(ui: &mut Ui, id: &str, keys: &[&[ItemKey]], d: &Details) {
 fn field(ui: &mut Ui, label: &str, text: &str, wrap: bool) {
     // Not truncated: a grid sizes its columns by the frame before, so a
     // truncated label would never get its room.
-    ui.add(egui::Label::new(RichText::new(label).color(palette::TEXT_WEAK)).extend());
+    ui.add(egui::Label::new(RichText::new(label).color(palette::text_weak())).extend());
     if text.is_empty() {
-        ui.label(RichText::new("—").color(palette::LINE));
+        ui.label(RichText::new("—").color(palette::line()));
     } else {
-        let label = egui::Label::new(RichText::new(text).color(palette::TEXT));
+        let label = egui::Label::new(RichText::new(text).color(palette::text()));
         ui.add(if wrap { label.wrap() } else { label.truncate() });
     }
 }

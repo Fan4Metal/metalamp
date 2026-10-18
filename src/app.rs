@@ -89,6 +89,7 @@ impl App {
         let _ = wake.set(ctx.clone());
         // Before any text is made.
         crate::i18n::set_lang(settings.language.resolve());
+        palette::set(settings.theme, settings.accent);
         palette::apply(ctx);
         ctx.options_mut(|o| {
             // Ctrl+plus and Ctrl+minus are the app's, not egui's zoom.
@@ -105,7 +106,7 @@ impl App {
             // The window is still hidden (eframe shows it after the first
             // frame): the dark border and the place are set before it is
             // seen.
-            crate::caption::set_dark(hwnd, true);
+            crate::caption::set_dark(hwnd, settings.theme.is_dark());
             win::round_corners(hwnd);
             let maximized = settings.window.is_some_and(|w| w.maximized);
             if maximized {
@@ -1025,7 +1026,7 @@ impl eframe::App for App {
         }
         egui::Panel::bottom("status")
             .exact_size(crate::ui::status::HEIGHT)
-            .frame(egui::Frame::NONE.fill(palette::TITLE_BG))
+            .frame(egui::Frame::NONE.fill(palette::title_bg()))
             .show(root_ui, |ui| crate::ui::status::show(ui, self));
         egui::CentralPanel::no_frame().show(root_ui, |ui| {
             if !self.settings.library_folders.is_empty() {
@@ -1067,6 +1068,13 @@ impl eframe::App for App {
         }
         if changed.dsp {
             self.player.set_dsp(&self.settings.dsp);
+        }
+        if changed.look {
+            palette::set(self.settings.theme, self.settings.accent);
+            palette::apply(&ctx);
+            if let Some(hwnd) = self.hwnd {
+                crate::caption::set_dark(hwnd, self.settings.theme.is_dark());
+            }
         }
         if changed.any {
             self.place_changed = Some(Instant::now());

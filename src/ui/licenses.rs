@@ -7,7 +7,7 @@
 
 use std::borrow::Cow;
 
-use egui::{Color32, FontId, Key, Rect, RichText, Sense, pos2, vec2};
+use egui::{FontId, Key, Rect, RichText, Sense, pos2, vec2};
 
 use crate::palette;
 
@@ -69,7 +69,7 @@ impl LicensesView {
                 RichText::new(tr!("Licenses", "Лицензии"))
                     .size(18.0)
                     .strong()
-                    .color(palette::TEXT_BRIGHT),
+                    .color(palette::text_bright()),
             );
             list_ui.add_space(8.0);
             for part in Part::ALL {
@@ -89,13 +89,13 @@ impl LicensesView {
                     "MetalAMP распространяется под лицензией MIT, без каких-либо гарантий. Библиотеки, вошедшие в него, и шрифты интерфейса сохраняют свои лицензии, приведённые здесь."
                 ))
                 .size(12.0)
-                .color(palette::TEXT_WEAK),
+                .color(palette::text_weak()),
             );
 
             let text = Rect::from_min_max(pos2(list.right() + 12.0, rect.top() + 28.0), rect.max);
             let cross = Rect::from_min_size(pos2(rect.right() - 24.0, rect.top()), vec2(24.0, 24.0));
             let closed = super::close_cross(&mut ui.new_child(egui::UiBuilder::new().max_rect(cross)));
-            ui.painter().rect_filled(text, 4.0, Color32::from_black_alpha(60));
+            ui.painter().rect_filled(text, 4.0, palette::list_bg());
             let inner = text.shrink(6.0);
             // As many characters as fit beside the scroll bar.
             let font = FontId::monospace(FONT);
@@ -116,7 +116,7 @@ impl LicensesView {
                             egui::Label::new(
                                 RichText::new(line.as_ref())
                                     .font(font.clone())
-                                    .color(palette::TEXT),
+                                    .color(palette::text()),
                             )
                             .extend(),
                         );

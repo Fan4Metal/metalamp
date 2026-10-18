@@ -34,7 +34,7 @@ pub fn row(
     update: Option<&str>,
 ) -> Option<TitleCmd> {
     let rect = ui.max_rect();
-    ui.painter().rect_filled(rect, 0.0, palette::TITLE_BG);
+    ui.painter().rect_filled(rect, 0.0, palette::title_bg());
     // First, under the buttons: what they leave drags the window.
     let drag = crate::frameless::drag_area(ui, rect, ui.id().with("title_drag"), Sense::CLICK);
     let mut cmd = None;
@@ -50,7 +50,7 @@ pub fn row(
     );
     if icon_resp.hovered() {
         ui.painter()
-            .rect_filled(icon_rect.expand(5.0), 4.0, palette::HOVER);
+            .rect_filled(icon_rect.expand(5.0), 4.0, palette::hover());
     }
     ui.painter().image(
         icon.id(),
@@ -97,16 +97,16 @@ pub fn row(
         let hovered = response.hovered();
         if hovered {
             let fill = if kind == TitleCmd::Close {
-                palette::CLOSE_HOVER
+                palette::close_hover()
             } else {
-                palette::HOVER
+                palette::hover()
             };
             ui.painter().rect_filled(r, 0.0, fill);
         }
         let color = if hovered {
-            palette::TEXT_BRIGHT
+            palette::text_bright()
         } else {
-            palette::TEXT
+            palette::text()
         };
         icons::paint(
             ui.painter(),
@@ -114,7 +114,7 @@ pub fn row(
             r.center(),
             12.0,
             color,
-            palette::TITLE_BG,
+            palette::title_bg(),
         );
         if response.on_hover_text(tip).clicked() {
             cmd = Some(kind);
@@ -147,7 +147,7 @@ pub fn row(
             let mut job = egui::text::LayoutJob::simple_singleline(
                 title.to_owned(),
                 FontId::proportional(12.5),
-                palette::TEXT,
+                palette::text(),
             );
             job.wrap = egui::text::TextWrapping::truncate_at_width(room);
             f.layout_job(job)
@@ -155,7 +155,7 @@ pub fn row(
         let pos = Align2::LEFT_CENTER
             .anchor_size(pos2(left, rect.center().y), galley.size())
             .min;
-        ui.painter().galley(pos, galley, palette::TEXT);
+        ui.painter().galley(pos, galley, palette::text());
     }
     cmd
 }

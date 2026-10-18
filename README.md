@@ -77,7 +77,7 @@ The sound can be processed on its way to the device, all of it off by default an
 
 ### Settings
 
-The settings window (`F5`, or `Ctrl+P` as Winamp's Preferences, or the gear in the library's bar) holds the interface language, the layout of the player bar, the sound output device (Windows' default, which follows the device chosen in Windows, or one of the devices present; a chosen device that is absent when a track starts is replaced by the default one until it is back), the sound processing (loudness, the equalizer, the enhancer) and the update check. **Reset** puts them back to their defaults.
+The settings window (`F5`, or `Ctrl+P` as Winamp's Preferences, or the gear in the library's bar) holds the interface language, the theme (three dark ones and a light one) and the colour of the controls (nine), the layout of the player bar, the sound output device (Windows' default, which follows the device chosen in Windows, or one of the devices present; a chosen device that is absent when a track starts is replaced by the default one until it is back), the sound processing (loudness, the equalizer, the enhancer) and the update check. **Reset** puts them back to their defaults.
 
 ### The playlist
 

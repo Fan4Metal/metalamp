@@ -13,7 +13,7 @@ pub fn show(ui: &mut Ui, app: &App) {
     let rect = ui.max_rect();
     ui.painter().line_segment(
         [rect.left_top(), rect.right_top()],
-        egui::Stroke::new(1.0, palette::LINE),
+        egui::Stroke::new(1.0, palette::line()),
     );
     ui.horizontal_centered(|ui| {
         ui.add_space(10.0);
@@ -37,7 +37,7 @@ pub fn show(ui: &mut Ui, app: &App) {
                 let ms = format::millis_in(crate::i18n::lang(), took.as_secs_f64());
                 text += &tr!(format!(" in {ms}"), format!(" за {ms}"));
             }
-            ui.label(RichText::new(text).color(palette::TEXT_WEAK).size(12.0));
+            ui.label(RichText::new(text).color(palette::text_weak()).size(12.0));
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.add_space(10.0);
@@ -52,8 +52,8 @@ pub fn show(ui: &mut Ui, app: &App) {
                 None => None,
             };
             if let Some(text) = text {
-                ui.add(egui::Spinner::new().size(12.0).color(palette::ACCENT));
-                ui.label(RichText::new(text).color(palette::TEXT_WEAK).size(12.0));
+                ui.add(egui::Spinner::new().size(12.0).color(palette::accent()));
+                ui.label(RichText::new(text).color(palette::text_weak()).size(12.0));
             }
         });
     });

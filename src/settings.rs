@@ -80,6 +80,9 @@ pub struct Settings {
     pub eq_presets: Vec<EqPreset>,
     /// When the media keys are the player's.
     pub media_keys: MediaKeys,
+    /// The look: the base theme and the controls' colour.
+    pub theme: crate::palette::Theme,
+    pub accent: crate::palette::Accent,
 }
 
 /// When the media keys (of keyboards, headsets, remotes) control the
@@ -177,6 +180,8 @@ impl Default for Settings {
             dsp: Default::default(),
             eq_presets: Vec::new(),
             media_keys: MediaKeys::default(),
+            theme: Default::default(),
+            accent: Default::default(),
         }
     }
 }

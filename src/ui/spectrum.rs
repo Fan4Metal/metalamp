@@ -175,22 +175,22 @@ impl Analyzer {
             if h > 0.0 {
                 let y1 = rect.bottom();
                 let y0 = y1 - top_room * h;
-                let top = lerp(palette::SPECTRUM_LOW, palette::SPECTRUM_HIGH, h);
+                let top = lerp(palette::spectrum_low(), palette::spectrum_high(), h);
                 let i = mesh.vertices.len() as u32;
                 mesh.colored_vertex(pos2(x0, y0), top);
                 mesh.colored_vertex(pos2(x1, y0), top);
-                mesh.colored_vertex(pos2(x1, y1), palette::SPECTRUM_LOW);
-                mesh.colored_vertex(pos2(x0, y1), palette::SPECTRUM_LOW);
+                mesh.colored_vertex(pos2(x1, y1), palette::spectrum_low());
+                mesh.colored_vertex(pos2(x0, y1), palette::spectrum_low());
                 mesh.add_triangle(i, i + 1, i + 2);
                 mesh.add_triangle(i, i + 2, i + 3);
             }
             if peak > 0.0 {
                 let y = rect.bottom() - top_room * peak - PEAK_HEIGHT;
                 let i = mesh.vertices.len() as u32;
-                mesh.colored_vertex(pos2(x0, y), palette::SPECTRUM_PEAK);
-                mesh.colored_vertex(pos2(x1, y), palette::SPECTRUM_PEAK);
-                mesh.colored_vertex(pos2(x1, y + PEAK_HEIGHT), palette::SPECTRUM_PEAK);
-                mesh.colored_vertex(pos2(x0, y + PEAK_HEIGHT), palette::SPECTRUM_PEAK);
+                mesh.colored_vertex(pos2(x0, y), palette::spectrum_peak());
+                mesh.colored_vertex(pos2(x1, y), palette::spectrum_peak());
+                mesh.colored_vertex(pos2(x1, y + PEAK_HEIGHT), palette::spectrum_peak());
+                mesh.colored_vertex(pos2(x0, y + PEAK_HEIGHT), palette::spectrum_peak());
                 mesh.add_triangle(i, i + 1, i + 2);
                 mesh.add_triangle(i, i + 2, i + 3);
             }
