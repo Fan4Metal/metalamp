@@ -934,6 +934,15 @@ impl eframe::App for App {
         self.uncloak(&ctx);
         // A modal takes the keys while it is open.
         let modal = self.about.open || self.file_info.open || self.settings_dialog.open;
+        // Outside the modals only the search fields keep the focus: a
+        // button that Tab focused took every key of the player until a
+        // click elsewhere (the keys wait while anything has the focus).
+        if !modal
+            && !ctx.text_edit_focused()
+            && let Some(id) = ctx.memory(|m| m.focused())
+        {
+            ctx.memory_mut(|m| m.surrender_focus(id));
+        }
         // The file info: Alt+3, or I (not while typing).
         let typing = ctx.memory(|m| m.focused().is_some());
         // Letters typed over the artists' pane go to an artist, not to
