@@ -29,9 +29,9 @@ EXE_STEM = "metalamp"
 # The installer's AppId (setup.iss): a new GUID for every app, never reused.
 APP_ID = "{9F2FF736-EA36-48CC-9BE4-FDE257B5AC53}"
 # Files the installer takes from the repository (see [Files] in setup.iss).
-BUNDLED_FILES = ["LICENSE", "README.md", "README.ru.md"]
+BUNDLED_FILES = ["LICENSE", "README.md", "README.ru.md", "licenses/THIRD_PARTY_NOTICES.txt"]
 # Licences shipped with the portable archive (the documentation is on GitHub).
-PORTABLE_FILES = ["LICENSE"]
+PORTABLE_FILES = ["LICENSE", "licenses/THIRD_PARTY_NOTICES.txt"]
 # Must match the settings file the program looks for next to its exe
 # (settings::PORTABLE_FILE).
 PORTABLE_SETTINGS = "metalamp.json"

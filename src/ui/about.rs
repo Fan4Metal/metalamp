@@ -4,6 +4,8 @@
 
 use egui::{Key, TextureHandle};
 
+use super::licenses::LicensesView;
+
 const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
 const LICENSE: &str = env!("CARGO_PKG_LICENSE");
 /// Cargo joins several authors with `:`.
@@ -17,6 +19,9 @@ pub struct AboutDialog {
     /// Opened this frame: the key that opened it must not close it.
     pub fresh: bool,
     icon: Option<TextureHandle>,
+    /// The Licenses window is shown in place of the dialog; closed, it
+    /// gives way to the dialog again.
+    licenses: Option<LicensesView>,
 }
 
 impl AboutDialog {
@@ -31,7 +36,15 @@ impl AboutDialog {
         if !self.open {
             return;
         }
+        if let Some(view) = &mut self.licenses {
+            if view.show(ctx) {
+                self.licenses = None;
+                self.fresh = true;
+            }
+            return;
+        }
         let fresh = std::mem::take(&mut self.fresh);
+        let mut show_licenses = false;
         let icon = super::app_icon(ctx, ICON, &mut self.icon);
         let modal = egui::Modal::new(egui::Id::new("about")).show(ctx, |ui| {
             ui.set_width(340.0);
@@ -82,6 +95,9 @@ impl AboutDialog {
                         format!("Лицензия {LICENSE}")
                     ));
                 }
+                if ui.link(tr!("Licenses…", "Лицензии…")).clicked() {
+                    show_licenses = true;
+                }
                 let stored = crate::settings::location();
                 let place = ui.weak(if stored.portable {
                     tr!(
@@ -109,7 +125,9 @@ impl AboutDialog {
             || (!fresh
                 && (ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter))
                     || modal.should_close()));
-        if closed {
+        if show_licenses {
+            self.licenses = Some(LicensesView::default());
+        } else if closed {
             self.open = false;
         }
     }

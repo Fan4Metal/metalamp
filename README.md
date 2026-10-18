@@ -77,7 +77,7 @@ The sound can be processed on its way to the device, all of it off by default an
 
 ### Settings
 
-The settings window (`F5`, or `Ctrl+P` as Winamp's Preferences, or the gear in the library's bar) holds the interface language, the layout of the player bar, the sound output device (Windows' default, which follows the device chosen in Windows, or one of the devices present; a chosen device that is absent when a track starts is replaced by the default one until it is back), the sound processing (loudness, the equalizer, the enhancer) and the update check. **Reset** puts them back to their defaults.
+The settings window (`F5`, or `Ctrl+P` as Winamp's Preferences, or the gear in the library's bar) holds the interface language, the layout of the player bar, the size of the covers in the albums' grid (`Ctrl` and the wheel over them change it too), the sound output device (Windows' default, which follows the device chosen in Windows, or one of the devices present; a chosen device that is absent when a track starts is replaced by the default one until it is back), the sound processing (loudness, the equalizer, the enhancer) and the update check. **Reset** puts them back to their defaults.
 
 ### The playlist
 
@@ -108,6 +108,7 @@ The playlist on the right (`Alt+E` shows or hides it) lists "Artist – Title" w
 | `Enter` | Play the selection |
 | `Delete` | Remove from the playlist |
 | `F1` | About (also a click on the icon in the title row) |
+| `Ctrl` + wheel over the covers | Larger or smaller covers |
 | `F5`, `Ctrl+P` | Settings (also the gear in the library's bar) |
 
 The media keys of keyboards and headsets work while the window is in front.
@@ -165,4 +166,4 @@ MetalAMP is built on the following open-source projects:
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE). The libraries compiled into the program and the fonts of its interface keep their own licences: [licenses/THIRD_PARTY_NOTICES.txt](licenses/THIRD_PARTY_NOTICES.txt), also shown by **Licenses…** in the About window and shipped with the installer and the portable archive.

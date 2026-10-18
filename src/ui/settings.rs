@@ -16,6 +16,7 @@ use crate::i18n::LangChoice;
 use crate::palette;
 use crate::settings::{BarLayout, EqPreset, Settings};
 use crate::ui::icons::{self, Icon};
+use crate::ui::library::{MAX_COVER, MIN_COVER};
 use crate::update::{Status, Updates, release_url, version_of};
 
 /// The size of the window's content in points.
@@ -48,8 +49,8 @@ impl Page {
     fn summary(self) -> &'static str {
         match self {
             Page::General => tr!(
-                "The language and the layout of the player bar.",
-                "Язык и вид панели плеера."
+                "The language, the layout of the player bar and the size of the covers.",
+                "Язык, вид панели плеера и размер обложек."
             ),
             Page::Sound => tr!(
                 "The device the sound goes to; one loudness for every track, the equalizer and the enhancer.",
@@ -470,8 +471,8 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
             ui,
             tr!("Player bar", "Панель плеера"),
             Some(tr!(
-                "As Winamp's main window, with the time in large digits and a spectrum analyzer; or the compact bar of one row.",
-                "Как главное окно Winamp, с крупным временем и анализатором спектра; или компактная панель в одну строку."
+                "The time in large digits and a spectrum analyzer on the right; or the compact bar of one row.",
+                "Крупное время и анализатор спектра справа; или компактная панель в одну строку."
             )),
             CONTROL,
             |ui| {
@@ -483,6 +484,24 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
                             ui.selectable_value(&mut settings.bar_layout, l, l.label());
                         }
                     });
+            },
+        );
+        divider(ui);
+        row(
+            ui,
+            tr!("Covers", "Обложки"),
+            Some(tr!(
+                "The size of the covers in the albums' grid; Ctrl and the wheel over them change it too.",
+                "Размер обложек в сетке альбомов; его меняют и Ctrl с колесом над ними."
+            )),
+            CONTROL,
+            |ui| {
+                ui.spacing_mut().slider_width = CONTROL - 60.0;
+                ui.add(
+                    egui::Slider::new(&mut settings.cover_size, MIN_COVER..=MAX_COVER)
+                        .step_by(8.0)
+                        .fixed_decimals(0),
+                );
             },
         );
     });
@@ -576,8 +595,8 @@ fn processing(
             ui,
             tr!("Enhancer", "Улучшение звука"),
             Some(tr!(
-                "What the sound improvers of Winamp's days did, in four amounts; 0 leaves a part alone.",
-                "То, что делали улучшайзеры времён Winamp, четырьмя регуляторами; 0 оставляет часть без изменений."
+                "What the classic sound improvers did, in four amounts; 0 leaves a part alone.",
+                "То, что делали классические улучшайзеры звука, четырьмя регуляторами; 0 оставляет часть без изменений."
             )),
             50.0,
             |ui| switch(ui, &mut dsp.enhancer),
@@ -687,8 +706,8 @@ fn eq_head(
         .map(|(en, ru, _)| tr!(*en, *ru));
     ui.horizontal(|ui| {
         switch(ui, &mut dsp.eq).on_hover_text(tr!(
-            "Ten bands, Winamp's, and a preamp; a limiter after them keeps the sound from clipping.",
-            "Десять полос, как в Winamp, и предусиление; лимитер после них не даёт звуку клиповать."
+            "Ten bands and a preamp; a limiter after them keeps the sound from clipping.",
+            "Десять полос и предусиление; лимитер после них не даёт звуку клиповать."
         ));
         ui.add_space(4.0);
         let name = match (mine, built_in) {
@@ -1095,6 +1114,7 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     }
     settings.language = d.language;
     settings.bar_layout = d.bar_layout;
+    settings.cover_size = d.cover_size;
     settings.output_device = d.output_device;
     settings.output_device_name = d.output_device_name;
     settings.dsp = d.dsp;

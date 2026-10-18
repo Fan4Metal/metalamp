@@ -44,6 +44,9 @@ pub struct Settings {
     pub library_folders: Vec<PathBuf>,
     /// Albums as a grid of covers or as a table.
     pub album_view: AlbumView,
+    /// The side of a cover in the grid, in points (`library::MIN_COVER`
+    /// to `MAX_COVER`).
+    pub cover_size: f32,
     /// The artists' column's width and the tracks' table's height, in
     /// points.
     pub artists_width: f32,
@@ -102,7 +105,7 @@ impl BarLayout {
 
     pub fn label(self) -> &'static str {
         match self {
-            BarLayout::Winamp => tr!("Winamp's, with a spectrum", "Как Winamp, со спектром"),
+            BarLayout::Winamp => tr!("With a spectrum", "Со спектром"),
             BarLayout::Classic => tr!("Compact", "Компактная"),
         }
     }
@@ -125,6 +128,7 @@ impl Default for Settings {
             window: None,
             library_folders: Vec::new(),
             album_view: AlbumView::Grid,
+            cover_size: 152.0,
             artists_width: 260.0,
             tracks_height: 300.0,
             columns: HashMap::new(),

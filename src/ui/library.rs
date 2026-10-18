@@ -26,8 +26,12 @@ use crate::ui::table::{self, Column, Sort, Table};
 const TOP_BAR: f32 = 36.0;
 const SPLITTER: f32 = 5.0;
 /// An album's cell in the grid, and its cover's side.
-const CELL: egui::Vec2 = vec2(168.0, 200.0);
-const COVER: f32 = 152.0;
+/// The side of a cover in the grid: `settings.cover_size` within these;
+/// its cell is 16 points wider and 48 taller (the two lines of text).
+pub const MIN_COVER: f32 = 96.0;
+pub const MAX_COVER: f32 = 256.0;
+/// What Ctrl and a wheel notch over the grid change the side by.
+const COVER_STEP: f32 = 16.0;
 
 /// What the library asks the app to do.
 #[derive(Debug)]
@@ -1096,9 +1100,21 @@ fn albums_grid(
 
     let body = Rect::from_min_max(pos2(rect.left(), header.bottom()), rect.max);
     ui.painter().rect_filled(body, 0.0, palette::LIST_BG);
+    // Ctrl and the wheel over the grid: larger or smaller covers (egui
+    // keeps a scroll area still while Ctrl is held).
+    if ui.rect_contains_pointer(body) && ui.input(|i| i.modifiers.command) {
+        let notches = crate::ui::wheel_notches(ui);
+        if notches != 0 {
+            settings.cover_size =
+                (settings.cover_size + COVER_STEP * notches as f32).clamp(MIN_COVER, MAX_COVER);
+            *changed = true;
+        }
+    }
+    let cover_side = settings.cover_size.clamp(MIN_COVER, MAX_COVER);
+    let cell_size = vec2(cover_side + 16.0, cover_side + 48.0);
     // Room for the scroll bar, so that no cell goes under it.
     let bar = ui.spacing().scroll.allocated_width();
-    let per_row = ((body.width() - 8.0 - bar) / CELL.x).floor().max(1.0) as usize;
+    let per_row = ((body.width() - 8.0 - bar) / cell_size.x).floor().max(1.0) as usize;
     let n = view.albums.len();
     let rows = n.div_ceil(per_row);
     let current = view.album_row;
@@ -1134,14 +1150,14 @@ fn albums_grid(
         .id_salt("albums_grid_scroll")
         .auto_shrink([false, false]);
     if let Some(i) = scroll_to {
-        let top = (i / per_row) as f32 * CELL.y;
+        let top = (i / per_row) as f32 * cell_size.y;
         let offset = ctx
             .data(|d| d.get_temp::<f32>(egui::Id::new("albums_grid_offset")))
             .unwrap_or(0.0);
         if top < offset {
             area = area.vertical_scroll_offset(top);
-        } else if top + CELL.y > offset + body.height() {
-            area = area.vertical_scroll_offset(top + CELL.y - body.height());
+        } else if top + cell_size.y > offset + body.height() {
+            area = area.vertical_scroll_offset(top + cell_size.y - body.height());
         }
     }
     let mut clicked: Option<Option<usize>> = None;
@@ -1149,15 +1165,15 @@ fn albums_grid(
     let mut focused = false;
     let mut secondary = false;
     let out = area.show_viewport(&mut child, |ui, viewport| {
-        let height = (rows as f32 * CELL.y + 8.0).max(viewport.height());
+        let height = (rows as f32 * cell_size.y + 8.0).max(viewport.height());
         let (space, area_resp) =
             ui.allocate_exact_size(vec2(viewport.width(), height), Sense::click());
         if area_resp.clicked() {
             clicked = Some(None);
             focused = true;
         }
-        let first_row = (viewport.top() / CELL.y).floor().max(0.0) as usize;
-        let last_row = ((viewport.bottom() / CELL.y).ceil() as usize).min(rows);
+        let first_row = (viewport.top() / cell_size.y).floor().max(0.0) as usize;
+        let last_row = ((viewport.bottom() / cell_size.y).ceil() as usize).min(rows);
         let painter = ui.painter().clone();
         for row in first_row..last_row {
             for col in 0..per_row {
@@ -1168,8 +1184,12 @@ fn albums_grid(
                 let album_id = view.albums[i];
                 let album = &library.albums[album_id as usize];
                 let cell = Rect::from_min_size(
-                    space.min + vec2(8.0 + col as f32 * CELL.x, 8.0 + row as f32 * CELL.y),
-                    CELL - vec2(8.0, 8.0),
+                    space.min
+                        + vec2(
+                            8.0 + col as f32 * cell_size.x,
+                            8.0 + row as f32 * cell_size.y,
+                        ),
+                    cell_size - vec2(8.0, 8.0),
                 );
                 let resp = ui.interact(
                     cell,
@@ -1183,14 +1203,14 @@ fn albums_grid(
                     painter.rect_filled(cell, 4.0, palette::HOVER);
                 }
                 let cover = Rect::from_min_size(
-                    pos2(cell.center().x - COVER / 2.0, cell.top() + 4.0),
-                    vec2(COVER, COVER),
+                    pos2(cell.center().x - cover_side / 2.0, cell.top() + 4.0),
+                    vec2(cover_side, cover_side),
                 );
                 match lv.covers.get(&ctx, library, album) {
                     Some(texture) => {
                         let [w, h] = texture.size();
                         // Not square: fit inside, centred.
-                        let scale = COVER / (w.max(h) as f32);
+                        let scale = cover_side / (w.max(h) as f32);
                         let size = vec2(w as f32 * scale, h as f32 * scale);
                         let r = Rect::from_center_size(cover.center(), size);
                         painter.image(
