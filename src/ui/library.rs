@@ -32,6 +32,14 @@ pub const MIN_COVER: f32 = 96.0;
 pub const MAX_COVER: f32 = 256.0;
 /// What Ctrl and a wheel notch over the grid change the side by.
 const COVER_STEP: f32 = 16.0;
+/// The sizes the covers' button offers by the right button (English and
+/// Russian names, the side).
+const COVER_PRESETS: [((&str, &str), f32); 4] = [
+    (("Small", "Мелкие"), 112.0),
+    (("Medium", "Средние"), 152.0),
+    (("Large", "Крупные"), 208.0),
+    (("Largest", "Самые крупные"), 256.0),
+];
 
 /// What the library asks the app to do.
 #[derive(Debug)]
@@ -732,17 +740,53 @@ fn top_bar(
             settings.album_view = AlbumView::Table;
             *changed = true;
         }
-        if crate::ui::icon_button(
+        let gallery = crate::ui::icon_button(
             ui,
             Icon::Gallery,
             !table,
-            tr!("Albums as covers", "Альбомы обложками"),
-        )
-        .clicked()
-        {
+            tr!(
+                "Albums as covers; the right button: their size",
+                "Альбомы обложками; правая кнопка: их размер"
+            ),
+        );
+        if gallery.clicked() {
             settings.album_view = AlbumView::Grid;
             *changed = true;
         }
+        // The right button: the covers' size, as presets and a slider.
+        egui::Popup::context_menu(&gallery)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                ui.set_min_width(220.0);
+                for (name, size) in COVER_PRESETS {
+                    let on = (settings.cover_size - size).abs() < 0.5;
+                    if ui
+                        .selectable_label(on, format!("{} · {size:.0}", tr!(name.0, name.1)))
+                        .clicked()
+                    {
+                        settings.cover_size = size;
+                        settings.album_view = AlbumView::Grid;
+                        *changed = true;
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(tr!("Size", "Размер"));
+                    ui.spacing_mut().slider_width = 130.0;
+                    if ui
+                        .add(
+                            egui::Slider::new(&mut settings.cover_size, MIN_COVER..=MAX_COVER)
+                                .step_by(8.0)
+                                .fixed_decimals(0),
+                        )
+                        .changed()
+                    {
+                        settings.album_view = AlbumView::Grid;
+                        *changed = true;
+                    }
+                });
+            });
     });
 }
 

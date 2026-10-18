@@ -77,7 +77,7 @@ The sound can be processed on its way to the device, all of it off by default an
 
 ### Settings
 
-The settings window (`F5`, or `Ctrl+P` as Winamp's Preferences, or the gear in the library's bar) holds the interface language, the layout of the player bar, the size of the covers in the albums' grid (`Ctrl` and the wheel over them change it too), the sound output device (Windows' default, which follows the device chosen in Windows, or one of the devices present; a chosen device that is absent when a track starts is replaced by the default one until it is back), the sound processing (loudness, the equalizer, the enhancer) and the update check. **Reset** puts them back to their defaults.
+The settings window (`F5`, or `Ctrl+P` as Winamp's Preferences, or the gear in the library's bar) holds the interface language, the layout of the player bar, the size of the covers in the albums' grid (also by the right button on the covers' button in the library bar: four sizes and a slider; `Ctrl` and the wheel over the covers change it too), the sound output device (Windows' default, which follows the device chosen in Windows, or one of the devices present; a chosen device that is absent when a track starts is replaced by the default one until it is back), the sound processing (loudness, the equalizer, the enhancer) and the update check. **Reset** puts them back to their defaults.
 
 ### The playlist
 
