@@ -157,7 +157,7 @@ impl Table<'_> {
                 let color = if playing {
                     palette::playing()
                 } else if selected {
-                    palette::text_bright()
+                    palette::selected_text()
                 } else {
                     palette::text()
                 };

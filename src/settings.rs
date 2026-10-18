@@ -85,6 +85,8 @@ pub struct Settings {
     /// The look: the base theme and the controls' colour.
     pub theme: crate::palette::Theme,
     pub accent: crate::palette::Accent,
+    /// The selected rows' ground.
+    pub selection: crate::palette::Selection,
 }
 
 /// When the media keys (of keyboards, headsets, remotes) control the
@@ -224,6 +226,7 @@ impl Default for Settings {
             media_keys: MediaKeys::default(),
             theme: Default::default(),
             accent: Default::default(),
+            selection: Default::default(),
         }
     }
 }

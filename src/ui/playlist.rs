@@ -278,7 +278,7 @@ pub fn show(
             let color = if Some(i) == playing {
                 palette::playing()
             } else if selected {
-                palette::text_bright()
+                palette::selected_text()
             } else {
                 palette::text()
             };

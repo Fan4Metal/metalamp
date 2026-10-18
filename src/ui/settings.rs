@@ -16,7 +16,7 @@ use crate::audio::dsp::{DspSettings, eq};
 use crate::audio::output::Device;
 use crate::i18n::LangChoice;
 use crate::palette;
-use crate::palette::{Accent, Theme};
+use crate::palette::{Accent, Selection, Theme};
 use crate::settings::{BarLayout, EqPreset, MediaKeys, Settings};
 use crate::ui::icons::{self, Icon};
 use crate::update::{Status, Updates, release_url, version_of};
@@ -253,7 +253,9 @@ impl SettingsDialog {
         }
         changed.device = settings.output_device != before.output_device;
         changed.dsp = settings.dsp != before.dsp;
-        changed.look = settings.theme != before.theme || settings.accent != before.accent;
+        changed.look = settings.theme != before.theme
+            || settings.accent != before.accent
+            || settings.selection != before.selection;
         changed.any = *settings != before;
         changed
     }
@@ -501,6 +503,17 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
             )),
             ACCENTS_WIDTH,
             |ui| accents(ui, &mut settings.accent),
+        );
+        divider(ui);
+        row(
+            ui,
+            tr!("Selection", "Выделение"),
+            Some(tr!(
+                "The ground of the selected rows: mixed from the colour above, from one of its own, or one's own colour as it is.",
+                "Фон выбранных строк: из цвета выше, своего оттенка или своего цвета как есть."
+            )),
+            ACCENTS_WIDTH,
+            |ui| selections(ui, settings.theme, settings.accent, &mut settings.selection),
         );
         divider(ui);
         row(
@@ -1099,6 +1112,52 @@ fn custom([r, g, b]: [u8; 3]) -> Accent {
     Accent::Custom(u32::from_be_bytes([0, r, g, b]))
 }
 
+/// The selection's grounds as round swatches, each as the lists show it
+/// in this theme, the chosen one ringed; the first, mixed from the accent,
+/// with the accent's dot in it; last the user's own colour, as for the
+/// accent.
+fn selections(ui: &mut Ui, theme: Theme, accent: Accent, selection: &mut Selection) {
+    ui.spacing_mut().item_spacing.x = 5.0;
+    let mut own = match *selection {
+        Selection::Custom(c) => Accent::Custom(c),
+        _ => Accent::Custom(
+            palette::Palette::selection_of(theme, accent, *selection)
+                .to_srgba_unmultiplied()
+                .into_iter()
+                .take(3)
+                .fold(0, |c, v| c << 8 | u32::from(v)),
+        ),
+    };
+    let chosen = matches!(selection, Selection::Custom(_));
+    if own_colour(ui, &mut own, chosen)
+        && let Accent::Custom(c) = own
+    {
+        *selection = Selection::Custom(c);
+    }
+    for s in Selection::ALL.into_iter().rev() {
+        let (rect, response) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
+        let response = response.on_hover_text(s.label());
+        let fill = palette::Palette::selection_of(theme, accent, s);
+        swatch(
+            ui,
+            rect,
+            *selection == s,
+            response.hovered(),
+            |p, centre, r| {
+                // Outlined: a dark ground is hardly seen on a dark card.
+                let edge = palette::text_weak().gamma_multiply(0.7);
+                p.circle(centre, r, fill, Stroke::new(1.0, edge));
+                if s == Selection::Accent {
+                    p.circle_filled(centre, r * 0.35, accent.base());
+                }
+            },
+        );
+        if response.clicked() {
+            *selection = s;
+        }
+    }
+}
+
 /// The width of the own colour's picker, its square and its hue bar.
 const PICKER: f32 = 180.0;
 
@@ -1106,9 +1165,21 @@ const PICKER: f32 = 180.0;
 /// click opens the picker, a field for its code (HEX, RGB or HSL) and R,
 /// G, B fields, which start from the accent in use.
 fn own_accent(ui: &mut Ui, accent: &mut Accent) {
+    let own = matches!(accent, Accent::Custom(_));
+    let mut edited = *accent;
+    if own_colour(ui, &mut edited, own) {
+        *accent = edited;
+    }
+}
+
+/// An own colour's swatch and its picker (`accent` is `Accent::Custom`
+/// while picked: its colour is where the picker starts); `chosen`: the
+/// own colour is the one in use. True when a colour was picked.
+fn own_colour(ui: &mut Ui, accent: &mut Accent, chosen: bool) -> bool {
+    let before = *accent;
     let (rect, response) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
     let response = response.on_hover_text(tr!("Your own colour…", "Свой цвет…"));
-    let own = matches!(accent, Accent::Custom(_));
+    let own = chosen;
     let current = accent.base();
     swatch(ui, rect, own, response.hovered(), |p, centre, r| {
         if own {
@@ -1181,6 +1252,7 @@ fn own_accent(ui: &mut Ui, accent: &mut Accent) {
                 }
             });
         });
+    *accent != before
 }
 
 /// The own colour's picker: saturation across and brightness up a square,
@@ -1402,6 +1474,7 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     settings.visualization = d.visualization;
     settings.theme = d.theme;
     settings.accent = d.accent;
+    settings.selection = d.selection;
     settings.media_keys = d.media_keys;
     settings.output_device = d.output_device;
     settings.output_device_name = d.output_device_name;

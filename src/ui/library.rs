@@ -1311,7 +1311,7 @@ fn albums_grid(
                     title,
                     13.0,
                     if selected {
-                        palette::text_bright()
+                        palette::selected_text()
                     } else {
                         palette::text()
                     },
