@@ -222,9 +222,11 @@ pub fn show(
                 }
             });
     }
+    // Off the window's right edge, which resizes it: the rows (they drag)
+    // and the scroll bar would take its presses.
     let mut child = ui.new_child(
         egui::UiBuilder::new()
-            .max_rect(body)
+            .max_rect(crate::frameless::inside_edges(ui.ctx(), body))
             .id_salt("playlist_rows"),
     );
     let mut scroll = egui::ScrollArea::vertical()

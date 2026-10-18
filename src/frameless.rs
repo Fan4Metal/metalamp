@@ -19,16 +19,23 @@ pub const EDGE: f32 = 5.0;
 /// would cover them).
 pub fn drag_area(ui: &mut Ui, rect: egui::Rect, id: egui::Id, sense: Sense) -> egui::Response {
     let ctx = ui.ctx().clone();
-    let rect = if is_maximized(&ctx) {
-        rect
-    } else {
-        rect.intersect(ctx.content_rect().shrink(EDGE))
-    };
-    let response = ui.interact(rect, id, sense | Sense::drag());
+    let response = ui.interact(inside_edges(&ctx, rect), id, sense | Sense::drag());
     if response.drag_started_by(egui::PointerButton::Primary) {
         ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
     }
     response
+}
+
+/// `rect` less the resize strips along the window's edges (all of it
+/// while maximized): where a widget that senses drags may take presses,
+/// since one registered after the strips covers them (the playlist's rows,
+/// which drag to another place, took the right edge).
+pub fn inside_edges(ctx: &egui::Context, rect: egui::Rect) -> egui::Rect {
+    if is_maximized(ctx) {
+        rect
+    } else {
+        rect.intersect(ctx.content_rect().shrink(EDGE))
+    }
 }
 
 /// Strips along the edges and squares at the corners hand a drag to
