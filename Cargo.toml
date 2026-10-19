@@ -53,6 +53,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_LibraryLoader",     # GetModuleHandleW (one instance)
     "Win32_System_Registry",          # file associations (assoc.rs)
     "Win32_System_Threading",         # CreateMutexW (one instance)
+    "Win32_Storage_FileSystem",       # change notifications (watching the folders)
     "Win32_System_Time",              # local dates (the tables' dates)
     "Win32_UI_Shell",                 # ShellExecuteW
     "Win32_UI_WindowsAndMessaging",   # SW_SHOWNORMAL

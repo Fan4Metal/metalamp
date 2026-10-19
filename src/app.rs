@@ -59,6 +59,10 @@ pub struct App {
     pub(crate) library: Arc<Library>,
     /// The scan under way, if any.
     scan: Option<Scan>,
+    /// The library's folders watched, and when they last changed (a scan
+    /// follows once they have rested for `watch::QUIET`).
+    watcher: crate::library::watch::Watcher,
+    watch_at: Option<Instant>,
     /// Wakes the UI from the scan's thread.
     wake: Wake,
     /// Tags read and of how many, while a scan reads them.
@@ -157,6 +161,7 @@ impl App {
         let mut updates = Updates::new(settings.check_updates, settings.last_update_check);
         updates.start_if_due(ctx);
         let about = AboutDialog::default();
+        let watcher = crate::library::watch::Watcher::start(&settings.library_folders, &wake);
         Self {
             settings,
             settings_dialog: SettingsDialog::from_env(),
@@ -176,6 +181,8 @@ impl App {
             title_icon: None,
             library: Arc::new(Library::default()),
             scan: Some(scan),
+            watcher,
+            watch_at: None,
             wake,
             scan_progress: None,
             loaded: false,
@@ -229,6 +236,24 @@ impl App {
         }
     }
 
+    /// The folders read again once they have rested after a change: a
+    /// frame is asked for when the rest is over (a scan under way wakes
+    /// the app when it ends).
+    fn follow_folders(&mut self, ctx: &egui::Context) {
+        if self.watcher.take_changed() {
+            self.watch_at = Some(Instant::now());
+        }
+        let Some(at) = self.watch_at else { return };
+        let rested = at.elapsed();
+        if rested < crate::library::watch::QUIET {
+            ctx.request_repaint_after(crate::library::watch::QUIET - rested);
+        } else if !self.scanning() {
+            log::debug!("watch: the folders changed, reading them again");
+            self.watch_at = None;
+            self.rescan();
+        }
+    }
+
     /// Scan the library's folders again (Ctrl+R, a folder added or removed),
     /// keeping the tags of unchanged files. A scan under way is dropped.
     pub(crate) fn rescan(&mut self) {
@@ -243,6 +268,9 @@ impl App {
 
     fn start_scan(&mut self, read_all: bool) {
         self.scan_progress = None;
+        // The folders as they are now, a disk plugged in since included.
+        self.watcher =
+            crate::library::watch::Watcher::start(&self.settings.library_folders, &self.wake);
         self.scan = Some(Scan::start(
             self.settings.library_folders.clone(),
             Some(Arc::clone(&self.library)),
@@ -989,6 +1017,7 @@ impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.updates.poll();
         self.poll_scan();
+        self.follow_folders(ctx);
         self.library_view.covers.poll(ctx);
         self.take_hooked(ctx);
         self.take_handed_over();

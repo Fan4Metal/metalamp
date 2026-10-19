@@ -11,6 +11,7 @@ pub mod filter;
 pub mod index;
 pub mod scan;
 pub mod tags;
+pub mod watch;
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
