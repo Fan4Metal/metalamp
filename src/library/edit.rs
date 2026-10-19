@@ -105,24 +105,24 @@ fn with_tag<R>(
         Some(FileType::Mpeg) => {
             let file = lofty::mpeg::MpegFile::read_from(&mut reader, options).map_err(err)?;
             drop(reader);
-            edit(
-                file.id3v2().cloned().unwrap_or_default(),
-                f,
-                save,
-                path,
-                write,
-            )
+            let tag = file.id3v2().cloned().unwrap_or_else(|| {
+                seeded(
+                    file.ape()
+                        .cloned()
+                        .map(Tag::from)
+                        .or_else(|| file.id3v1().cloned().map(Tag::from)),
+                )
+            });
+            edit(tag, f, save, path, write)
         }
         Some(FileType::Wav) => {
             let file = lofty::iff::wav::WavFile::read_from(&mut reader, options).map_err(err)?;
             drop(reader);
-            edit(
-                file.id3v2().cloned().unwrap_or_default(),
-                f,
-                save,
-                path,
-                write,
-            )
+            let tag = file
+                .id3v2()
+                .cloned()
+                .unwrap_or_else(|| seeded(file.riff_info().cloned().map(Tag::from)));
+            edit(tag, f, save, path, write)
         }
         Some(FileType::Flac) => {
             let file = lofty::flac::FlacFile::read_from(&mut reader, options).map_err(err)?;
@@ -153,6 +153,24 @@ fn with_tag<R>(
         )
         .to_owned()),
     }
+}
+
+/// A file without an ID3v2 tag gets one holding what its other tag says
+/// (an MP3's APE or ID3v1, a WAV's RIFF INFO), which the library read:
+/// written from one field alone, it became the tag read, the rest lost.
+fn seeded(other: Option<Tag>) -> lofty::id3::v2::Id3v2Tag {
+    let Some(mut tag) = other else {
+        return Default::default();
+    };
+    // ID3v1's year is lofty's `Year`, which ID3v2 does not take: the
+    // recording date (TDRC, or TYER in 2.3) is the year players read.
+    if tag.get_string(ItemKey::RecordingDate).is_none()
+        && let Some(year) = tag.get_string(ItemKey::Year).map(str::to_owned)
+    {
+        tag.remove_key(ItemKey::Year);
+        tag.insert_text(ItemKey::RecordingDate, year);
+    }
+    tag.into()
 }
 
 /// `tag` split, its common fields given to `f`, merged back and, when
@@ -363,6 +381,48 @@ mod tests {
         write(&file, &changes).unwrap();
         assert_eq!(read(&file).unwrap()[7], "Metal");
         assert_eq!(pictures(&file), 1, "the cover is lost");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// An MP3 with only an ID3v1 tag shows it, and keeps what it says when
+    /// one field is written (an ID3v2 tag of that field alone became the
+    /// tag the library read).
+    #[test]
+    fn id3v1_alone_is_kept() {
+        // Frames of silence: MPEG-1 layer III, 128 kbit/s, 44.1 kHz.
+        let mut bytes = Vec::new();
+        for _ in 0..4 {
+            bytes.extend_from_slice(&[0xFF, 0xFB, 0x90, 0x64]);
+            bytes.extend_from_slice(&[0; 413]);
+        }
+        let field = |s: &str, n: usize| {
+            let mut f = s.as_bytes().to_vec();
+            f.resize(n, 0);
+            f
+        };
+        bytes.extend_from_slice(b"TAG");
+        bytes.extend(field("Old title", 30));
+        bytes.extend(field("Old artist", 30));
+        bytes.extend(field("Old album", 30));
+        bytes.extend(field("1999", 4));
+        bytes.extend(field("", 30));
+        bytes.push(9); // Metal
+        let dir = std::env::temp_dir().join(format!("metalamp_id3v1_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("old.mp3");
+        std::fs::write(&file, &bytes).unwrap();
+        let before = read(&file).unwrap();
+        assert_eq!(before[0], "Old title");
+        assert_eq!(before[3], "Old album");
+        let mut changes: Changes = Default::default();
+        changes[2] = Some("Old band".into());
+        write(&file, &changes).unwrap();
+        let after = read(&file).unwrap();
+        assert_eq!(after[2], "Old band");
+        assert_eq!(after[0], "Old title");
+        assert_eq!(after[1], "Old artist");
+        assert_eq!(after[3], "Old album");
+        assert_eq!(after[4], "1999");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
