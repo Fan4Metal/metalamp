@@ -122,6 +122,9 @@ pub enum Icon {
     Library,
     /// A funnel: a filter, the library's views.
     Filter,
+    /// Three slider tracks with their knobs at different heights: the
+    /// equalizer.
+    Equalizer,
 }
 
 impl Icon {
@@ -184,6 +187,7 @@ impl Icon {
         Icon::Image,
         Icon::Library,
         Icon::Filter,
+        Icon::Equalizer,
     ];
 }
 
@@ -643,6 +647,13 @@ pub fn paint(painter: &Painter, icon: Icon, c: Pos2, size: f32, color: Color32, 
                 (-1.6, 5.6),
                 (-1.6, 0.6),
             ]));
+        }
+        Icon::Equalizer => {
+            // Three tracks, each with a knob: a bar across it, lower, higher.
+            for (x, y) in [(-4.6, 2.2), (0.0, -2.6), (4.6, 0.8)] {
+                painter.line_segment([p(x, -6.0), p(x, 6.0)], line);
+                painter.rect_filled(rect(x - 2.0, y - 1.3, 4.0, 2.6), 0.8 * k, color);
+            }
         }
         Icon::Plus => {
             painter.line_segment([p(-5.0, 0.0), p(5.0, 0.0)], pen(1.5));

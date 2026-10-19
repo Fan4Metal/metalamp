@@ -54,6 +54,9 @@ pub enum BarCmd {
     TimeMode,
     /// The display clicked, or one chosen in its menu.
     Visual(Visual),
+    /// The equalizer's button clicked (its rect: the window opens under
+    /// it).
+    Equalizer(Rect),
 }
 
 /// What the bar shows.
@@ -76,6 +79,8 @@ pub struct NowPlaying<'a> {
     pub mute: bool,
     pub shuffle: bool,
     pub repeat: Repeat,
+    /// The equalizer is on.
+    pub eq: bool,
     pub cover: Option<egui::TextureHandle>,
 }
 
@@ -553,7 +558,8 @@ fn volume_and_toggles(
     }
     resp.on_hover_text(format!("{} %", now.volume));
 
-    let mut toggle = |ui: &mut Ui, icon: Icon, on: bool, cmd: BarCmd, tip: String| {
+    // A toggle button from the right; its rect when clicked.
+    let mut toggle = |ui: &mut Ui, icon: Icon, on: bool, tip: &str| {
         let r = Rect::from_center_size(pos2(right - 16.0, cy), vec2(30.0, 28.0));
         right = r.left() - 2.0;
         let resp = ui.interact(r, ui.id().with(("toggle", icon)), Sense::click());
@@ -568,10 +574,16 @@ fn volume_and_toggles(
             palette::text_weak()
         };
         icons::paint(painter, icon, r.center(), 15.0, color, palette::bar_bg());
-        if resp.on_hover_text(tip).clicked() {
-            cmds.push(cmd);
-        }
+        resp.on_hover_text(tip).clicked().then_some(r)
     };
+    let tip = if now.eq {
+        tr!("Equalizer: on", "Эквалайзер: вкл.")
+    } else {
+        tr!("Equalizer: off", "Эквалайзер: выкл.")
+    };
+    if let Some(r) = toggle(ui, Icon::Equalizer, now.eq, tip) {
+        cmds.push(BarCmd::Equalizer(r));
+    }
     let (icon, tip) = match now.repeat {
         Repeat::Off => (Icon::Repeat, tr!("Repeat: off (R)", "Повтор: выкл. (R)")),
         Repeat::All => (
@@ -583,25 +595,17 @@ fn volume_and_toggles(
             tr!("Repeat: the track (R)", "Повтор: трек (R)"),
         ),
     };
-    toggle(
-        ui,
-        icon,
-        now.repeat != Repeat::Off,
-        BarCmd::Repeat,
-        tip.to_owned(),
-    );
+    if toggle(ui, icon, now.repeat != Repeat::Off, tip).is_some() {
+        cmds.push(BarCmd::Repeat);
+    }
     let tip = if now.shuffle {
         tr!("Shuffle: on (S)", "Перемешать: вкл. (S)")
     } else {
         tr!("Shuffle: off (S)", "Перемешать: выкл. (S)")
     };
-    toggle(
-        ui,
-        Icon::Shuffle,
-        now.shuffle,
-        BarCmd::Shuffle,
-        tip.to_owned(),
-    );
+    if toggle(ui, Icon::Shuffle, now.shuffle, tip).is_some() {
+        cmds.push(BarCmd::Shuffle);
+    }
     right
 }
 

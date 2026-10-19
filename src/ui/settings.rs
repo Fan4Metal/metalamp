@@ -676,8 +676,7 @@ fn processing(
     });
     section(ui, tr!("Equalizer", "Эквалайзер"), |ui| {
         ui.add_space(8.0);
-        eq_head(ui, dsp, presets, naming);
-        bands(ui, dsp);
+        equalizer(ui, dsp, presets, naming);
     });
     section(ui, tr!("Enhancer", "Улучшение звука"), |ui| {
         row(
@@ -813,8 +812,8 @@ fn eq_head(
         .map(|(en, ru, _)| tr!(*en, *ru));
     ui.horizontal(|ui| {
         switch(ui, &mut dsp.eq).on_hover_text(tr!(
-            "Ten bands and a preamp; a limiter after them keeps the sound from clipping.",
-            "Десять полос и предусиление; лимитер после них не даёт звуку клиповать."
+            "Ten bands and a preamp; the limiter after them (Settings, Sound) keeps the sound from clipping.",
+            "Десять полос и предусиление; лимитер после них (Настройки, Звук) не даёт звуку клиповать."
         ));
         ui.add_space(4.0);
         let name = match (mine, built_in) {
@@ -912,6 +911,19 @@ fn eq_head(
         };
         ui.data_mut(|d| d.insert_temp(chosen_id, at));
     }
+}
+
+/// The equalizer: the switch, the presets and the sliders, here and in
+/// the window of the player bar's button (`ui::eq_window`), on a ground
+/// of `palette::card_bg`.
+pub(crate) fn equalizer(
+    ui: &mut Ui,
+    dsp: &mut DspSettings,
+    presets: &mut Vec<EqPreset>,
+    naming: &mut Option<String>,
+) {
+    eq_head(ui, dsp, presets, naming);
+    bands(ui, dsp);
 }
 
 /// The longest name of a preset of one's own, in letters.

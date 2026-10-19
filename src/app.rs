@@ -81,6 +81,8 @@ pub struct App {
     info_request: Option<PathBuf>,
     /// The editor of the library's views.
     view_editor: crate::ui::view_editor::ViewEditor,
+    /// The equalizer's window (the player bar's button).
+    eq_window: crate::ui::eq_window::EqWindow,
     /// `METALAMP_VIEW_EDITOR` is set: open the editor once the library is
     /// loaded, for looking at it without a hand on the window (GUI checks).
     env_view_editor: bool,
@@ -183,6 +185,7 @@ impl App {
             file_info: crate::ui::info::InfoView::default(),
             info_request: None,
             view_editor: crate::ui::view_editor::ViewEditor::default(),
+            eq_window: crate::ui::eq_window::EqWindow::from_env(),
             env_view_editor: std::env::var_os("METALAMP_VIEW_EDITOR").is_some(),
         }
     }
@@ -453,6 +456,7 @@ impl App {
             mute: self.player.mute,
             shuffle: self.player.queue.shuffle(),
             repeat: self.player.queue.repeat,
+            eq: self.settings.dsp.eq,
             cover,
         };
         for cmd in player_bar::show(ui, &now, &mut self.visual) {
@@ -489,6 +493,7 @@ impl App {
                     self.settings.visualization = v;
                     self.place_changed = Some(Instant::now());
                 }
+                BarCmd::Equalizer(button) => self.eq_window.toggle(button),
             }
         }
     }
@@ -1214,6 +1219,20 @@ impl eframe::App for App {
         });
         if let Some(path) = self.info_request.take() {
             self.file_info.open(&ctx, &path);
+        }
+        // The equalizer's window, under the modals.
+        let before = (self.settings.dsp.clone(), self.settings.eq_presets.clone());
+        self.eq_window.show(
+            &ctx,
+            &mut self.settings.dsp,
+            &mut self.settings.eq_presets,
+            !modal,
+        );
+        if self.settings.dsp != before.0 {
+            self.player.set_dsp(&self.settings.dsp);
+        }
+        if (&self.settings.dsp, &self.settings.eq_presets) != (&before.0, &before.1) {
+            self.place_changed = Some(Instant::now());
         }
         self.file_info.show(&ctx);
         self.about.show(&ctx);

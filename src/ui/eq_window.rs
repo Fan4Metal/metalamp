@@ -1,0 +1,118 @@
+//! The equalizer's window, opened by the player bar's button under it:
+//! the same equalizer as the settings window's Sound page (the switch,
+//! the presets, one's own presets, the sliders), on a card of its own.
+//! Not modal: the player and its keys go on. The cross, Esc or the bar's
+//! button close it; it can be dragged by its free space.
+
+use egui::{Align, Layout, Pos2, Rect, RichText, pos2};
+
+use crate::audio::dsp::DspSettings;
+use crate::palette;
+use crate::settings::EqPreset;
+
+/// The width of the content in points (the settings page's card is about
+/// as wide).
+const WIDTH: f32 = 560.0;
+/// The window's inner margin.
+const MARGIN: i8 = 16;
+/// Kept from the window's edges and from the button.
+const GAP: f32 = 6.0;
+
+#[derive(Default)]
+pub struct EqWindow {
+    pub open: bool,
+    /// Opened this frame: placed under the button.
+    fresh: bool,
+    /// The button's bottom right corner.
+    anchor: Pos2,
+    /// The name a preset is being saved under, while one is.
+    naming: Option<String>,
+}
+
+impl EqWindow {
+    /// Closed, unless `METALAMP_EQ` is set: then open at start, under where
+    /// the full bar's button is, for looking at it without a hand on the
+    /// window (GUI checks).
+    pub fn from_env() -> EqWindow {
+        let mut window = EqWindow::default();
+        if std::env::var_os("METALAMP_EQ").is_some() {
+            window.toggle(Rect::from_min_max(pos2(470.0, 120.0), pos2(500.0, 148.0)));
+        }
+        window
+    }
+
+    /// The bar's button clicked: opens the window under `button`, or
+    /// closes it.
+    pub fn toggle(&mut self, button: Rect) {
+        self.open = !self.open;
+        self.fresh = self.open;
+        self.anchor = button.right_bottom();
+        self.naming = None;
+    }
+
+    /// Draws the window while it is open, editing `dsp` and `presets` in
+    /// place; `keys`: no modal over it takes Esc.
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        dsp: &mut DspSettings,
+        presets: &mut Vec<EqPreset>,
+        keys: bool,
+    ) {
+        if !self.open {
+            return;
+        }
+        let fresh = std::mem::take(&mut self.fresh);
+        let outer = WIDTH + 2.0 * f32::from(MARGIN);
+        let screen = ctx.content_rect();
+        let mut window = egui::Window::new(tr!("Equalizer", "Эквалайзер"))
+            .id(egui::Id::new("eq_window"))
+            .title_bar(false)
+            .resizable(false)
+            .collapsible(false)
+            .frame(
+                egui::Frame::window(&ctx.style_of(ctx.theme()))
+                    .fill(palette::card_bg())
+                    .stroke(egui::Stroke::new(1.0, palette::line()))
+                    .inner_margin(egui::Margin::same(MARGIN))
+                    .corner_radius(10.0),
+            );
+        if fresh {
+            // Right-aligned with the button, under it, within the window.
+            let x = (self.anchor.x - outer)
+                .min(screen.right() - outer - GAP)
+                .max(screen.left() + GAP);
+            window = window.current_pos(pos2(x, self.anchor.y + GAP));
+        }
+        let mut close = false;
+        window.show(ctx, |ui| {
+            crate::ui::settings::round_widgets(ui);
+            ui.set_width(WIDTH);
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(tr!("Equalizer", "Эквалайзер"))
+                        .size(17.0)
+                        .strong()
+                        .color(palette::text_bright()),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    close |= super::close_cross(ui);
+                });
+            });
+            ui.add_space(6.0);
+            crate::ui::settings::equalizer(ui, dsp, presets, &mut self.naming);
+        });
+        // Esc: a list open over it or the name being typed take it first.
+        if !fresh
+            && keys
+            && self.naming.is_none()
+            && !egui::Popup::is_any_open(ctx)
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            close = true;
+        }
+        if close {
+            self.open = false;
+        }
+    }
+}

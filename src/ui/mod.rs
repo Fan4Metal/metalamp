@@ -4,6 +4,7 @@
 //! frameless window (`title`). The themes and the colours are `palette`'s.
 
 pub mod about;
+pub mod eq_window;
 pub mod icons;
 pub mod info;
 pub mod library;
