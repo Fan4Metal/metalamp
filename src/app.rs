@@ -657,7 +657,10 @@ impl App {
         if !over_player || ctx.memory(|m| m.focused().is_some()) {
             return;
         }
-        let pressed = |k: Key| ctx.input_mut(|i| i.consume_key(Modifiers::NONE, k));
+        // The bare arrows only: `consume_key` lets Shift and Alt through,
+        // and those chords are the keymap's.
+        let pressed =
+            |k: Key| ctx.input_mut(|i| i.modifiers.is_none() && i.consume_key(Modifiers::NONE, k));
         if pressed(Key::ArrowRight) {
             self.player.seek_by(SEEK_STEP);
         }
