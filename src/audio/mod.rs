@@ -380,7 +380,14 @@ impl Player<'_> {
                     }
                 }
             }
-            Cmd::Preload(None) => self.next = None,
+            Cmd::Preload(None) => {
+                self.next = None;
+                // Stop after this one: one already behind it in the ring
+                // is taken back if it can be.
+                if self.take_back_next(None) {
+                    self.eos = true;
+                }
+            }
             Cmd::Preload(Some((id, path, gain, fade_ms))) => {
                 if self.next.as_ref().is_some_and(|n| n.id == id) {
                     return;
@@ -388,6 +395,13 @@ impl Player<'_> {
                 match Decoder::open(&path) {
                     Ok(decoder) => {
                         self.next = Some(Open::new(id, path, decoder, gain, fade_ms));
+                        // Another one is next now (Play next in the last
+                        // second of a track): the one gone on into the
+                        // ring behind the track heard is taken back, and
+                        // this one goes there.
+                        if self.take_back_next(Some(id)) {
+                            self.track_decoded();
+                        }
                         // The track decoded to its end before the next was
                         // known (a short one, one with nothing in it, an
                         // entry added at the end): it goes on now.
@@ -844,6 +858,41 @@ impl Player<'_> {
         }
     }
 
+    /// The track decoding, gone on into the ring after the one heard (the
+    /// preload of before), dropped with its samples, unless it is `keep`:
+    /// possible while none of them has been written to the device and no
+    /// fade mixes it. True if it was.
+    fn take_back_next(&mut self, keep: Option<u64>) -> bool {
+        let channels = usize::from(self.format.1.max(1));
+        let Some(decoding) = &self.decoding else {
+            return false;
+        };
+        let start = match self.segments.back() {
+            Some(seg)
+                if self.segments.len() >= 2
+                    && self.fade.is_none()
+                    && seg.id == decoding.id
+                    && Some(seg.id) != keep
+                    && seg.origin_ms == 0
+                    && seg.start >= self.written =>
+            {
+                seg.start
+            }
+            _ => return false,
+        };
+        let keep_samples = (start - self.written) as usize * channels;
+        if keep_samples > self.ring.len() {
+            return false;
+        }
+        log::debug!("audio: the next track taken back from the ring");
+        self.ring.truncate(keep_samples);
+        self.segments.pop_back();
+        self.decoding = None;
+        self.eos = false;
+        self.drained_since = None;
+        true
+    }
+
     /// The decoding track ended: the next one goes on in the same ring if
     /// it has the same format.
     fn track_decoded(&mut self) {
@@ -982,6 +1031,53 @@ mod tests {
         let duration = engine.duration_ms();
         engine.send(Cmd::Seek(duration - 1000));
         assert!(wait(&|e| matches!(e, Event::Ended { .. }), 4));
+    }
+
+    /// Another next track asked for when the one preloaded has gone on
+    /// into the ring (the last second of the first) is the one heard:
+    /// the preloaded one is taken back. `METALAMP_SAMPLE`, played three
+    /// times under other ids.
+    #[test]
+    #[ignore = "needs METALAMP_SAMPLE and a sound device; plays a few seconds"]
+    fn engine_takes_back_the_next() {
+        use std::time::Instant;
+        let file = PathBuf::from(std::env::var("METALAMP_SAMPLE").expect("METALAMP_SAMPLE"));
+        let engine = Engine::start(
+            egui::Context::default(),
+            String::new(),
+            dsp::DspSettings::default(),
+        );
+        engine.set_gain(0.05);
+        let started = |secs: u64| {
+            let until = Instant::now() + Duration::from_secs(secs);
+            while Instant::now() < until {
+                for e in engine.poll() {
+                    println!("{e:?} at {} ms", engine.position_ms());
+                    match e {
+                        Event::Started { id } => return Some(id),
+                        Event::Failed { .. } => panic!("{e:?}"),
+                        _ => {}
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            None
+        };
+        engine.send(Cmd::Play {
+            id: 1,
+            path: file.clone(),
+            gain: 1.0,
+        });
+        assert_eq!(started(5), Some(1));
+        let duration = engine.duration_ms();
+        assert!(duration > 5000, "{duration}");
+        engine.send(Cmd::Preload(Some((2, file.clone(), 1.0, 0))));
+        // Its decoder ends at once: the ring holds about a second.
+        engine.send(Cmd::Seek(duration - 900));
+        std::thread::sleep(Duration::from_millis(200));
+        engine.send(Cmd::Preload(Some((3, file, 1.0, 0))));
+        assert_eq!(started(4), Some(3));
+        engine.send(Cmd::Stop);
     }
 
     /// A crossfade of 2 s: with 4 s of the first track left, the second
