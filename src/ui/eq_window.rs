@@ -35,6 +35,9 @@ pub struct EqWindow {
     windowed: bool,
     window: super::OwnWindow,
     height: f32,
+    /// The player's keys pressed in its own window, for the app to run
+    /// (the program's window does not hear them).
+    pub cmds: Vec<crate::keymap::Cmd>,
 }
 
 /// The window of its own's title, by which it is found.
@@ -71,6 +74,7 @@ impl EqWindow {
         dsp: &mut DspSettings,
         presets: &mut Vec<EqPreset>,
         keys: bool,
+        keymap: &crate::keymap::Keymap,
         owner: Option<isize>,
     ) {
         if !self.open {
@@ -88,7 +92,7 @@ impl EqWindow {
             self.window.reset();
         }
         if self.windowed {
-            if self.window(ctx, dsp, presets, owner, fresh) {
+            if self.window(ctx, dsp, presets, keys.then_some(keymap), owner, fresh) {
                 self.open = false;
             }
             return;
@@ -166,6 +170,7 @@ impl EqWindow {
         ctx: &egui::Context,
         dsp: &mut DspSettings,
         presets: &mut Vec<EqPreset>,
+        keymap: Option<&crate::keymap::Keymap>,
         owner: Option<isize>,
         fresh: bool,
     ) -> bool {
@@ -202,6 +207,13 @@ impl EqWindow {
                 && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
             {
                 close = true;
+            }
+            // The player's keys (not those a field being typed in keeps):
+            // not modal, the player goes on from here too.
+            if let Some(keymap) = keymap {
+                let typing = ctx.memory(|m| m.focused().is_some());
+                let cmds = crate::keymap::take(&ctx, keymap, |c| !(typing && c.edits_text()));
+                self.cmds.extend(cmds);
             }
             egui::CentralPanel::default()
                 .frame(

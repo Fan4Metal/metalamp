@@ -1873,8 +1873,12 @@ impl eframe::App for App {
             &mut self.settings.dsp,
             &mut self.settings.eq_presets,
             !modal,
+            &self.settings.keys,
             self.hwnd,
         );
+        for cmd in std::mem::take(&mut self.eq_window.cmds) {
+            self.run_key(cmd, &ctx, frame);
+        }
         if self.settings.dsp != before.0 {
             self.player.set_dsp(&self.settings.dsp);
         }
