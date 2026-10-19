@@ -217,9 +217,6 @@ struct Fade {
     a: VecDeque<f32>,
     b: VecDeque<f32>,
     a_ended: bool,
-    /// The ending track's loudness gain over the next one's: the chain
-    /// applies the next one's to the mix.
-    ratio: f32,
 }
 
 /// The gains of the ending and the next track at `t` (0 to 1) of a fade:
@@ -436,6 +433,11 @@ impl Player<'_> {
                     if open.id == id {
                         open.gain = gain;
                     }
+                }
+                if let Some(fade) = &mut self.fade
+                    && fade.from.id == id
+                {
+                    fade.from.gain = gain;
                 }
                 for seg in self.segments.iter_mut().filter(|s| s.id == id) {
                     seg.gain = gain;
@@ -725,6 +727,9 @@ impl Player<'_> {
                 .rposition(|s| s.start <= abs)
                 .unwrap_or(0);
             let gain = self.segments.get(idx).map_or(1.0, |s| s.gain);
+            if self.segments.get(idx).is_some_and(|s| s.start == abs) {
+                chain.begin_track(gain);
+            }
             let end = self
                 .segments
                 .get(idx + 1)
@@ -768,11 +773,6 @@ impl Player<'_> {
             duration_ms: (next.decoder.duration / (SECOND / 1000)) as u64,
             gain: next.gain,
         });
-        let ratio = if next.gain > 0.0 {
-            from.gain / next.gain
-        } else {
-            1.0
-        };
         log::debug!("audio: crossfade of {left} frames into {}", next.id);
         self.fade = Some(Fade {
             from,
@@ -781,7 +781,6 @@ impl Player<'_> {
             a: VecDeque::new(),
             b: VecDeque::new(),
             a_ended: false,
-            ratio,
         });
         self.decoding = Some(next);
         true
@@ -815,6 +814,13 @@ impl Player<'_> {
                 }
             }
         }
+        // The chain applies the next track's gain to the mix: the ending
+        // one is scaled by its own over it.
+        let ratio = if self.dsp.active() && self.dsp.normalize && next.gain > 0.0 {
+            fade.from.gain / next.gain
+        } else {
+            1.0
+        };
         let n = (fade.b.len() / channels).min((fade.len - fade.done) as usize);
         for i in 0..n {
             let t = (fade.done + i as u64) as f32 / fade.len as f32;
@@ -822,7 +828,7 @@ impl Player<'_> {
             for _ in 0..channels {
                 let a = fade.a.pop_front().unwrap_or(0.0);
                 let b = fade.b.pop_front().unwrap_or(0.0);
-                self.ring.push_back(a * ga * fade.ratio + b * gb);
+                self.ring.push_back(a * ga * ratio + b * gb);
             }
         }
         fade.done += n as u64;

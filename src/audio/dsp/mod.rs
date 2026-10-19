@@ -153,6 +153,16 @@ impl Chain {
         self.settings = settings.clone();
     }
 
+    /// A track (or a crossfade into one) begins: its gain applies at once,
+    /// not slid from the track's before; a gain arriving later slides.
+    pub fn begin_track(&mut self, track_gain: f32) {
+        self.gain = if self.settings.active() && self.settings.normalize {
+            track_gain
+        } else {
+            1.0
+        };
+    }
+
     /// Processes interleaved `samples` of a track whose loudness gain is
     /// `track_gain` (1 when not known).
     pub fn process(&mut self, samples: &mut [f32], track_gain: f32) {
