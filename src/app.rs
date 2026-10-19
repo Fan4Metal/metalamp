@@ -152,6 +152,12 @@ impl App {
         );
         let mut player = player;
         let saved_playlist = load_playlist(&mut player, settings.playlist_current);
+        // Played where it was left, once Play is pressed.
+        if settings.playlist_position > 0
+            && let Some(entry) = player.queue.current_entry()
+        {
+            player.resume = Some((entry.id, settings.playlist_position));
+        }
         // Files on the command line (Explorer's Open) play at once.
         let files = expand_playlists(files);
         // The rest of an Explorer selection comes from the other starts
@@ -803,6 +809,7 @@ impl App {
         self.settings.repeat = self.player.queue.repeat;
         self.settings.shuffle = self.player.queue.shuffle();
         self.settings.playlist_current = self.player.queue.current();
+        self.settings.playlist_position = self.player.position_to_keep();
     }
 
     /// Write the playlist when it or its current entry changed.

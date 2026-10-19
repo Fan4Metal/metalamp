@@ -41,6 +41,9 @@ pub struct Player {
     failed_in_row: usize,
     /// The last failure, for the status line.
     pub error: Option<String>,
+    /// Where to take up the entry (its id) the last run left off at (ms),
+    /// when it is played next; any other play forgets it.
+    pub resume: Option<(u64, u64)>,
     /// The tracks' loudness, for normalisation.
     loudness: Loudness,
     dsp: DspSettings,
@@ -82,6 +85,7 @@ impl Player {
             preloaded: None,
             failed_in_row: 0,
             error: None,
+            resume: None,
             loudness,
             dsp,
         }
@@ -152,6 +156,12 @@ impl Player {
             path: entry.path,
             gain,
         });
+        // The place the last run left this entry at.
+        if let Some((id, ms)) = self.resume.take()
+            && id == entry.id
+        {
+            self.engine.send(Cmd::Seek(ms));
+        }
         self.status = Status::Playing;
         self.error = None;
     }
@@ -296,6 +306,19 @@ impl Player {
 
     pub fn position_ms(&self) -> u64 {
         self.engine.position_ms()
+    }
+
+    /// Where playing is to be taken up from at the next start: the
+    /// position while playing or paused, the place still waiting to be
+    /// taken up, else 0.
+    pub fn position_to_keep(&self) -> u64 {
+        match self.status {
+            Status::Stopped => self
+                .resume
+                .filter(|&(id, _)| self.queue.current_entry().is_some_and(|e| e.id == id))
+                .map_or(0, |(_, ms)| ms),
+            _ => self.position_ms(),
+        }
     }
 
     /// Play on `device` (its id; empty: the default) from now on.

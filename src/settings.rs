@@ -71,6 +71,9 @@ pub struct Settings {
     pub playlist_cover: bool,
     /// The playlist's current entry (`playlist.m3u8` holds the list).
     pub playlist_current: Option<usize>,
+    /// Where in it playing was left (ms; 0: at its start), taken up by
+    /// the first Play after a start.
+    pub playlist_position: u64,
     /// The player bar's time counts down to the track's end.
     pub time_remaining: bool,
     pub bar_layout: BarLayout,
@@ -248,6 +251,7 @@ impl Default for Settings {
             playlist_width: 340.0,
             playlist_cover: true,
             playlist_current: None,
+            playlist_position: 0,
             time_remaining: false,
             bar_layout: BarLayout::default(),
             visualization: Visual::default(),
