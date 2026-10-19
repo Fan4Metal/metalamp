@@ -96,6 +96,9 @@ pub struct App {
     /// Over the others and the mini player as last applied to the window
     /// (`None`: not yet).
     applied_modes: Option<(bool, bool)>,
+    /// The window layout switched from the mini player: switched once the
+    /// whole window is back in its own layout's place.
+    layout_after_mini: bool,
     /// The mini player's cover, read large, and the app icon for a track
     /// without one.
     mini_cover: crate::ui::mini::Cover,
@@ -239,6 +242,7 @@ impl App {
             tray: None,
             off_taskbar: false,
             applied_modes: None,
+            layout_after_mini: false,
             mini_cover: Default::default(),
             mini_icon: None,
             growing: None,
@@ -813,12 +817,20 @@ impl App {
                 self.settings.visual_enabled = !self.settings.visual_enabled;
                 self.place_changed = Some(Instant::now());
             }
+            // From the mini player: the whole window first, back in its
+            // layout's place, then the other layout (switched at once, the
+            // mini player's square was taken for the layout's place, and
+            // the new layout's rectangle for the mini player's).
+            Cmd::WindowLayout if self.settings.mini || self.applied_modes.is_some_and(|m| m.1) => {
+                self.settings.mini = false;
+                self.layout_after_mini = true;
+                self.place_changed = Some(Instant::now());
+            }
             Cmd::WindowLayout => {
                 self.settings.window_layout = match self.settings.window_layout {
                     WindowLayout::Library => WindowLayout::Playlist,
                     WindowLayout::Playlist => WindowLayout::Library,
                 };
-                self.settings.mini = false;
                 self.place_changed = Some(Instant::now());
             }
             // The playlist is the window in the player and playlist layout.
@@ -1266,7 +1278,10 @@ impl App {
     /// only the ground is painted (`growing`). The mini player waits.
     fn apply_layout(&mut self, ctx: &egui::Context) {
         let wanted = self.settings.window_layout;
-        if self.applied_layout == wanted || self.settings.mini {
+        if self.applied_layout == wanted
+            || self.settings.mini
+            || self.applied_modes.is_some_and(|m| m.1)
+        {
             return;
         }
         let Some(hwnd) = self.hwnd else { return };
@@ -1571,6 +1586,14 @@ impl eframe::App for App {
         self.follow_tray();
         self.apply_layout(ctx);
         self.apply_modes(ctx);
+        if self.layout_after_mini && self.applied_modes.is_some_and(|m| !m.1) {
+            self.layout_after_mini = false;
+            self.settings.window_layout = match self.settings.window_layout {
+                WindowLayout::Library => WindowLayout::Playlist,
+                WindowLayout::Playlist => WindowLayout::Library,
+            };
+            ctx.request_repaint();
+        }
         self.show_on_taskbar();
         self.show_in_media_controls();
         self.remember_place();
