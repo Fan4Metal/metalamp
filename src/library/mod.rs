@@ -147,11 +147,17 @@ pub struct Library {
     /// Each track's words for the search: artist, album artist, album,
     /// title, genre and year in lower case.
     pub search: Vec<String>,
-    /// Each track by its path.
+    /// Each track by its path, and by its path in lower case (`track_at`).
     pub by_path: HashMap<PathBuf, TrackId>,
+    by_folded: HashMap<String, TrackId>,
     /// The M3U and M3U8 playlists in the library's folders, by path (the
     /// playlist's saved playlists section lists them after its own).
     pub playlists: Vec<PathBuf>,
+}
+
+/// A path in lower case, for lookups that ignore its case as Windows does.
+fn folded(path: &Path) -> String {
+    path.to_string_lossy().to_lowercase()
 }
 
 /// The name shown for an empty artist or album.
@@ -263,7 +269,7 @@ impl Library {
                 ))
             })
             .collect();
-        let by_path = tracks
+        let by_path: HashMap<PathBuf, TrackId> = tracks
             .iter()
             .enumerate()
             .map(|(i, t)| (t.path.clone(), i as TrackId))
@@ -275,8 +281,29 @@ impl Library {
             totals,
             album_of,
             search,
+            by_folded: by_path.iter().map(|(p, &id)| (folded(p), id)).collect(),
             by_path,
             playlists: Vec::new(),
+        }
+    }
+
+    /// The track at `path`, its case as Windows sees it, ignored: a
+    /// playlist may write `21st century` for the folder `21st Century`.
+    pub fn track_at(&self, path: &Path) -> Option<TrackId> {
+        self.by_path
+            .get(path)
+            .or_else(|| self.by_folded.get(&folded(path)))
+            .copied()
+    }
+
+    /// `path` as the library writes it, if it holds the file (its case
+    /// may differ), else as it is.
+    pub fn path_as_known(&self, path: PathBuf) -> PathBuf {
+        match self.track_at(&path) {
+            Some(id) if self.tracks[id as usize].path != path => {
+                self.tracks[id as usize].path.clone()
+            }
+            _ => path,
         }
     }
 
@@ -482,6 +509,25 @@ fn album_order(a: &Track, b: &Track) -> Ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_track_is_found_whatever_the_case_of_its_path() {
+        let t = |path: &str| Track {
+            path: path.into(),
+            title: "Lady Unforgettable".into(),
+            ..Track::default()
+        };
+        let lib = Library::new(vec![t("D:/Music/Blue System/(1994) 21st Century/08.mp3")]);
+        let written = PathBuf::from("D:/Music/Blue System/(1994) 21st century/08.mp3");
+        assert_eq!(lib.track_at(&written), Some(0));
+        assert_eq!(
+            lib.path_as_known(written),
+            PathBuf::from("D:/Music/Blue System/(1994) 21st Century/08.mp3")
+        );
+        let other = PathBuf::from("D:/Music/other.mp3");
+        assert_eq!(lib.track_at(&other), None);
+        assert_eq!(lib.path_as_known(other.clone()), other);
+    }
 
     fn in_folder(folder: &str, artist: &str, album: &str, n: u16) -> Track {
         Track {

@@ -182,8 +182,8 @@ pub enum PlaylistAction {
 /// The line of an entry: "Artist – Title" from the library, else the
 /// file's name; and its length, if known.
 fn describe(library: &Library, path: &std::path::Path) -> (String, Option<u32>) {
-    match library.by_path.get(path) {
-        Some(&id) => {
+    match library.track_at(path) {
+        Some(id) => {
             let t = &library.tracks[id as usize];
             let text = if t.artist.is_empty() {
                 t.title.clone()
@@ -655,7 +655,7 @@ pub fn show(
             let entry = pv.selected_entry();
             let known = entry
                 .and_then(|i| player.queue.entries().get(i))
-                .is_some_and(|e| library.by_path.contains_key(&e.path));
+                .is_some_and(|e| library.track_at(&e.path).is_some());
             let go_to: &[(bool, &str)] = if pv.no_library {
                 &[]
             } else {

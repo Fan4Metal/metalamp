@@ -430,7 +430,7 @@ impl App {
     /// The library's track heard, if it is one.
     fn playing_track(&self) -> Option<crate::library::TrackId> {
         let path = self.player.playing_path()?;
-        self.library.by_path.get(path).copied()
+        self.library.track_at(path)
     }
 
     /// The title and the second line of the player bar: the track heard,
@@ -444,8 +444,8 @@ impl App {
         let Some(path) = path else {
             return (String::new(), String::new(), None);
         };
-        match self.library.by_path.get(path) {
-            Some(&id) => {
+        match self.library.track_at(path) {
+            Some(id) => {
                 let t = &self.library.tracks[id as usize];
                 let artist = if t.artist.is_empty() {
                     crate::library::unknown_artist().to_owned()
@@ -708,6 +708,10 @@ impl App {
                 }
                 crate::ui::playlist::PlaylistAction::Open(name) => {
                     if let Some(paths) = crate::playlists::load(&name) {
+                        let paths = paths
+                            .into_iter()
+                            .map(|p| self.library.path_as_known(p))
+                            .collect();
                         self.player.play_paths(paths, 0);
                     }
                 }
@@ -717,6 +721,7 @@ impl App {
                         let paths = paths
                             .into_iter()
                             .filter(|p| crate::filetypes::is_audio(p))
+                            .map(|p| self.library.path_as_known(p))
                             .collect();
                         self.player.play_paths(paths, 0);
                     }
@@ -746,7 +751,7 @@ impl App {
                         .queue
                         .entries()
                         .get(i)
-                        .and_then(|e| self.library.by_path.get(&e.path).copied());
+                        .and_then(|e| self.library.track_at(&e.path));
                     if let Some(t) = track {
                         let album = self.library.album_of[t as usize];
                         self.go_to(album, Some(t), to_album);
@@ -1039,6 +1044,7 @@ impl App {
         if self.listening.tick(playing, self.player.duration_ms())
             && let Some(path) = self.player.playing_path().cloned()
         {
+            let path = self.library.path_as_known(path);
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs());
@@ -1076,7 +1082,7 @@ impl App {
     /// "Artist - Title" from the library.
     fn playlist_m3u8(&self) -> String {
         self.player.queue.m3u8(&|path| {
-            let &id = self.library.by_path.get(path)?;
+            let id = self.library.track_at(path)?;
             let t = &self.library.tracks[id as usize];
             let title = if t.artist.is_empty() {
                 t.title.clone()
