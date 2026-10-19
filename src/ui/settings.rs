@@ -17,7 +17,7 @@ use crate::i18n::LangChoice;
 use crate::keymap::{Action, Chord, Group, Keymap};
 use crate::palette;
 use crate::palette::{Accent, Palette, Theme, Tint};
-use crate::settings::{BarLayout, EqPreset, MediaKeys, Settings};
+use crate::settings::{BarLayout, EqPreset, MediaKeys, Settings, Visual, WindowLayout};
 use crate::ui::icons::{self, Icon};
 use crate::update::{Status, Updates, release_url, version_of};
 
@@ -25,6 +25,7 @@ use crate::update::{Status, Updates, release_url, version_of};
 const SIZE: egui::Vec2 = vec2(820.0, 560.0);
 /// The width of the category column.
 const SIDEBAR_WIDTH: f32 = 180.0;
+const NARROW_SIDEBAR: f32 = 140.0;
 /// The corner radius of the window.
 const RADIUS: u8 = 10;
 
@@ -114,6 +115,10 @@ pub struct SettingsDialog {
     taken: Option<(String, Keymap)>,
     /// What the Keys page shows: actions whose name or keys have it.
     key_filter: String,
+    /// Open in a window of its own (decided as it opens), and that
+    /// window's handle once found.
+    windowed: bool,
+    window_hwnd: Option<isize>,
 }
 
 impl SettingsDialog {
@@ -150,6 +155,7 @@ impl SettingsDialog {
     pub fn show(
         &mut self,
         ctx: &egui::Context,
+        owner: Option<isize>,
         settings: &mut Settings,
         updates: &mut Updates,
     ) -> Changed {
@@ -162,127 +168,40 @@ impl SettingsDialog {
         if self.page != Page::Keys {
             self.capture = None;
         }
-        self.capture_key(ctx, &mut settings.keys);
         // Kept by the update check, saved with the settings.
         let checking = updates.enabled;
         let mut close = false;
-        let modal = egui::Modal::new(egui::Id::new("settings"))
-            .frame(
-                egui::Frame::popup(&ctx.style_of(egui::Theme::Dark))
-                    .fill(palette::panel_bg())
-                    .corner_radius(RADIUS)
-                    .inner_margin(Margin::ZERO),
-            )
-            .show(ctx, |ui| {
-                round_widgets(ui);
-                // Smaller in a small window, so Close and the cross stay
-                // on the screen.
-                let size = super::modal_size(ctx, SIZE, 12.0);
-                let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-
-                // The category column, flush with the window's left edge.
-                let sidebar = Rect::from_min_size(rect.min, vec2(SIDEBAR_WIDTH, rect.height()));
-                let inner = RADIUS - 1;
-                ui.painter().rect_filled(
-                    sidebar,
-                    CornerRadius {
-                        nw: inner,
-                        sw: inner,
-                        ne: 0,
-                        se: 0,
-                    },
-                    palette::sidebar_bg(),
-                );
-                ui.painter().text(
-                    sidebar.left_top() + vec2(20.0, 20.0),
-                    Align2::LEFT_TOP,
-                    tr!("Settings", "Настройки"),
-                    FontId::proportional(18.0),
-                    palette::text_bright(),
-                );
-                let list = Rect::from_min_max(
-                    sidebar.left_top() + vec2(10.0, 62.0),
-                    sidebar.right_bottom() - vec2(10.0, 100.0),
-                );
-                self.categories(ui, list);
-
-                const BUTTON: f32 = 30.0;
-                let close_rect = Rect::from_min_size(
-                    pos2(sidebar.left() + 12.0, sidebar.bottom() - 14.0 - BUTTON),
-                    vec2(SIDEBAR_WIDTH - 24.0, BUTTON),
-                );
-                let reset_rect = close_rect.translate(vec2(0.0, -BUTTON - 8.0));
-                if child(ui, reset_rect)
-                    .add_sized(
-                        reset_rect.size(),
-                        egui::Button::new(tr!("Reset", "Сбросить")),
-                    )
-                    .on_hover_text(tr!(
-                        "Put the settings of this window back to their defaults",
-                        "Вернуть настройкам этого окна значения по умолчанию"
-                    ))
-                    .clicked()
-                {
-                    reset(settings, updates);
-                    self.naming = None;
-                    self.capture = None;
-                    self.taken = None;
-                }
-                close |= child(ui, close_rect)
-                    .add_sized(
-                        close_rect.size(),
-                        egui::Button::new(tr!("Close", "Закрыть")),
-                    )
-                    .clicked();
-
-                // The page.
-                let page = Rect::from_min_max(pos2(sidebar.right(), rect.top()), rect.max);
-                let cross = Rect::from_min_size(
-                    pos2(page.right() - 14.0 - 24.0, page.top() + 14.0),
-                    vec2(24.0, 24.0),
-                );
-                close |= super::close_cross(&mut child(ui, cross));
-                // The scroll bar takes the right margin, next to the cards.
-                let content = Rect::from_min_max(
-                    page.left_top() + vec2(28.0, 18.0),
-                    page.right_bottom() - vec2(10.0, 0.0),
-                );
-                let mut ui = child(ui, content);
-                ui.label(
-                    RichText::new(self.page.title())
-                        .size(20.0)
-                        .strong()
-                        .color(palette::text_bright()),
-                );
-                ui.add_space(2.0);
-                ui.label(RichText::new(self.page.summary()).color(palette::text_weak()));
-                ui.add_space(4.0);
-                let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]);
-                if let Some(offset) = self.scroll_to.take() {
-                    area = area.vertical_scroll_offset(offset);
-                }
-                area.show(&mut ui, |ui| {
-                    egui::Frame::new()
-                        .inner_margin(Margin {
-                            left: 0,
-                            right: 18,
-                            top: 0,
-                            bottom: 18,
-                        })
-                        .show(ui, |ui| match self.page {
-                            Page::General => general(ui, settings),
-                            Page::Sound => sound(ui, settings, &self.devices, &mut self.naming),
-                            Page::Keys => self.keys_page(ui, &mut settings.keys),
-                            Page::Updates => updates_page(ui, updates),
-                        });
+        // In a window of its own when the program's is too small for it
+        // (the player and playlist layout): squeezed, its pages broke. As
+        // it opens, and when the program's window gets smaller (that
+        // layout chosen here); once out, it stays out until closed.
+        let room = ctx.content_rect().size();
+        let small = room.x < SIZE.x + 24.0 || room.y < SIZE.y + 24.0;
+        let moved_out = !fresh && small && !self.windowed;
+        if fresh || moved_out {
+            self.windowed = small;
+        }
+        if self.windowed {
+            close |= self.window(ctx, owner, settings, updates, fresh || moved_out);
+        } else {
+            self.window_hwnd = None;
+            let modal = egui::Modal::new(egui::Id::new("settings"))
+                .frame(
+                    egui::Frame::popup(&ctx.style_of(egui::Theme::Dark))
+                        .fill(palette::panel_bg())
+                        .corner_radius(RADIUS)
+                        .inner_margin(Margin::ZERO),
+                )
+                .show(ctx, |ui| {
+                    close |= self.surface(ui, settings, updates, false);
                 });
-            });
-        if close
-            || (!fresh
+            close |= !fresh
                 && (ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
-                    || modal.should_close()))
-        {
+                    || modal.should_close());
+        }
+        if close {
             self.open = false;
+            self.window_hwnd = None;
         }
         changed.device = settings.output_device != before.output_device;
         changed.dsp = settings.dsp != before.dsp;
@@ -292,6 +211,214 @@ impl SettingsDialog {
         changed.keys = settings.keys != before.keys;
         changed.any = *settings != before || updates.enabled != checking;
         changed
+    }
+
+    /// The window's content in `ui`: the pages' column with Reset and
+    /// Close, the page; whether it is to close. `windowed`: in a window of
+    /// its own, which its top strip moves.
+    fn surface(
+        &mut self,
+        ui: &mut Ui,
+        settings: &mut Settings,
+        updates: &mut Updates,
+        windowed: bool,
+    ) -> bool {
+        let ctx = ui.ctx().clone();
+        // A key being chosen takes the keys before any widget sees them.
+        self.capture_key(&ctx, &mut settings.keys);
+        let mut close = false;
+        round_widgets(ui);
+        // Smaller in a small window, so Close and the cross stay
+        // on the screen; a window of its own has its size.
+        let size = if windowed {
+            SIZE
+        } else {
+            super::modal_size(&ctx, SIZE, 12.0)
+        };
+        let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+        // A window of its own moves by its top strip.
+        if windowed {
+            crate::frameless::drag_area(
+                ui,
+                Rect::from_min_size(rect.min, vec2(rect.width(), 56.0)),
+                ui.id().with("settings_drag"),
+                Sense::hover(),
+            );
+        }
+
+        // The category column, flush with the window's left edge.
+        // Narrower in a narrow window (the player and playlist
+        // layout), so the page keeps its room.
+        let sidebar_width = if size.x < 760.0 {
+            NARROW_SIDEBAR
+        } else {
+            SIDEBAR_WIDTH
+        };
+        let sidebar = Rect::from_min_size(rect.min, vec2(sidebar_width, rect.height()));
+        let inner = if windowed { 0 } else { RADIUS - 1 };
+        ui.painter().rect_filled(
+            sidebar,
+            CornerRadius {
+                nw: inner,
+                sw: inner,
+                ne: 0,
+                se: 0,
+            },
+            palette::sidebar_bg(),
+        );
+        ui.painter().text(
+            sidebar.left_top() + vec2(20.0, 20.0),
+            Align2::LEFT_TOP,
+            tr!("Settings", "Настройки"),
+            FontId::proportional(18.0),
+            palette::text_bright(),
+        );
+        let list = Rect::from_min_max(
+            sidebar.left_top() + vec2(10.0, 62.0),
+            sidebar.right_bottom() - vec2(10.0, 100.0),
+        );
+        self.categories(ui, list);
+
+        const BUTTON: f32 = 30.0;
+        let close_rect = Rect::from_min_size(
+            pos2(sidebar.left() + 12.0, sidebar.bottom() - 14.0 - BUTTON),
+            vec2(sidebar_width - 24.0, BUTTON),
+        );
+        let reset_rect = close_rect.translate(vec2(0.0, -BUTTON - 8.0));
+        if child(ui, reset_rect)
+            .add_sized(
+                reset_rect.size(),
+                egui::Button::new(tr!("Reset", "Сбросить")),
+            )
+            .on_hover_text(tr!(
+                "Put the settings of this window back to their defaults",
+                "Вернуть настройкам этого окна значения по умолчанию"
+            ))
+            .clicked()
+        {
+            reset(settings, updates);
+            self.naming = None;
+            self.capture = None;
+            self.taken = None;
+        }
+        close |= child(ui, close_rect)
+            .add_sized(
+                close_rect.size(),
+                egui::Button::new(tr!("Close", "Закрыть")),
+            )
+            .clicked();
+
+        // The page.
+        let page = Rect::from_min_max(pos2(sidebar.right(), rect.top()), rect.max);
+        let cross = Rect::from_min_size(
+            pos2(page.right() - 14.0 - 24.0, page.top() + 14.0),
+            vec2(24.0, 24.0),
+        );
+        close |= super::close_cross(&mut child(ui, cross));
+        // The scroll bar takes the right margin, next to the cards.
+        let content = Rect::from_min_max(
+            page.left_top() + vec2(28.0, 18.0),
+            page.right_bottom() - vec2(10.0, 0.0),
+        );
+        let mut ui = child(ui, content);
+        ui.label(
+            RichText::new(self.page.title())
+                .size(20.0)
+                .strong()
+                .color(palette::text_bright()),
+        );
+        ui.add_space(2.0);
+        ui.label(RichText::new(self.page.summary()).color(palette::text_weak()));
+        ui.add_space(4.0);
+        let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]);
+        if let Some(offset) = self.scroll_to.take() {
+            area = area.vertical_scroll_offset(offset);
+        }
+        area.show(&mut ui, |ui| {
+            egui::Frame::new()
+                .inner_margin(Margin {
+                    left: 0,
+                    right: 18,
+                    top: 0,
+                    bottom: 18,
+                })
+                .show(ui, |ui| match self.page {
+                    Page::General => general(ui, settings),
+                    Page::Sound => sound(ui, settings, &self.devices, &mut self.naming),
+                    Page::Keys => self.keys_page(ui, &mut settings.keys),
+                    Page::Updates => updates_page(ui, updates),
+                });
+        });
+        close
+    }
+
+    /// The settings in a window of their own (metalmpv's playlist window's
+    /// way): frameless, owned by the program's window (over it, minimized
+    /// with it, off the taskbar), centred over it on its work area when
+    /// opened. Esc and Enter close it, as the modal; whether to close.
+    fn window(
+        &mut self,
+        ctx: &egui::Context,
+        owner: Option<isize>,
+        settings: &mut Settings,
+        updates: &mut Updates,
+        fresh: bool,
+    ) -> bool {
+        if fresh {
+            self.window_hwnd = None;
+        }
+        let centre = ctx
+            .input(|i| i.viewport().outer_rect)
+            .unwrap_or(ctx.content_rect())
+            .center();
+        let builder = egui::ViewportBuilder::default()
+            .with_title(tr!("Settings", "Настройки"))
+            .with_decorations(false)
+            .with_resizable(false)
+            .with_inner_size(SIZE)
+            .with_position(centre - SIZE / 2.0)
+            .with_minimize_button(false)
+            .with_maximize_button(false)
+            .with_taskbar(false)
+            .with_icon(crate::window_icon());
+        let id = egui::ViewportId::from_hash_of("settings_window");
+        let mut close = false;
+        ctx.show_viewport_immediate(id, builder, |ui, _class| {
+            let ctx = ui.ctx().clone();
+            close |= ctx.input(|i| i.viewport().close_requested());
+            // Esc or Enter as the modal's, unless a list, a field or a
+            // key being chosen takes them (as of the frame before).
+            let free = !egui::Popup::is_any_open(&ctx)
+                && !ctx.text_edit_focused()
+                && self.capture.is_none();
+            if free
+                && !fresh
+                && ctx.input_mut(|i| {
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+                        || i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                })
+            {
+                close = true;
+            }
+            egui::CentralPanel::no_frame().show(ui, |ui| {
+                ui.painter()
+                    .rect_filled(ui.max_rect(), 0.0, palette::panel_bg());
+                close |= self.surface(ui, settings, updates, true);
+            });
+        });
+        // eframe gives no handle for the window: the visible one of this
+        // thread that is not the program's, found once it shows.
+        if self.window_hwnd.is_none()
+            && let Some(main) = owner
+            && let Some(hwnd) = crate::win::thread_windows()
+                .into_iter()
+                .find(|h| *h != main)
+        {
+            self.window_hwnd = Some(hwnd);
+            crate::win::adopt(hwnd, main);
+            crate::caption::set_dark(hwnd, settings.theme.is_dark());
+        }
+        close
     }
 
     /// The list of categories in `rect`.
@@ -947,6 +1074,26 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
         divider(ui);
         row(
             ui,
+            tr!("Window", "Окно"),
+            Some(tr!(
+                "With the library: the player bar, the library and the playlist beside it. Player and playlist: the player bar over the playlist alone, as in the early Winamp. Each keeps its own size and place.",
+                "С библиотекой: панель плеера, библиотека и плейлист рядом. Плеер и плейлист: панель плеера над одним плейлистом, как в раннем Winamp. У каждого вида свои размер и место окна."
+            )),
+            CONTROL,
+            |ui| {
+                egui::ComboBox::from_id_salt("settings_window_layout")
+                    .selected_text(settings.window_layout.label())
+                    .width(CONTROL - 10.0)
+                    .show_ui(ui, |ui| {
+                        for l in WindowLayout::ALL {
+                            ui.selectable_value(&mut settings.window_layout, l, l.label());
+                        }
+                    });
+            },
+        );
+        divider(ui);
+        row(
+            ui,
             tr!("Player bar", "Панель плеера"),
             Some(tr!(
                 "The time in large digits and a visualization on the right (the right button on it chooses one); or the compact bar of one row.",
@@ -962,6 +1109,41 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
                             ui.selectable_value(&mut settings.bar_layout, l, l.label());
                         }
                     });
+            },
+        );
+        divider(ui);
+        row(
+            ui,
+            tr!("Visualization", "Визуализация"),
+            Some(tr!(
+                "On the right of the player bar with a visualization; off, its display shows the program's name and takes no time. A click on it goes on to the next one.",
+                "Справа на панели плеера с визуализацией; выключенная, она показывает название программы и не тратит время. Щелчок по ней переключает на следующую."
+            )),
+            CONTROL,
+            |ui| {
+                let mut on = settings.visualization != Visual::Off;
+                if switch(ui, &mut on).changed() {
+                    settings.set_visual_on(on);
+                }
+                let shown = if on {
+                    settings.visualization
+                } else {
+                    settings.visual_last
+                };
+                let mut kind = shown;
+                ui.add_enabled_ui(on, |ui| {
+                    egui::ComboBox::from_id_salt("settings_visual")
+                        .selected_text(kind.label())
+                        .width(CONTROL - 70.0)
+                        .show_ui(ui, |ui| {
+                            for v in Visual::KINDS {
+                                ui.selectable_value(&mut kind, v, v.label());
+                            }
+                        });
+                });
+                if kind != shown {
+                    settings.set_visual(kind);
+                }
             },
         );
     });
@@ -2007,6 +2189,9 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     }
     settings.language = d.language;
     settings.bar_layout = d.bar_layout;
+    settings.window_layout = d.window_layout;
+    settings.visualization = d.visualization;
+    settings.visual_last = d.visual_last;
     settings.theme = d.theme;
     settings.accent = d.accent;
     settings.selection = d.selection;

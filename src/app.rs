@@ -10,7 +10,7 @@ use egui::{Key, Modifiers};
 
 use crate::library::Library;
 use crate::library::scan::{Scan, ScanMsg, Wake};
-use crate::settings::{Settings, WindowPlace};
+use crate::settings::{Settings, WindowLayout, WindowPlace};
 use crate::ui::about::AboutDialog;
 use crate::ui::settings::SettingsDialog;
 use crate::ui::title::{self, TitleCmd};
@@ -101,6 +101,8 @@ pub struct App {
     /// window's panels wait, else the playlist and the library's panes
     /// took the mini player's size as their own (at most 1 s).
     growing: Option<Instant>,
+    /// The window's layout as last applied (`apply_layout`).
+    applied_layout: WindowLayout,
     /// The tray icon while the setting is on, and whether the window's
     /// taskbar button is taken away (minimized to it).
     tray: Option<crate::tray::Tray>,
@@ -147,14 +149,15 @@ impl App {
             // The mini player at start: the whole window is placed hidden
             // and not maximized, and the mini player put over it before
             // it shows (`apply_modes`).
-            let maximized = settings.window.is_some_and(|w| w.maximized) && !settings.mini;
+            let maximized = settings.place().is_some_and(|w| w.maximized) && !settings.mini;
             if maximized {
                 win::cloak(hwnd, true);
                 cloak = Some((Instant::now() + UNCLOAK_TIMEOUT, ctx.cumulative_frame_nr()));
             }
-            if let Some(place) = settings.window {
-                win::place(hwnd, Some(place.normal), crate::DEFAULT_SIZE, maximized);
+            if let Some(place) = settings.place() {
+                win::place(hwnd, Some(place.normal), settings.default_size(), maximized);
             }
+            win::set_least(settings.min_size());
             let wake = ctx.clone();
             win::hook_window(hwnd, move || wake.request_repaint());
             crate::instance::listen(ctx, hwnd);
@@ -190,6 +193,7 @@ impl App {
         updates.start_if_due(ctx);
         let about = AboutDialog::default();
         let watcher = crate::library::watch::Watcher::start(&settings.library_folders, &wake);
+        let settings_layout = settings.window_layout;
         Self {
             settings,
             settings_dialog: SettingsDialog::from_env(),
@@ -233,6 +237,7 @@ impl App {
             mini_cover: Default::default(),
             mini_icon: None,
             growing: None,
+            applied_layout: settings_layout,
             env_view_editor: std::env::var_os("METALAMP_VIEW_EDITOR").is_some(),
         }
     }
@@ -514,6 +519,15 @@ impl App {
         self.bar_commands(cmds);
     }
 
+    /// The player bar's layout: the one chosen, or the narrow one of the
+    /// player and playlist layout.
+    fn bar_layout(&self) -> crate::settings::BarLayout {
+        match self.settings.window_layout {
+            WindowLayout::Library => self.settings.bar_layout,
+            WindowLayout::Playlist => crate::settings::BarLayout::Winamp,
+        }
+    }
+
     /// What the player bar and the mini player show.
     fn now_shown<'a>(
         &self,
@@ -525,8 +539,16 @@ impl App {
         let (bitrate, sample_rate, channels) = track
             .and_then(|t| self.library.tracks.get(t as usize))
             .map_or((0, 0, 0), |t| (t.bitrate, t.sample_rate, t.channels));
+        // "N. Artist – Title", as the playlist has it.
+        let number = self.player.queue.current().map(|i| format!("{}. ", i + 1));
+        let heading = match track.and_then(|t| self.library.tracks.get(t as usize)) {
+            Some(t) if !t.artist.is_empty() => format!("{} – {}", t.artist, t.title),
+            _ => title.to_owned(),
+        };
+        let heading = format!("{}{heading}", number.unwrap_or_default());
         crate::ui::player_bar::NowPlaying {
-            layout: self.settings.bar_layout,
+            heading,
+            layout: self.bar_layout(),
             visual: self.settings.visualization,
             status: self.player.status,
             title,
@@ -553,7 +575,7 @@ impl App {
         let (title, artist, track) = self.now_playing();
         let cover = self.playing_cover(&ctx);
         // The visualization: the samples heard now, for its display's size.
-        let size = player_bar::visual_size(self.settings.bar_layout, ui.max_rect());
+        let size = player_bar::visual_size(self.bar_layout(), ui.max_rect());
         let mut heard = std::mem::take(&mut self.heard);
         let at = self
             .player
@@ -607,7 +629,7 @@ impl App {
                     self.place_changed = Some(Instant::now());
                 }
                 BarCmd::Visual(v) => {
-                    self.settings.visualization = v;
+                    self.settings.set_visual(v);
                     self.place_changed = Some(Instant::now());
                 }
                 BarCmd::Equalizer(button) => self.eq_window.toggle(button),
@@ -643,6 +665,67 @@ impl App {
         let v = (i16::from(self.player.volume) + i16::from(step)).clamp(0, 100) as u8;
         self.player.set_volume(v);
         self.place_changed = Some(Instant::now());
+    }
+
+    /// What the playlist's clicks, keys and menus ask for.
+    fn playlist_actions(
+        &mut self,
+        actions: Vec<crate::ui::playlist::PlaylistAction>,
+        ctx: &egui::Context,
+        frame: &mut eframe::Frame,
+    ) {
+        for action in actions {
+            match action {
+                crate::ui::playlist::PlaylistAction::Play(i) => self.player.play_index(i),
+                crate::ui::playlist::PlaylistAction::ShowInFolder(i) => {
+                    if let Some(e) = self.player.queue.entries().get(i) {
+                        win::show_in_folder(&e.path);
+                    }
+                }
+                crate::ui::playlist::PlaylistAction::Info(i) => {
+                    self.info_request = self.player.queue.entries().get(i).map(|e| e.path.clone());
+                }
+                crate::ui::playlist::PlaylistAction::InfoPlaying => {
+                    self.info_request = self.playing_or_current_path();
+                }
+                crate::ui::playlist::PlaylistAction::StopAfter => {
+                    self.player.toggle_stop_after();
+                }
+                crate::ui::playlist::PlaylistAction::PlayNext(indices) => {
+                    self.player.move_next(&indices);
+                }
+                crate::ui::playlist::PlaylistAction::SaveAs(name) => {
+                    if let Err(e) = crate::playlists::save(&name, &self.playlist_m3u8()) {
+                        log::warn!("cannot save the playlist {name}: {e}");
+                    }
+                }
+                crate::ui::playlist::PlaylistAction::Open(name) => {
+                    if let Some(paths) = crate::playlists::load(&name) {
+                        self.player.play_paths(paths, 0);
+                    }
+                }
+                crate::ui::playlist::PlaylistAction::Delete(name) => {
+                    crate::playlists::delete(&name);
+                }
+                crate::ui::playlist::PlaylistAction::Export => self.export_playlist(frame),
+                crate::ui::playlist::PlaylistAction::EditTags(indices) => {
+                    let paths = self.playlist_paths(&indices);
+                    self.tag_editor.open(ctx, paths);
+                }
+                crate::ui::playlist::PlaylistAction::GoTo(i, to_album) => {
+                    let track = self
+                        .player
+                        .queue
+                        .entries()
+                        .get(i)
+                        .and_then(|e| self.library.by_path.get(&e.path).copied());
+                    if let Some(t) = track {
+                        let album = self.library.album_of[t as usize];
+                        self.go_to(album, Some(t), to_album);
+                    }
+                }
+            }
+        }
     }
 
     /// What a key of the keymap asks for.
@@ -693,6 +776,23 @@ impl App {
                 self.settings.on_top = !self.settings.on_top;
                 self.place_changed = Some(Instant::now());
             }
+            Cmd::Visualization => {
+                let on = self.settings.visualization == crate::settings::Visual::Off;
+                self.settings.set_visual_on(on);
+                self.place_changed = Some(Instant::now());
+            }
+            Cmd::WindowLayout => {
+                self.settings.window_layout = match self.settings.window_layout {
+                    WindowLayout::Library => WindowLayout::Playlist,
+                    WindowLayout::Playlist => WindowLayout::Library,
+                };
+                self.settings.mini = false;
+                self.place_changed = Some(Instant::now());
+            }
+            // The playlist is the window in the player and playlist layout.
+            Cmd::Playlist if self.settings.window_layout == WindowLayout::Playlist => {
+                self.settings.mini = false;
+            }
             Cmd::Playlist => {
                 // From the mini player: the whole window with the playlist.
                 self.settings.playlist_visible =
@@ -707,6 +807,11 @@ impl App {
                 !frameless::is_maximized(ctx),
             )),
             Cmd::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            // The playlist's search without the library.
+            Cmd::Search if self.settings.window_layout == WindowLayout::Playlist => {
+                self.playlist_view.focus_search = true;
+                self.settings.mini = false;
+            }
             Cmd::Search => {
                 self.library_view.focus_search = true;
                 self.settings.mini = false;
@@ -855,11 +960,12 @@ impl App {
         if self.cloak.is_none()
             && !self.settings.mini
             && mini == Some(false)
+            && self.applied_layout == self.settings.window_layout
             && let Some((normal, maximized)) = win::placement(hwnd)
         {
             let place = WindowPlace { normal, maximized };
-            if self.settings.window != Some(place) {
-                self.settings.window = Some(place);
+            if self.settings.place() != Some(place) {
+                *self.settings.place_mut() = Some(place);
                 self.place_changed = Some(Instant::now());
             }
         }
@@ -1118,6 +1224,49 @@ impl App {
 
     /// Take the media keys as the setting says: Windows' media controls
     /// made or let go, the window's own keys on or off.
+    /// The layout chosen applied to the window: the place of the one before
+    /// kept, the new one's put back (else its size at first, centred where
+    /// the window was) with its least size; until the window has its size
+    /// only the ground is painted (`growing`). The mini player waits.
+    fn apply_layout(&mut self, ctx: &egui::Context) {
+        let wanted = self.settings.window_layout;
+        if self.applied_layout == wanted || self.settings.mini {
+            return;
+        }
+        let Some(hwnd) = self.hwnd else { return };
+        if let Some((normal, maximized)) = win::placement(hwnd) {
+            let place = Some(WindowPlace { normal, maximized });
+            match self.applied_layout {
+                WindowLayout::Library => self.settings.window = place,
+                WindowLayout::Playlist => self.settings.playlist_window = place,
+            }
+        }
+        self.applied_layout = wanted;
+        let least = self.settings.min_size();
+        win::set_least(least);
+        ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(least.into()));
+        match self.settings.place() {
+            Some(w) => win::show_placed(hwnd, w.normal, w.maximized),
+            None => {
+                let size = egui::Vec2::from(self.settings.default_size()) * ctx.pixels_per_point();
+                if let Some(r) = win::window_rect(hwnd) {
+                    let (w, h) = (size.x as i32, size.y as i32);
+                    let (x, y) = ((r[0] + r[2] - w) / 2, (r[1] + r[3] - h) / 2);
+                    let mut rect = [x, y, x + w, y + h];
+                    // On the screen as far as it fits.
+                    if let Some(work) = win::work_area_at(rect) {
+                        let dx = (work[2] - rect[2]).min(0) + (work[0] - rect[0]).max(0);
+                        let dy = (work[3] - rect[3]).min(0) + (work[1] - rect[1]).max(0);
+                        rect = [rect[0] + dx, rect[1] + dy, rect[2] + dx, rect[3] + dy];
+                    }
+                    win::set_rect(hwnd, rect);
+                }
+            }
+        }
+        self.growing = Some(Instant::now());
+        self.place_changed = Some(Instant::now());
+    }
+
     /// "Over the others" and the mini player applied to the window when
     /// they changed. The mini player is a square at its place of the last
     /// time (else in the work area's bottom right corner), always over the
@@ -1149,7 +1298,7 @@ impl App {
             if applied.is_some()
                 && let Some((normal, maximized)) = win::placement(hwnd)
             {
-                self.settings.window = Some(WindowPlace { normal, maximized });
+                *self.settings.place_mut() = Some(WindowPlace { normal, maximized });
             }
             let ppp = ctx.pixels_per_point();
             let least = (mini::LEAST * ppp).round() as i32;
@@ -1185,11 +1334,11 @@ impl App {
                 minimized: true,
                 maximize: true,
             });
-            match self.settings.window {
+            match self.settings.place() {
                 Some(w) => win::show_placed(hwnd, w.normal, w.maximized),
                 None => {
                     let ppp = ctx.pixels_per_point();
-                    let size = egui::Vec2::from(crate::DEFAULT_SIZE) * ppp;
+                    let size = egui::Vec2::from(self.settings.default_size()) * ppp;
                     if let Some(work) = win::window_rect(hwnd).and_then(win::work_area_at) {
                         let x = (work[0] + work[2] - size.x as i32) / 2;
                         let y = (work[1] + work[3] - size.y as i32) / 2;
@@ -1368,7 +1517,7 @@ impl eframe::App for App {
         // after a stop while it falls; paused, it stands. Without one (off,
         // the compact bar, the window minimized) only the time, the seek
         // bar and the taskbar's progress move.
-        let shown = self.settings.bar_layout == crate::settings::BarLayout::Full
+        let shown = self.bar_layout() != crate::settings::BarLayout::Classic
             && self.settings.visualization != crate::settings::Visual::Off
             && !self.settings.mini
             && ctx.input(|i| i.viewport().minimized) != Some(true);
@@ -1384,6 +1533,7 @@ impl eframe::App for App {
         }
         self.follow_media_keys();
         self.follow_tray();
+        self.apply_layout(ctx);
         self.apply_modes(ctx);
         self.show_on_taskbar();
         self.show_in_media_controls();
@@ -1429,6 +1579,8 @@ impl eframe::App for App {
         let letters = !modal
             && !typing
             && !self.settings.library_folders.is_empty()
+            && self.settings.window_layout == WindowLayout::Library
+            && !self.settings.mini
             && self.library_view.pointer_over_artists(&ctx);
         self.library_view.letters = letters;
         // The keys as the settings' Keys page set them: none while a modal
@@ -1478,8 +1630,9 @@ impl eframe::App for App {
         // logic).
         let mini = self.settings.mini && self.applied_modes.is_some_and(|m| m.1);
         if let Some(at) = self.growing {
-            let grown = ctx.content_rect().width() >= crate::MIN_SIZE[0] - 1.0
-                && ctx.content_rect().height() >= crate::MIN_SIZE[1] - 1.0;
+            let least = self.settings.min_size();
+            let grown = ctx.content_rect().width() >= least[0] - 1.0
+                && ctx.content_rect().height() >= least[1] - 1.0;
             if grown || self.settings.mini || at.elapsed() >= Duration::from_secs(1) {
                 self.growing = None;
             } else {
@@ -1500,7 +1653,7 @@ impl eframe::App for App {
                 .response
                 .rect;
             let bar_rect = egui::Panel::top("player")
-                .exact_size(crate::ui::player_bar::height(self.settings.bar_layout))
+                .exact_size(crate::ui::player_bar::height(self.bar_layout()))
                 .frame(egui::Frame::NONE)
                 .show(root_ui, |ui| self.player_bar(ui))
                 .response
@@ -1521,9 +1674,30 @@ impl eframe::App for App {
                 self.place_changed = Some(Instant::now());
             }
         }
+        let alone = self.settings.window_layout == WindowLayout::Playlist && !mini;
+        self.playlist_view.no_library = alone;
+        if alone {
+            let cover = self.playing_cover(&ctx);
+            let shown_cover = self.settings.playlist_cover;
+            let panel = egui::CentralPanel::no_frame().show(root_ui, |ui| {
+                crate::ui::playlist::show(
+                    ui,
+                    &mut self.playlist_view,
+                    &mut self.player,
+                    &self.library,
+                    !modal,
+                    cover.as_ref(),
+                    &mut self.settings.playlist_cover,
+                )
+            });
+            if self.settings.playlist_cover != shown_cover {
+                self.place_changed = Some(Instant::now());
+            }
+            self.playlist_view.focused = true;
+            self.playlist_actions(panel.inner, &ctx, frame);
         // Also beside the start screen: files opened from Explorer, Ctrl+O
         // or dropped play without a library.
-        if self.settings.playlist_visible && !mini {
+        } else if self.settings.playlist_visible && !mini {
             let cover = self.playing_cover(&ctx);
             let shown_cover = self.settings.playlist_cover;
             let panel = egui::Panel::right("playlist")
@@ -1557,100 +1731,50 @@ impl eframe::App for App {
             {
                 self.playlist_view.focused = panel.response.rect.contains(p);
             }
-            for action in panel.inner {
-                match action {
-                    crate::ui::playlist::PlaylistAction::Play(i) => self.player.play_index(i),
-                    crate::ui::playlist::PlaylistAction::ShowInFolder(i) => {
-                        if let Some(e) = self.player.queue.entries().get(i) {
-                            win::show_in_folder(&e.path);
-                        }
-                    }
-                    crate::ui::playlist::PlaylistAction::Info(i) => {
-                        self.info_request =
-                            self.player.queue.entries().get(i).map(|e| e.path.clone());
-                    }
-                    crate::ui::playlist::PlaylistAction::InfoPlaying => {
-                        self.info_request = self.playing_or_current_path();
-                    }
-                    crate::ui::playlist::PlaylistAction::StopAfter => {
-                        self.player.toggle_stop_after();
-                    }
-                    crate::ui::playlist::PlaylistAction::PlayNext(indices) => {
-                        self.player.move_next(&indices);
-                    }
-                    crate::ui::playlist::PlaylistAction::SaveAs(name) => {
-                        if let Err(e) = crate::playlists::save(&name, &self.playlist_m3u8()) {
-                            log::warn!("cannot save the playlist {name}: {e}");
-                        }
-                    }
-                    crate::ui::playlist::PlaylistAction::Open(name) => {
-                        if let Some(paths) = crate::playlists::load(&name) {
-                            self.player.play_paths(paths, 0);
-                        }
-                    }
-                    crate::ui::playlist::PlaylistAction::Delete(name) => {
-                        crate::playlists::delete(&name);
-                    }
-                    crate::ui::playlist::PlaylistAction::Export => self.export_playlist(frame),
-                    crate::ui::playlist::PlaylistAction::EditTags(indices) => {
-                        let paths = self.playlist_paths(&indices);
-                        self.tag_editor.open(&ctx, paths);
-                    }
-                    crate::ui::playlist::PlaylistAction::GoTo(i, to_album) => {
-                        let track = self
-                            .player
-                            .queue
-                            .entries()
-                            .get(i)
-                            .and_then(|e| self.library.by_path.get(&e.path).copied());
-                        if let Some(t) = track {
-                            let album = self.library.album_of[t as usize];
-                            self.go_to(album, Some(t), to_album);
-                        }
-                    }
-                }
-            }
+            self.playlist_actions(panel.inner, &ctx, frame);
         } else {
             self.playlist_view.hidden();
         }
-        if !mini {
+        if !mini && !alone {
             egui::Panel::bottom("status")
                 .exact_size(crate::ui::status::HEIGHT)
                 .frame(egui::Frame::NONE.fill(palette::title_bg()))
                 .show(root_ui, |ui| crate::ui::status::show(ui, self));
         }
-        egui::CentralPanel::no_frame().show(root_ui, |ui| {
-            if mini {
-                self.mini_player(ui);
-                return;
-            }
-            if !self.settings.library_folders.is_empty() {
-                let scanning = self.scanning();
-                let playing = self.playing_track();
-                let (actions, changed) = crate::ui::library::show(
-                    ui,
-                    &mut self.library_view,
-                    &self.library,
-                    &mut self.settings,
-                    &self.stats,
-                    scanning,
-                    playing,
-                    !self.playlist_view.focused && !modal,
+        if !alone {
+            egui::CentralPanel::no_frame().show(root_ui, |ui| {
+                if mini {
+                    self.mini_player(ui);
+                    return;
+                }
+                if !self.settings.library_folders.is_empty() {
+                    let scanning = self.scanning();
+                    let playing = self.playing_track();
+                    let (actions, changed) = crate::ui::library::show(
+                        ui,
+                        &mut self.library_view,
+                        &self.library,
+                        &mut self.settings,
+                        &self.stats,
+                        scanning,
+                        playing,
+                        !self.playlist_view.focused && !modal,
+                    );
+                    if changed {
+                        self.place_changed = Some(Instant::now());
+                    }
+                    for action in actions {
+                        self.library_action(action, frame);
+                    }
+                    return;
+                }
+                let hint = tr!(
+                    "Add a music folder with Ctrl+Shift+O or drop it here",
+                    "Добавьте папку с музыкой: Ctrl+Shift+O или перетащите её сюда"
                 );
-                if changed {
-                    self.place_changed = Some(Instant::now());
-                }
-                for action in actions {
-                    self.library_action(action, frame);
-                }
-                return;
-            }
-            let hint = tr!(
-                "Add a music folder with Ctrl+Shift+O or drop it here",
-                "Добавьте папку с музыкой: Ctrl+Shift+O или перетащите её сюда"
-            );
-            crate::ui::start::show(ui, &mut self.start_icon, hint);
-        });
+                crate::ui::start::show(ui, &mut self.start_icon, hint);
+            });
+        }
         if let Some(path) = self.info_request.take() {
             self.file_info.open(&ctx, &path);
         }
@@ -1681,9 +1805,9 @@ impl eframe::App for App {
         {
             self.place_changed = Some(Instant::now());
         }
-        let changed = self
-            .settings_dialog
-            .show(&ctx, &mut self.settings, &mut self.updates);
+        let changed =
+            self.settings_dialog
+                .show(&ctx, self.hwnd, &mut self.settings, &mut self.updates);
         if changed.device {
             self.player.set_device(&self.settings.output_device);
         }

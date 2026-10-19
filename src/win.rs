@@ -435,6 +435,44 @@ pub fn on_a_monitor(rect: [i32; 4]) -> bool {
 /// `set_mini`).
 static MINI_LEAST: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
+/// The whole window's least size in points (f32 bits; 0: winit's), kept
+/// here as the mini player's is: a layout's least size given to winit
+/// comes a frame after the window is put at its size.
+static LEAST: [std::sync::atomic::AtomicU32; 2] = [
+    std::sync::atomic::AtomicU32::new(0),
+    std::sync::atomic::AtomicU32::new(0),
+];
+
+pub fn set_least(points: [f32; 2]) {
+    for (cell, value) in LEAST.iter().zip(points) {
+        cell.store(value.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// The least size of [`set_least`] in pixels for `hwnd`, its frame
+/// included; none before it is set.
+fn least_pixels(hwnd: isize) -> Option<[i32; 2]> {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetDpiForWindow(hwnd: isize) -> u32;
+    }
+    let points = LEAST
+        .each_ref()
+        .map(|c| f32::from_bits(c.load(std::sync::atomic::Ordering::Relaxed)));
+    if points[0] <= 0.0 {
+        return None;
+    }
+    let scale = match unsafe { GetDpiForWindow(hwnd) } {
+        0 => 1.0,
+        dpi => dpi as f32 / 96.0,
+    };
+    let [bx, by] = border(hwnd);
+    Some([
+        (points[0] * scale).round() as i32 + bx,
+        (points[1] * scale).round() as i32 + by,
+    ])
+}
+
 pub fn set_mini(least: Option<i32>) {
     MINI_LEAST.store(least.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
 }
@@ -808,15 +846,20 @@ unsafe extern "system" fn window_proc(
             hook(Hooked::CloseNow);
             return 0;
         }
-        // The mini player's least size after winit's (the whole window's).
+        // The mini player's least size, else the layout's, after winit's.
         WM_GETMINMAXINFO if lparam != 0 => {
-            let least = MINI_LEAST.load(std::sync::atomic::Ordering::Relaxed);
-            if least > 0 {
-                let result = unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
+            let mini = MINI_LEAST.load(std::sync::atomic::Ordering::Relaxed);
+            let least = if mini > 0 {
                 let [bx, by] = border(hwnd as isize);
+                Some([mini + bx, mini + by])
+            } else {
+                least_pixels(hwnd as isize)
+            };
+            if let Some([x, y]) = least {
+                let result = unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
                 let info = unsafe { &mut *(lparam as *mut MINMAXINFO) };
-                info.ptMinTrackSize.x = least + bx;
-                info.ptMinTrackSize.y = least + by;
+                info.ptMinTrackSize.x = x;
+                info.ptMinTrackSize.y = y;
                 return result;
             }
         }
@@ -877,6 +920,52 @@ unsafe extern "system" fn window_proc(
         _ => {}
     }
     unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+}
+
+/// The visible windows of this thread (the program's and its viewports').
+pub fn thread_windows() -> Vec<isize> {
+    use windows_sys::Win32::Foundation::{HWND, LPARAM};
+    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{EnumThreadWindows, IsWindowVisible};
+    unsafe extern "system" fn collect(hwnd: HWND, lparam: LPARAM) -> i32 {
+        // SAFETY: `lparam` is the pointer to `out` passed below, and the
+        // callback runs only during the call.
+        let out = unsafe { &mut *(lparam as *mut Vec<isize>) };
+        if unsafe { IsWindowVisible(hwnd) } != 0 {
+            out.push(hwnd as isize);
+        }
+        1
+    }
+    let mut out: Vec<isize> = Vec::new();
+    unsafe {
+        EnumThreadWindows(
+            GetCurrentThreadId(),
+            Some(collect),
+            (&raw mut out) as LPARAM,
+        )
+    };
+    out
+}
+
+/// A window of the program's own (the settings'): owned by `owner`, so it
+/// stays over it and is minimized with it, rounded as it is, and centred
+/// over it within its work area.
+pub fn adopt(hwnd: isize, owner: isize) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GWLP_HWNDPARENT, SetWindowLongPtrW};
+    unsafe { SetWindowLongPtrW(hwnd as _, GWLP_HWNDPARENT, owner) };
+    round_corners(hwnd);
+    if let (Some(main), Some(own)) = (window_rect(owner), window_rect(hwnd)) {
+        let (w, h) = (own[2] - own[0], own[3] - own[1]);
+        let x = (main[0] + main[2] - w) / 2;
+        let y = (main[1] + main[3] - h) / 2;
+        let mut rect = [x, y, x + w, y + h];
+        if let Some(work) = work_area_at(main) {
+            let dx = (work[2] - rect[2]).min(0) + (work[0] - rect[0]).max(0);
+            let dy = (work[3] - rect[3]).min(0) + (work[1] - rect[1]).max(0);
+            rect = [rect[0] + dx, rect[1] + dy, rect[2] + dx, rect[3] + dy];
+        }
+        set_rect(hwnd, rect);
+    }
 }
 
 /// The window is minimized.

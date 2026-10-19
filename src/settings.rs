@@ -39,7 +39,15 @@ pub struct Settings {
     pub check_updates: bool,
     /// Unix seconds of the last update check that got an answer.
     pub last_update_check: u64,
+    /// The window's place with the library, and in the player and
+    /// playlist layout (`playlist_window`): each layout keeps its own.
     pub window: Option<WindowPlace>,
+    pub playlist_window: Option<WindowPlace>,
+    /// The library, the player bar and the playlist beside it; or the
+    /// player bar over the playlist alone, as the early Winamp.
+    pub window_layout: WindowLayout,
+    /// The visualization the switch turns back on (the last one shown).
+    pub visual_last: Visual,
     /// The folders of the media library.
     pub library_folders: Vec<PathBuf>,
     /// The views of the library (filters over its tracks, `library::filter`),
@@ -170,12 +178,46 @@ pub struct EqPreset {
     pub bands: [f32; 10],
 }
 
+/// What the window holds: the library, or the player and the playlist.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WindowLayout {
+    /// The player bar over the playlist, without the library and the
+    /// status line (the early Winamp's).
+    Playlist,
+    /// The library with the playlist beside it. An unknown value reads as
+    /// this one, so it is last.
+    #[default]
+    #[serde(other)]
+    Library,
+}
+
+impl WindowLayout {
+    pub const ALL: [WindowLayout; 2] = [WindowLayout::Library, WindowLayout::Playlist];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            WindowLayout::Library => tr!("With the library", "С библиотекой"),
+            WindowLayout::Playlist => tr!("Player and playlist", "Плеер и плейлист"),
+        }
+    }
+}
+
+/// The player and playlist layout's least size and its size at first,
+/// in points.
+pub const PLAYLIST_MIN_SIZE: [f32; 2] = [440.0, 400.0];
+pub const PLAYLIST_SIZE: [f32; 2] = [440.0, 780.0];
+
 /// The player bar's layout.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BarLayout {
     /// The compact bar of one row.
     Classic,
+    /// The player and playlist layout's own (not chosen: `App::bar_layout`):
+    /// narrow, the time over the visualization in a display on the left,
+    /// as the early Winamp's.
+    Winamp,
     /// The time in large digits, a visualization on the right. An
     /// unknown value (an older name) reads as this one, so it is last.
     #[default]
@@ -190,6 +232,7 @@ impl BarLayout {
         match self {
             BarLayout::Full => tr!("With a visualization", "С визуализацией"),
             BarLayout::Classic => tr!("Compact", "Компактная"),
+            BarLayout::Winamp => tr!("Narrow", "Узкая"),
         }
     }
 }
@@ -212,6 +255,14 @@ pub enum Visual {
 }
 
 impl Visual {
+    /// The visualizations themselves, without `Off`.
+    pub const KINDS: [Visual; 4] = [
+        Visual::Spectrum,
+        Visual::Waveform,
+        Visual::Scope,
+        Visual::Spectrogram,
+    ];
+
     pub const ALL: [Visual; 5] = [
         Visual::Spectrum,
         Visual::Waveform,
@@ -252,6 +303,9 @@ impl Default for Settings {
             check_updates: false,
             last_update_check: 0,
             window: None,
+            playlist_window: None,
+            window_layout: WindowLayout::default(),
+            visual_last: Visual::default(),
             library_folders: Vec::new(),
             views: Vec::new(),
             view: String::new(),
@@ -390,6 +444,60 @@ impl Settings {
     /// The settings in `bytes`, each field read on its own: one that
     /// cannot be read takes its default and costs no other. `None` when
     /// `bytes` is not a JSON object.
+    /// The place of the window in the layout chosen.
+    pub fn place(&self) -> Option<WindowPlace> {
+        match self.window_layout {
+            WindowLayout::Library => self.window,
+            WindowLayout::Playlist => self.playlist_window,
+        }
+    }
+
+    pub fn place_mut(&mut self) -> &mut Option<WindowPlace> {
+        match self.window_layout {
+            WindowLayout::Library => &mut self.window,
+            WindowLayout::Playlist => &mut self.playlist_window,
+        }
+    }
+
+    /// The window's least size in the layout chosen, in points.
+    pub fn min_size(&self) -> [f32; 2] {
+        match self.window_layout {
+            WindowLayout::Library => crate::MIN_SIZE,
+            WindowLayout::Playlist => PLAYLIST_MIN_SIZE,
+        }
+    }
+
+    /// The window's size at first in the layout chosen, in points.
+    pub fn default_size(&self) -> [f32; 2] {
+        match self.window_layout {
+            WindowLayout::Library => crate::DEFAULT_SIZE,
+            WindowLayout::Playlist => PLAYLIST_SIZE,
+        }
+    }
+
+    /// The visualization on, as it was, or off.
+    pub fn set_visual_on(&mut self, on: bool) {
+        if on {
+            if self.visualization == Visual::Off {
+                self.visualization = self.visual_last;
+            }
+        } else {
+            self.set_visual(Visual::Off);
+        }
+    }
+
+    /// `visual` shown; the one before kept for the switch when it is off.
+    pub fn set_visual(&mut self, visual: Visual) {
+        if visual == Visual::Off {
+            if self.visualization != Visual::Off {
+                self.visual_last = self.visualization;
+            }
+        } else {
+            self.visual_last = visual;
+        }
+        self.visualization = visual;
+    }
+
     pub fn from_json(bytes: &[u8]) -> Option<Settings> {
         use serde_json::Value;
         let Ok(Value::Object(file)) = serde_json::from_slice::<Value>(bytes) else {
@@ -444,6 +552,39 @@ impl Settings {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_visualization_switch_brings_the_last_one_back() {
+        let mut s = Settings::default();
+        s.set_visual(Visual::Scope);
+        s.set_visual_on(false);
+        assert_eq!(s.visualization, Visual::Off);
+        s.set_visual_on(true);
+        assert_eq!(s.visualization, Visual::Scope);
+        // Off from the display's menu, then the switch.
+        s.set_visual(Visual::Off);
+        s.set_visual_on(true);
+        assert_eq!(s.visualization, Visual::Scope);
+    }
+
+    #[test]
+    fn each_layout_keeps_its_place() {
+        let mut s = Settings::default();
+        let place = WindowPlace {
+            normal: [10, 20, 650, 800],
+            maximized: false,
+        };
+        s.window_layout = WindowLayout::Playlist;
+        *s.place_mut() = Some(place);
+        assert_eq!(s.playlist_window, Some(place));
+        assert_eq!(s.window, None);
+        assert_eq!(s.min_size(), PLAYLIST_MIN_SIZE);
+        s.window_layout = WindowLayout::Library;
+        assert_eq!(s.place(), None);
+        // An unknown layout reads as the library's.
+        let s = Settings::from_json(br#"{"window_layout":"skin"}"#).unwrap();
+        assert_eq!(s.window_layout, WindowLayout::Library);
+    }
+
     use super::*;
 
     #[test]

@@ -158,15 +158,15 @@ fn main() -> eframe::Result {
             .with_decorations(false)
             .with_resizable(true)
             .with_drag_and_drop(true)
-            .with_inner_size(DEFAULT_SIZE)
-            .with_min_inner_size(MIN_SIZE)
+            .with_inner_size(settings.default_size())
+            .with_min_inner_size(settings.min_size())
             .with_icon(window_icon()),
         // OpenGL starts fastest: a context in ~130 ms against ~240 ms for
         // wgpu on DX12 (measured in metalmd).
         renderer: eframe::Renderer::Glow,
         // Centre only on the first run; later runs put the window where it
         // was (`App::new`, `win::place`).
-        centered: settings.window.is_none(),
+        centered: settings.place().is_none(),
         ..Default::default()
     };
     let result = eframe::run_native(

@@ -36,6 +36,8 @@ pub enum Cmd {
     Mini,
     OnTop,
     Playlist,
+    WindowLayout,
+    Visualization,
     Minimize,
     Maximize,
     Close,
@@ -405,6 +407,8 @@ actions! {
     Mini "mini_player" Window Cmd::Mini, [Chord::ctrl(Key::M)];
     OnTop "on_top" Window Cmd::OnTop, [Chord::ctrl(Key::T)];
     Playlist "playlist" Window Cmd::Playlist, [Chord::alt(Key::E)];
+    WindowLayout "window_layout" Window Cmd::WindowLayout, [];
+    Visualization "visualization" Window Cmd::Visualization, [];
     Minimize "minimize" Window Cmd::Minimize, [];
     Maximize "maximize" Window Cmd::Maximize, [];
     Close "close" Window Cmd::Close, [];
@@ -465,6 +469,11 @@ impl Action {
                 "Поверх всех окон вкл. / выкл."
             ),
             Action::Playlist => tr!("Show or hide the playlist", "Показать или скрыть плейлист"),
+            Action::WindowLayout => tr!(
+                "With the library / player and playlist",
+                "С библиотекой / плеер и плейлист"
+            ),
+            Action::Visualization => tr!("Visualization on / off", "Визуализация вкл. / выкл."),
             Action::Minimize => tr!("Minimize the window", "Свернуть окно"),
             Action::Maximize => tr!(
                 "Maximize / restore the window",

@@ -26,6 +26,7 @@ pub fn height(layout: BarLayout) -> f32 {
     match layout {
         BarLayout::Full => 118.0,
         BarLayout::Classic => 76.0,
+        BarLayout::Winamp => WINAMP_HEIGHT,
     }
 }
 
@@ -87,6 +88,8 @@ pub struct NowPlaying<'a> {
     /// Playing stops after the track heard (Shift+V): Stop is lit.
     pub stop_after: bool,
     pub cover: Option<egui::TextureHandle>,
+    /// The narrow bar's line: "N. Artist – Title", the playlist's.
+    pub heading: String,
 }
 
 impl NowPlaying<'_> {
@@ -109,6 +112,7 @@ pub fn show(ui: &mut Ui, now: &NowPlaying<'_>, visual: &mut Visualizer) -> Vec<B
     match now.layout {
         BarLayout::Full => full(ui, &painter, rect, now, visual, &mut cmds),
         BarLayout::Classic => classic(ui, &painter, rect, now, &mut cmds),
+        BarLayout::Winamp => winamp(ui, &painter, rect, now, visual, &mut cmds),
     }
     cmds
 }
@@ -132,60 +136,7 @@ fn full(
         pos2(player.right() - MARGIN, player.top() + 8.0 + COVER),
     );
     let time_rect = Rect::from_min_size(info.min, vec2(TIME_WIDTH, info.height()));
-    if now.status != Status::Stopped {
-        let (text, tip) = if now.remaining && now.duration_ms > 0 {
-            (
-                format!(
-                    "-{}",
-                    format::time(now.duration_ms.saturating_sub(now.position_ms))
-                ),
-                tr!(
-                    "Time left; a click shows the time played",
-                    "Осталось; щелчок покажет прошедшее время"
-                ),
-            )
-        } else {
-            (
-                format::time(now.position_ms),
-                tr!(
-                    "Time played; a click shows the time left",
-                    "Прошло; щелчок покажет оставшееся время"
-                ),
-            )
-        };
-        // The largest of the fonts the text fits in; past ten hours left
-        // ("-10:00:00") not even the smallest does, and that one is used.
-        let layout = |size| {
-            ui.fonts_mut(|f| {
-                f.layout_no_wrap(
-                    text.clone(),
-                    FontId::monospace(size),
-                    palette::text_bright(),
-                )
-            })
-        };
-        let galley = [30.0, 24.0, 18.0]
-            .into_iter()
-            .map(layout)
-            .find(|g| g.size().x <= TIME_WIDTH)
-            .unwrap_or_else(|| layout(15.0));
-        let resp = ui
-            .interact(time_rect, ui.id().with("time"), Sense::click())
-            .on_hover_cursor(egui::CursorIcon::PointingHand);
-        let color = if resp.hovered() {
-            palette::accent_hover()
-        } else {
-            palette::text_bright()
-        };
-        let pos = pos2(
-            time_rect.left(),
-            time_rect.center().y - galley.size().y / 2.0,
-        );
-        painter.galley(pos, galley, color);
-        if resp.on_hover_text(tip).clicked() {
-            cmds.push(BarCmd::TimeMode);
-        }
-    }
+    time(ui, painter, time_rect, now, palette::text_bright(), cmds);
 
     let cover = Rect::from_min_size(
         pos2(time_rect.right() + 6.0, info.top()),
@@ -249,33 +200,244 @@ fn full(
             egui::Stroke::new(1.0, palette::line()),
             egui::StrokeKind::Inside,
         );
-        visual.paint(painter, display.shrink(4.0));
-        let response = ui
-            .interact(display, ui.id().with("visual"), Sense::click())
-            .on_hover_text(format!(
-                "{}. {}",
-                now.visual.label(),
-                tr!(
-                    "A click: the next one; the right button: the list",
-                    "Щелчок: следующая; правая кнопка: список"
-                )
-            ));
-        if response.clicked() {
-            cmds.push(BarCmd::Visual(now.visual.next()));
-        }
-        egui::Popup::context_menu(&response).show(|ui| {
-            ui.set_min_width(160.0);
-            for v in Visual::ALL {
-                if v == Visual::Off {
-                    ui.separator();
-                }
-                if ui.selectable_label(v == now.visual, v.label()).clicked() {
-                    cmds.push(BarCmd::Visual(v));
-                    ui.close();
-                }
-            }
-        });
+        visual_display(ui, painter, display, display.shrink(4.0), now, visual, cmds);
     }
+}
+
+/// The time played (or left) in large digits in `time_rect`, the largest
+/// of three sizes that fits; a click switches between the two.
+fn time(
+    ui: &mut Ui,
+    painter: &egui::Painter,
+    time_rect: Rect,
+    now: &NowPlaying<'_>,
+    colour: Color32,
+    cmds: &mut Vec<BarCmd>,
+) {
+    if now.status != Status::Stopped {
+        let (text, tip) = if now.remaining && now.duration_ms > 0 {
+            (
+                format!(
+                    "-{}",
+                    format::time(now.duration_ms.saturating_sub(now.position_ms))
+                ),
+                tr!(
+                    "Time left; a click shows the time played",
+                    "Осталось; щелчок покажет прошедшее время"
+                ),
+            )
+        } else {
+            (
+                format::time(now.position_ms),
+                tr!(
+                    "Time played; a click shows the time left",
+                    "Прошло; щелчок покажет оставшееся время"
+                ),
+            )
+        };
+        // The largest of the fonts the text fits in; past ten hours left
+        // ("-10:00:00") not even the smallest does, and that one is used.
+        let layout = |size| {
+            ui.fonts_mut(|f| {
+                f.layout_no_wrap(
+                    text.clone(),
+                    FontId::monospace(size),
+                    palette::text_bright(),
+                )
+            })
+        };
+        let galley = [30.0, 24.0, 18.0]
+            .into_iter()
+            .map(layout)
+            .find(|g| g.size().x <= time_rect.width())
+            .unwrap_or_else(|| layout(15.0));
+        let resp = ui
+            .interact(time_rect, ui.id().with("time"), Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        let color = if resp.hovered() {
+            palette::accent_hover()
+        } else {
+            colour
+        };
+        let pos = pos2(
+            time_rect.left(),
+            time_rect.center().y - galley.size().y / 2.0,
+        );
+        painter.galley(pos, galley, color);
+        if resp.on_hover_text(tip).clicked() {
+            cmds.push(BarCmd::TimeMode);
+        }
+    }
+}
+
+/// The visualization painted in `inner` of `display`; a click on the
+/// display goes on to the next one, the right button lists them.
+fn visual_display(
+    ui: &mut Ui,
+    painter: &egui::Painter,
+    display: Rect,
+    inner: Rect,
+    now: &NowPlaying<'_>,
+    visual: &mut Visualizer,
+    cmds: &mut Vec<BarCmd>,
+) {
+    visual.paint(painter, inner);
+    let response = ui
+        .interact(display, ui.id().with("visual"), Sense::click())
+        .on_hover_text(format!(
+            "{}. {}",
+            now.visual.label(),
+            tr!(
+                "A click: the next one; the right button: the list",
+                "Щелчок: следующая; правая кнопка: список"
+            )
+        ));
+    if response.clicked() {
+        cmds.push(BarCmd::Visual(now.visual.next()));
+    }
+    egui::Popup::context_menu(&response).show(|ui| {
+        ui.set_min_width(160.0);
+        for v in Visual::ALL {
+            if v == Visual::Off {
+                ui.separator();
+            }
+            if ui.selectable_label(v == now.visual, v.label()).clicked() {
+                cmds.push(BarCmd::Visual(v));
+                ui.close();
+            }
+        }
+    });
+}
+
+/// The narrow bar of the player and playlist layout (the early Winamp's):
+/// a display with the time over the visualization on the left; the title
+/// in a field, the bit rate and the rest, the volume on the right; the
+/// seek bar across; the buttons and the toggles under it.
+fn winamp(
+    ui: &mut Ui,
+    painter: &egui::Painter,
+    rect: Rect,
+    now: &NowPlaying<'_>,
+    visual: &mut Visualizer,
+    cmds: &mut Vec<BarCmd>,
+) {
+    let display = winamp_display(rect);
+    painter.rect(
+        display,
+        4.0,
+        palette::list_bg(),
+        egui::Stroke::new(1.0, palette::line()),
+        egui::StrokeKind::Inside,
+    );
+    // The state at the left of the time, the time in the accent.
+    let state = match now.status {
+        Status::Playing => Icon::Play,
+        Status::Paused => Icon::Pause,
+        Status::Stopped => Icon::Stop,
+    };
+    let time_rect = Rect::from_min_max(
+        pos2(display.left() + 26.0, display.top() + 4.0),
+        pos2(display.right() - 8.0, display.top() + 40.0),
+    );
+    icons::paint(
+        painter,
+        state,
+        pos2(display.left() + 14.0, time_rect.center().y),
+        10.0,
+        palette::accent(),
+        palette::list_bg(),
+    );
+    time(ui, painter, time_rect, now, palette::accent(), cmds);
+    visual_display(
+        ui,
+        painter,
+        display,
+        winamp_visual_rect(rect),
+        now,
+        visual,
+        cmds,
+    );
+
+    // The title in a field, the facts under it, the volume.
+    let right = Rect::from_min_max(
+        pos2(display.right() + 10.0, display.top()),
+        pos2(rect.right() - MARGIN, display.bottom()),
+    );
+    let field = Rect::from_min_size(right.min, vec2(right.width(), 26.0));
+    painter.rect(
+        field,
+        4.0,
+        palette::list_bg(),
+        egui::Stroke::new(1.0, palette::line()),
+        egui::StrokeKind::Inside,
+    );
+    if now.has_track() {
+        let text = &now.heading;
+        let text = if now.duration_ms > 0 {
+            format!("{text} ({})", format::time(now.duration_ms))
+        } else {
+            text.clone()
+        };
+        let room = field.width() - 16.0;
+        let galley = line(ui, &text, 13.0, palette::text_bright(), room);
+        let cut = galley.size().x >= room - 1.0;
+        painter.galley(
+            pos2(field.left() + 8.0, field.center().y - galley.size().y / 2.0),
+            galley,
+            palette::text_bright(),
+        );
+        if cut {
+            ui.interact(field, ui.id().with("winamp_title"), Sense::hover())
+                .on_hover_text(text);
+        }
+        let facts = line(ui, &facts(now), 11.5, palette::text_weak(), right.width());
+        painter.galley(
+            pos2(right.left() + 2.0, field.bottom() + 8.0),
+            facts,
+            palette::text_weak(),
+        );
+    }
+    let cy = right.bottom() - 12.0;
+    let speaker = Rect::from_center_size(pos2(right.left() + 14.0, cy), vec2(28.0, 28.0));
+    mute_button(ui, painter, speaker, now, cmds);
+    let slider = Rect::from_min_max(
+        pos2(speaker.right() + 6.0, cy - 8.0),
+        pos2(right.right() - 4.0, cy + 8.0),
+    );
+    volume_slider(ui, painter, slider, now, cmds);
+
+    // The seek bar across.
+    let seek_y = display.bottom() + 14.0;
+    let bar = Rect::from_min_max(
+        pos2(rect.left() + MARGIN, seek_y - 6.0),
+        pos2(rect.right() - MARGIN, seek_y + 6.0),
+    );
+    seek_bar(ui, painter, bar, now, cmds);
+
+    // The buttons, the toggles at the right.
+    let cy = (seek_y + 8.0 + rect.bottom()) / 2.0;
+    transport(ui, painter, rect.left() + MARGIN, cy, now, cmds);
+    toggles(ui, painter, rect.right() - MARGIN, cy, now, cmds);
+}
+
+/// The narrow bar's height.
+const WINAMP_HEIGHT: f32 = 156.0;
+
+/// The narrow bar's display: the time and the visualization.
+fn winamp_display(rect: Rect) -> Rect {
+    Rect::from_min_size(
+        pos2(rect.left() + MARGIN, rect.top() + 8.0),
+        vec2(176.0, 86.0),
+    )
+}
+
+/// Where the narrow bar's visualization is painted, under the time.
+fn winamp_visual_rect(rect: Rect) -> Rect {
+    let display = winamp_display(rect);
+    Rect::from_min_max(
+        pos2(display.left() + 6.0, display.top() + 44.0),
+        display.max - vec2(6.0, 6.0),
+    )
 }
 
 /// The bar before the full layout: one row, the seek bar under it.
@@ -348,6 +510,7 @@ pub fn visual_size(layout: BarLayout, rect: Rect) -> Option<egui::Vec2> {
     match layout {
         BarLayout::Full => analyzer_rect(rect).map(|r| r.shrink(4.0).size()),
         BarLayout::Classic => None,
+        BarLayout::Winamp => Some(winamp_visual_rect(rect).size()),
     }
 }
 

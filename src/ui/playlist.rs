@@ -46,6 +46,11 @@ pub struct PlaylistView {
     rows: Option<Arc<Rows>>,
     /// The name typed in the playlists' menu to save the list under.
     save_name: String,
+    /// The search field takes the focus (Ctrl+F without the library).
+    pub focus_search: bool,
+    /// The window shows no library (the player and playlist layout): its
+    /// "Go to" items are left out.
+    pub no_library: bool,
 }
 
 /// The rows' text and what the search leaves, built again only when the
@@ -200,13 +205,15 @@ pub fn show(
         player.stop();
         player.queue.clear();
     }
-    if crate::ui::icon_button(
-        &mut bar,
-        Icon::Image,
-        *show_cover,
-        tr!("The cover of the track playing", "Обложка играющего трека"),
-    )
-    .clicked()
+    // Without the library the list is the window, with no cover.
+    if !pv.no_library
+        && crate::ui::icon_button(
+            &mut bar,
+            Icon::Image,
+            *show_cover,
+            tr!("The cover of the track playing", "Обложка играющего трека"),
+        )
+        .clicked()
     {
         *show_cover = !*show_cover;
     }
@@ -215,6 +222,9 @@ pub fn show(
         .hint_text(tr!("Search in the playlist", "Поиск в плейлисте"))
         .desired_width(f32::INFINITY);
     let resp = bar.add(edit);
+    if std::mem::take(&mut pv.focus_search) {
+        resp.request_focus();
+    }
     // egui lets the field go at Esc before it is drawn.
     let escape =
         (resp.has_focus() || resp.lost_focus()) && bar.input(|i| i.key_pressed(Key::Escape));
@@ -252,12 +262,14 @@ pub fn show(
     let cover_h = side + COVER_PAD;
     let list_h = full.height() - HEADER - FOOTER;
     let cover_rect =
-        (*show_cover && side > 40.0 && list_h - cover_h >= COVER_MIN_LIST).then(|| {
-            Rect::from_center_size(
-                pos2(full.center().x, full.bottom() - FOOTER - cover_h / 2.0),
-                vec2(side, side),
-            )
-        });
+        (*show_cover && !pv.no_library && side > 40.0 && list_h - cover_h >= COVER_MIN_LIST).then(
+            || {
+                Rect::from_center_size(
+                    pos2(full.center().x, full.bottom() - FOOTER - cover_h / 2.0),
+                    vec2(side, side),
+                )
+            },
+        );
     let body = Rect::from_min_max(
         pos2(full.left(), header.bottom()),
         pos2(
@@ -561,11 +573,16 @@ pub fn show(
             let known = entry
                 .and_then(|i| player.queue.entries().get(i))
                 .is_some_and(|e| library.by_path.contains_key(&e.path));
-            ui.separator();
-            for (to_album, label) in [
-                (true, super::library::go_to_album_label()),
-                (false, super::library::go_to_artist_label()),
-            ] {
+            let go_to: &[(bool, &str)] = if pv.no_library {
+                &[]
+            } else {
+                ui.separator();
+                &[
+                    (true, super::library::go_to_album_label()),
+                    (false, super::library::go_to_artist_label()),
+                ]
+            };
+            for &(to_album, label) in go_to {
                 if ui.add_enabled(known, egui::Button::new(label)).clicked()
                     && let Some(i) = entry
                 {
