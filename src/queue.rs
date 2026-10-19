@@ -416,7 +416,23 @@ pub fn m3u_paths(text: &str, folder: &Path) -> Vec<PathBuf> {
                 Some(if p.is_absolute() { p } else { folder.join(p) })
             }
         })
+        .map(resolved)
         .collect()
+}
+
+/// `path` without its `.` and `..` (`D:\Music\Playlists\..\Ария\x.mp3` is
+/// `D:\Music\Ария\x.mp3`): Windows opens either, but the library knows a
+/// track, and counts its plays, by the second.
+fn resolved(path: PathBuf) -> PathBuf {
+    use std::path::Component;
+    if path
+        .components()
+        .any(|c| matches!(c, Component::CurDir | Component::ParentDir))
+    {
+        std::path::absolute(&path).unwrap_or(path)
+    } else {
+        path
+    }
 }
 
 /// The path of a `file:` address after its `file://`: `/D:/Music/a%20b.mp3`
@@ -614,6 +630,17 @@ mod tests {
             Path::new(r"C:\x"),
         );
         assert_eq!(relative, [PathBuf::from(r"C:\x\sub\a.mp3")]);
+        let up = m3u_paths(
+            "..\\Ария\\.\\x.mp3\nD:\\a\\..\\b.mp3\n",
+            Path::new(r"D:\Music\Playlists"),
+        );
+        assert_eq!(
+            up,
+            [
+                PathBuf::from(r"D:\Music\Ария\x.mp3"),
+                PathBuf::from(r"D:\b.mp3")
+            ]
+        );
     }
 
     #[test]
