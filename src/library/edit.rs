@@ -13,6 +13,7 @@ use std::path::Path;
 
 use lofty::config::{ParseOptions, WriteOptions};
 use lofty::file::{AudioFile, FileType};
+use lofty::ogg::OggPictureStorage;
 use lofty::prelude::*;
 use lofty::tag::{ItemKey, MergeTag, SplitTag, Tag};
 
@@ -126,7 +127,13 @@ fn with_tag<R>(
         Some(FileType::Flac) => {
             let file = lofty::flac::FlacFile::read_from(&mut reader, options).map_err(err)?;
             drop(reader);
-            let tag = file.vorbis_comments().cloned().unwrap_or_default();
+            let mut tag = file.vorbis_comments().cloned().unwrap_or_default();
+            // lofty keeps a FLAC's PICTURE blocks beside its comments and
+            // writes only the tag's: they go along, or a save dropped the
+            // cover.
+            for (picture, info) in file.pictures() {
+                let _ = tag.insert_picture(picture.clone(), Some(*info));
+            }
             edit(tag, f, save, path, write)
         }
         Some(FileType::Mp4) => {
@@ -308,6 +315,55 @@ mod tests {
         assert!(parse_number(Key::Track, "three").is_err());
         assert!(parse_number(Key::Year, "0").is_err());
         assert_eq!(parse_number(Key::Year, "1999"), Ok(Some((1999, None))));
+    }
+
+    /// A FLAC with a cover keeps it when a field is written (lofty writes
+    /// only the pictures of the tag it is given).
+    #[test]
+    fn flac_keeps_its_cover() {
+        let block = |kind: u8, last: bool, body: &[u8]| {
+            let len = body.len() as u32;
+            let mut b = vec![kind | if last { 0x80 } else { 0 }];
+            b.extend_from_slice(&len.to_be_bytes()[1..]);
+            b.extend_from_slice(body);
+            b
+        };
+        // STREAMINFO: blocks of 4096, 44.1 kHz, 2 channels, 16 bits, no
+        // samples, no MD5.
+        let mut info = vec![0x10, 0x00, 0x10, 0x00, 0, 0, 0, 0, 0, 0];
+        info.extend_from_slice(&[0x0A, 0xC4, 0x42, 0xF0, 0, 0, 0, 0]);
+        info.extend_from_slice(&[0; 16]);
+        let png = b"\x89PNG\r\n\x1a\n not really an image";
+        let mut picture = Vec::new();
+        picture.extend_from_slice(&3u32.to_be_bytes());
+        picture.extend_from_slice(&9u32.to_be_bytes());
+        picture.extend_from_slice(b"image/png");
+        picture.extend_from_slice(&0u32.to_be_bytes());
+        for n in [1u32, 1, 24, 0] {
+            picture.extend_from_slice(&n.to_be_bytes());
+        }
+        picture.extend_from_slice(&(png.len() as u32).to_be_bytes());
+        picture.extend_from_slice(png);
+        let mut bytes = b"fLaC".to_vec();
+        bytes.extend(block(0, false, &info));
+        bytes.extend(block(6, true, &picture));
+
+        let dir = std::env::temp_dir().join(format!("metalamp_flac_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("cover.flac");
+        std::fs::write(&file, &bytes).unwrap();
+        let pictures = |path: &Path| {
+            let mut f = std::fs::File::open(path).unwrap();
+            let flac = lofty::flac::FlacFile::read_from(&mut f, ParseOptions::new()).unwrap();
+            flac.pictures().len()
+        };
+        assert_eq!(pictures(&file), 1);
+        let mut changes: Changes = Default::default();
+        changes[7] = Some("Metal".into());
+        write(&file, &changes).unwrap();
+        assert_eq!(read(&file).unwrap()[7], "Metal");
+        assert_eq!(pictures(&file), 1, "the cover is lost");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// A copy of `METALAMP_SAMPLE` (an MP3) with its tag changed, read
