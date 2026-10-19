@@ -2191,5 +2191,8 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     settings.output_device = d.output_device;
     settings.output_device_name = d.output_device_name;
     settings.dsp = d.dsp;
+    settings.crossfade = d.crossfade;
+    settings.crossfade_in_albums = d.crossfade_in_albums;
+    settings.tray = d.tray;
     updates.enabled = d.check_updates;
 }
