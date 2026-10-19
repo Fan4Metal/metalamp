@@ -619,7 +619,8 @@ fn build(library: &Library, stats: &Stats, key: &ViewKey) -> View {
             let o = match sort.column {
                 1 => natural_cmp(&a.title, &b.title),
                 2 => a.year.cmp(&b.year),
-                3 => in_album[x as usize].cmp(&in_album[y as usize]),
+                // As the column shows it: the album's, as its length and size.
+                3 => a.tracks.len().cmp(&b.tracks.len()),
                 4 => natural_cmp(&a.genre, &b.genre),
                 5 => a.length_ms.cmp(&b.length_ms),
                 6 => a.size.cmp(&b.size),
