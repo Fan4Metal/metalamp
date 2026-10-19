@@ -18,6 +18,7 @@ use egui::{Align2, FontId, Key, Modifiers, Rect, Sense, Shape, Stroke, Ui, pos2,
 
 use crate::covers::Covers;
 use crate::format::{self, natural_cmp};
+use crate::keymap::{Cmd, with_key};
 use crate::library::filter::{Filter, ViewIcon};
 use crate::library::{AlbumId, ArtistId, Library, TrackId, unknown_artist};
 use crate::palette;
@@ -897,7 +898,9 @@ fn view_row(
                     .map(|v| (Some(v.name.as_str()), view_icon(v.icon))),
             );
             for (i, (name, icon)) in items.enumerate() {
-                let shortcut = (i < 9).then(|| format!("Ctrl+{}", i + 1));
+                let shortcut = (i < 9)
+                    .then(|| crate::keymap::shortcut(Cmd::View(i as u8)))
+                    .filter(|k| !k.is_empty());
                 if view_item(ui, icon, name.unwrap_or(whole), name == current, shortcut) {
                     pick = Some(name.unwrap_or("").to_owned());
                     ui.close();
@@ -929,10 +932,16 @@ fn view_row(
         settings.view = name;
         *changed = true;
     }
-    resp.on_hover_text(tr!(
-        "The library's views (Ctrl+1…9)",
-        "Представления библиотеки (Ctrl+1…9)"
-    ));
+    let (first, last) = (
+        crate::keymap::shortcut(Cmd::View(0)),
+        crate::keymap::shortcut(Cmd::View(8)),
+    );
+    let text = tr!("The library's views", "Представления библиотеки");
+    resp.on_hover_text(if first.is_empty() || last.is_empty() {
+        text.to_owned()
+    } else {
+        format!("{text} ({first}…{last})")
+    });
 }
 
 /// The painted icon of a view's `ViewIcon`.
@@ -1056,7 +1065,7 @@ fn top_bar(
         palette::panel_bg(),
     );
     let edit = egui::TextEdit::singleline(&mut lv.query)
-        .hint_text(tr!("Search (Ctrl+F)", "Поиск (Ctrl+F)"))
+        .hint_text(with_key(tr!("Search", "Поиск"), Cmd::Search))
         .desired_width(320.0)
         .id(ui.id().with("library_search"));
     let resp = ui.add(edit);
@@ -1088,7 +1097,7 @@ fn top_bar(
             ui,
             Icon::Settings,
             false,
-            tr!("Settings (F5)", "Настройки (F5)"),
+            &with_key(tr!("Settings", "Настройки"), Cmd::Settings),
         )
         .clicked()
         {
@@ -1123,9 +1132,9 @@ fn top_bar(
                 ui.separator();
             }
             if ui
-                .button(tr!(
-                    "Add a folder… (Ctrl+Shift+O)",
-                    "Добавить папку… (Ctrl+Shift+O)"
+                .button(with_key(
+                    tr!("Add a folder…", "Добавить папку…"),
+                    Cmd::AddFolder,
                 ))
                 .clicked()
             {
@@ -1149,9 +1158,9 @@ fn top_bar(
             ui,
             Icon::Refresh,
             false,
-            tr!(
-                "Read the folders again (Ctrl+R)",
-                "Перечитать папки (Ctrl+R)"
+            &with_key(
+                tr!("Read the folders again", "Перечитать папки"),
+                Cmd::Rescan,
             ),
         )
         .clicked()
@@ -1162,7 +1171,7 @@ fn top_bar(
             ui,
             Icon::Contents,
             settings.playlist_visible,
-            tr!("The playlist (Alt+E)", "Плейлист (Alt+E)"),
+            &with_key(tr!("The playlist", "Плейлист"), Cmd::Playlist),
         )
         .clicked()
         {
@@ -2193,13 +2202,13 @@ fn context_menu(
                 tr!("Show in folder", "Показать в папке"),
             );
             if extras.contains(&MenuChoice::EditTags) {
-                item(ui, MenuChoice::EditTags, edit_tags_label());
+                item(ui, MenuChoice::EditTags, &edit_tags_label());
             }
             if extras.contains(&MenuChoice::Info) {
                 item(
                     ui,
                     MenuChoice::Info,
-                    tr!("File info… (I)", "Сведения о файле… (I)"),
+                    &with_key(tr!("File info…", "Сведения о файле…"), Cmd::Info),
                 );
             }
         });
@@ -2212,8 +2221,8 @@ pub fn play_next_label() -> &'static str {
 }
 
 /// The menus' "Edit tags…", shared with the playlist's.
-pub fn edit_tags_label() -> &'static str {
-    tr!("Edit tags… (Ctrl+E)", "Изменить теги… (Ctrl+E)")
+pub fn edit_tags_label() -> String {
+    with_key(tr!("Edit tags…", "Изменить теги…"), Cmd::EditTags)
 }
 
 /// The menus' "Go to album", shared with the playlist's.

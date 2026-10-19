@@ -13,6 +13,7 @@
 use egui::{Align2, Color32, FontId, Rect, Sense, Ui, pos2, vec2};
 
 use crate::format;
+use crate::keymap::{Cmd, with_key};
 use crate::palette;
 use crate::player::Status;
 use crate::queue::Repeat;
@@ -396,7 +397,7 @@ fn cover_button(
             .interact(cover, ui.id().with("cover"), Sense::click())
             .on_hover_cursor(egui::CursorIcon::PointingHand);
         if resp
-            .on_hover_text(tr!("File info (I)", "Сведения о файле (I)"))
+            .on_hover_text(with_key(tr!("File info", "Сведения о файле"), Cmd::Info))
             .clicked()
         {
             cmds.push(BarCmd::Info);
@@ -467,33 +468,43 @@ fn transport(
         Icon::SkipBack,
         15.0,
         BarCmd::Previous,
-        tr!("Previous (Ctrl+Left, Z)", "Предыдущий (Ctrl+Влево, Z)"),
+        &with_key(tr!("Previous", "Предыдущий"), Cmd::Previous),
         false,
     );
-    let (icon, tip) = if now.status == Status::Playing {
-        (Icon::Pause, tr!("Pause (Space)", "Пауза (Пробел)"))
-    } else {
-        (Icon::Play, tr!("Play (Space)", "Воспроизвести (Пробел)"))
-    };
-    button(ui, icon, 17.0, BarCmd::PlayPause, tip, true);
+    let (icon, tip) = play_pause(now.status == Status::Playing);
+    button(ui, icon, 17.0, BarCmd::PlayPause, &tip, true);
+    let stop = with_key(tr!("Stop", "Стоп"), Cmd::Stop);
     let stop_tip = if now.stop_after {
-        tr!(
-            "Stop (V); stops after this track (Shift+V)",
-            "Стоп (V); остановка после этого трека (Shift+V)"
-        )
+        let after = with_key(
+            tr!("stops after this track", "остановка после этого трека"),
+            Cmd::StopAfter,
+        );
+        format!("{stop}; {after}")
     } else {
-        tr!("Stop (V)", "Стоп (V)")
+        stop
     };
-    button(ui, Icon::Stop, 14.0, BarCmd::Stop, stop_tip, false);
+    button(ui, Icon::Stop, 14.0, BarCmd::Stop, &stop_tip, false);
     button(
         ui,
         Icon::SkipForward,
         15.0,
         BarCmd::Next,
-        tr!("Next (Ctrl+Right, B)", "Следующий (Ctrl+Вправо, B)"),
+        &with_key(tr!("Next", "Следующий"), Cmd::Next),
         false,
     );
     x
+}
+
+/// Play/Pause's icon and tooltip, by whether it plays.
+pub(super) fn play_pause(playing: bool) -> (Icon, String) {
+    if playing {
+        (Icon::Pause, with_key(tr!("Pause", "Пауза"), Cmd::PlayPause))
+    } else {
+        (
+            Icon::Play,
+            with_key(tr!("Play", "Воспроизвести"), Cmd::PlayPause),
+        )
+    }
 }
 
 /// The volume slider, the mute button, repeat and shuffle, laid right to
@@ -546,7 +557,7 @@ pub(super) fn mute_button(
         palette::bar_bg(),
     );
     if resp
-        .on_hover_text(tr!("Mute (M)", "Без звука (M)"))
+        .on_hover_text(with_key(tr!("Mute", "Без звука"), Cmd::Mute))
         .clicked()
     {
         cmds.push(BarCmd::Mute);
@@ -627,25 +638,24 @@ fn toggles(
         cmds.push(BarCmd::Equalizer(r));
     }
     let (icon, tip) = match now.repeat {
-        Repeat::Off => (Icon::Repeat, tr!("Repeat: off (R)", "Повтор: выкл. (R)")),
+        Repeat::Off => (Icon::Repeat, tr!("Repeat: off", "Повтор: выкл.")),
         Repeat::All => (
             Icon::Repeat,
-            tr!("Repeat: the playlist (R)", "Повтор: плейлист (R)"),
+            tr!("Repeat: the playlist", "Повтор: плейлист"),
         ),
-        Repeat::One => (
-            Icon::RepeatOne,
-            tr!("Repeat: the track (R)", "Повтор: трек (R)"),
-        ),
+        Repeat::One => (Icon::RepeatOne, tr!("Repeat: the track", "Повтор: трек")),
     };
-    if toggle(ui, icon, now.repeat != Repeat::Off, tip).is_some() {
+    let tip = with_key(tip, Cmd::Repeat);
+    if toggle(ui, icon, now.repeat != Repeat::Off, &tip).is_some() {
         cmds.push(BarCmd::Repeat);
     }
     let tip = if now.shuffle {
-        tr!("Shuffle: on (S)", "Перемешать: вкл. (S)")
+        tr!("Shuffle: on", "Перемешать: вкл.")
     } else {
-        tr!("Shuffle: off (S)", "Перемешать: выкл. (S)")
+        tr!("Shuffle: off", "Перемешать: выкл.")
     };
-    if toggle(ui, Icon::Shuffle, now.shuffle, tip).is_some() {
+    let tip = with_key(tip, Cmd::Shuffle);
+    if toggle(ui, Icon::Shuffle, now.shuffle, &tip).is_some() {
         cmds.push(BarCmd::Shuffle);
     }
     right

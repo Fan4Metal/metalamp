@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use egui::{Align2, FontId, Key, Modifiers, Rect, Sense, TextureHandle, Ui, pos2, vec2};
 
+use crate::keymap::{Cmd, with_key};
 use crate::library::Library;
 use crate::player::Player;
 use crate::ui::icons::{self, Icon};
@@ -293,7 +294,7 @@ pub fn show(
             let resp = resp
                 .clone()
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(tr!("File info (I)", "Сведения о файле (I)"));
+                .on_hover_text(with_key(tr!("File info", "Сведения о файле"), Cmd::Info));
             if resp.clicked() {
                 actions.push(PlaylistAction::InfoPlaying);
             }
@@ -537,7 +538,7 @@ pub fn show(
             if ui
                 .add_enabled(
                     first.is_some(),
-                    egui::Button::new(tr!("File info… (I)", "Сведения о файле… (I)")),
+                    egui::Button::new(with_key(tr!("File info…", "Сведения о файле…"), Cmd::Info)),
                 )
                 .clicked()
                 && let Some(i) = pv.selected_entry()
@@ -577,9 +578,9 @@ pub fn show(
             if ui
                 .checkbox(
                     &mut stop_after,
-                    tr!(
-                        "Stop after the current track (Shift+V)",
-                        "Стоп после текущего трека (Shift+V)"
+                    with_key(
+                        tr!("Stop after the current track", "Стоп после текущего трека"),
+                        Cmd::StopAfter,
                     ),
                 )
                 .clicked()

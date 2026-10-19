@@ -93,6 +93,9 @@ pub struct Settings {
     pub crossfade_in_albums: bool,
     /// When the media keys are the player's.
     pub media_keys: MediaKeys,
+    /// The keys as changed on the settings' Keys page (`keymap.rs`; only
+    /// the changes are written).
+    pub keys: crate::keymap::Keymap,
     /// An icon in the notification area; minimized, the window leaves the
     /// taskbar for it.
     pub tray: bool,
@@ -277,6 +280,7 @@ impl Default for Settings {
             crossfade: 0,
             crossfade_in_albums: false,
             media_keys: MediaKeys::default(),
+            keys: crate::keymap::Keymap::default(),
             tray: false,
             on_top: false,
             mini: false,

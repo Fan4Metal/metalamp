@@ -7,6 +7,7 @@
 use egui::{Align2, FontId, Rect, Sense, TextureHandle, Ui, pos2, vec2};
 
 use super::icons::{self, Icon};
+use crate::keymap::{Cmd, with_key};
 use crate::palette;
 
 /// The width of the window's own buttons, as Windows draws them.
@@ -70,9 +71,12 @@ pub fn row(
         egui::Color32::WHITE,
     );
     if icon_resp
-        .on_hover_text(tr!(
-            format!("About {} (F1)", crate::APP_NAME),
-            format!("О программе {} (F1)", crate::APP_NAME)
+        .on_hover_text(with_key(
+            &tr!(
+                format!("About {}", crate::APP_NAME),
+                format!("О программе {}", crate::APP_NAME)
+            ),
+            Cmd::About,
         ))
         .clicked()
     {
@@ -139,23 +143,20 @@ pub fn row(
             TitleCmd::Mini,
             Icon::Mini,
             false,
-            tr!("Mini player (Ctrl+M)", "Мини-плеер (Ctrl+M)"),
+            with_key(tr!("Mini player", "Мини-плеер"), Cmd::Mini),
         ),
         (
             TitleCmd::OnTop,
             Icon::Pin,
             modes.on_top,
-            if modes.on_top {
-                tr!(
-                    "Over the other windows: on (Ctrl+T)",
-                    "Поверх всех окон: вкл. (Ctrl+T)"
-                )
-            } else {
-                tr!(
-                    "Over the other windows (Ctrl+T)",
-                    "Поверх всех окон (Ctrl+T)"
-                )
-            },
+            with_key(
+                if modes.on_top {
+                    tr!("Over the other windows: on", "Поверх всех окон: вкл.")
+                } else {
+                    tr!("Over the other windows", "Поверх всех окон")
+                },
+                Cmd::OnTop,
+            ),
         ),
     ];
     for (kind, icon, on, tip) in toggles {

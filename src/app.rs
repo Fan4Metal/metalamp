@@ -124,6 +124,7 @@ impl App {
         let _ = wake.set(ctx.clone());
         // Before any text is made.
         crate::i18n::set_lang(settings.language.resolve());
+        crate::keymap::publish(&settings.keys);
         palette::set(settings.look());
         palette::apply(ctx);
         ctx.options_mut(|o| {
@@ -614,78 +615,124 @@ impl App {
         }
     }
 
-    /// The player's keys, when no text field takes them: Space, Z X C V B,
-    /// Ctrl+arrows, Shift+arrows, M, R, S; the letters not
-    /// while `letters` (they go to an artist); while `over_player` the
-    /// arrows seek and set the volume (else they move in the library's
+    /// The arrows with the pointer over the title row or the player bar
+    /// (the mini player): left and right seek, up and down set the volume,
+    /// unless a text field has the focus (else they move in the library's
     /// panes).
-    fn player_keys(&mut self, ctx: &egui::Context, letters: bool, over_player: bool) {
-        if ctx.memory(|m| m.focused().is_some()) {
+    fn pointer_keys(&mut self, ctx: &egui::Context, over_player: bool) {
+        use crate::keymap::{SEEK_STEP, VOLUME_STEP};
+        if !over_player || ctx.memory(|m| m.focused().is_some()) {
             return;
         }
-        let pressed = |m: Modifiers, k: Key| {
-            let letter = m == Modifiers::NONE && k != Key::Space;
-            !(letters && letter) && ctx.input_mut(|i| i.consume_key(m, k))
-        };
-        if pressed(Modifiers::NONE, Key::Space) || pressed(Modifiers::NONE, Key::C) {
-            self.player.toggle_pause();
+        let pressed = |k: Key| ctx.input_mut(|i| i.consume_key(Modifiers::NONE, k));
+        if pressed(Key::ArrowRight) {
+            self.player.seek_by(SEEK_STEP);
         }
-        if pressed(Modifiers::NONE, Key::X) {
-            self.player.play();
+        if pressed(Key::ArrowLeft) {
+            self.player.seek_by(-SEEK_STEP);
         }
-        // Shift+V before V: egui matches a key without Shift also with it.
-        if pressed(Modifiers::SHIFT, Key::V) {
-            self.player.toggle_stop_after();
+        if pressed(Key::ArrowUp) {
+            self.step_volume(VOLUME_STEP);
         }
-        if pressed(Modifiers::NONE, Key::V) {
-            self.player.stop();
+        if pressed(Key::ArrowDown) {
+            self.step_volume(-VOLUME_STEP);
         }
-        if pressed(Modifiers::COMMAND, Key::ArrowRight) || pressed(Modifiers::NONE, Key::B) {
-            self.player.next();
-        }
-        if pressed(Modifiers::COMMAND, Key::ArrowLeft) || pressed(Modifiers::NONE, Key::Z) {
-            self.player.previous();
-        }
-        if pressed(Modifiers::SHIFT, Key::ArrowRight) {
-            self.player.seek_by(5);
-        }
-        if pressed(Modifiers::SHIFT, Key::ArrowLeft) {
-            self.player.seek_by(-5);
-        }
-        if over_player {
-            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowRight)) {
-                self.player.seek_by(5);
+    }
+
+    fn step_volume(&mut self, step: i8) {
+        let v = (i16::from(self.player.volume) + i16::from(step)).clamp(0, 100) as u8;
+        self.player.set_volume(v);
+        self.place_changed = Some(Instant::now());
+    }
+
+    /// What a key of the keymap asks for.
+    fn run_key(&mut self, cmd: crate::keymap::Cmd, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        use crate::keymap::Cmd;
+        match cmd {
+            Cmd::PlayPause => self.player.toggle_pause(),
+            Cmd::Play => self.player.play(),
+            Cmd::Stop => self.player.stop(),
+            Cmd::StopAfter => self.player.toggle_stop_after(),
+            Cmd::Previous => self.player.previous(),
+            Cmd::Next => self.player.next(),
+            Cmd::Seek(seconds) => self.player.seek_by(seconds),
+            Cmd::Repeat => {
+                let next = self.player.queue.repeat.next();
+                self.player.set_repeat(next);
+                self.place_changed = Some(Instant::now());
             }
-            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowLeft)) {
-                self.player.seek_by(-5);
+            Cmd::Shuffle => {
+                let on = !self.player.queue.shuffle();
+                self.player.set_shuffle(on);
+                self.place_changed = Some(Instant::now());
             }
-        }
-        let mut volume = None;
-        let up = |m| over_player && ctx.input_mut(|i| i.consume_key(m, Key::ArrowUp));
-        let down = |m| over_player && ctx.input_mut(|i| i.consume_key(m, Key::ArrowDown));
-        if pressed(Modifiers::COMMAND, Key::ArrowUp) || up(Modifiers::NONE) {
-            volume = Some(self.player.volume.saturating_add(5).min(100));
-        }
-        if pressed(Modifiers::COMMAND, Key::ArrowDown) || down(Modifiers::NONE) {
-            volume = Some(self.player.volume.saturating_sub(5));
-        }
-        if let Some(v) = volume {
-            self.player.set_volume(v);
-            self.place_changed = Some(Instant::now());
-        }
-        if pressed(Modifiers::NONE, Key::M) {
-            self.player.toggle_mute();
-            self.place_changed = Some(Instant::now());
-        }
-        if pressed(Modifiers::NONE, Key::R) {
-            let next = self.player.queue.repeat.next();
-            self.player.set_repeat(next);
-            self.place_changed = Some(Instant::now());
-        }
-        if pressed(Modifiers::NONE, Key::S) {
-            let on = !self.player.queue.shuffle();
-            self.player.set_shuffle(on);
-            self.place_changed = Some(Instant::now());
+            Cmd::Volume(step) => self.step_volume(step),
+            Cmd::Mute => {
+                self.player.toggle_mute();
+                self.place_changed = Some(Instant::now());
+            }
+            // Under the player bar's right end, where its button is.
+            Cmd::Equalizer => {
+                let at = self.player_area.right_bottom() - egui::vec2(16.0, 0.0);
+                self.eq_window.toggle(egui::Rect::from_min_max(at, at));
+            }
+            Cmd::EqualizerOnOff | Cmd::Normalize => {
+                if cmd == Cmd::Normalize {
+                    self.settings.dsp.normalize = !self.settings.dsp.normalize;
+                } else {
+                    self.settings.dsp.eq = !self.settings.dsp.eq;
+                }
+                self.player.set_dsp(&self.settings.dsp);
+                self.place_changed = Some(Instant::now());
+            }
+            Cmd::Mini => {
+                self.settings.mini = !self.settings.mini;
+                self.place_changed = Some(Instant::now());
+            }
+            Cmd::OnTop => {
+                self.settings.on_top = !self.settings.on_top;
+                self.place_changed = Some(Instant::now());
+            }
+            Cmd::Playlist => {
+                // From the mini player: the whole window with the playlist.
+                self.settings.playlist_visible =
+                    self.settings.mini || !self.settings.playlist_visible;
+                self.settings.mini = false;
+                self.place_changed = Some(Instant::now());
+            }
+            Cmd::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+            // The mini player is not maximized.
+            Cmd::Maximize if self.settings.mini => {}
+            Cmd::Maximize => ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(
+                !frameless::is_maximized(ctx),
+            )),
+            Cmd::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Cmd::Search => {
+                self.library_view.focus_search = true;
+                self.settings.mini = false;
+            }
+            Cmd::Open => self.open_files(frame),
+            Cmd::AddFolder => self.pick_folder(frame),
+            Cmd::Rescan => self.rescan(),
+            Cmd::Info => self.info_request = self.info_path(),
+            // The selection of the playlist when it has the keys, else of
+            // the tracks' table.
+            Cmd::EditTags => {
+                let paths = if self.playlist_view.focused {
+                    self.playlist_paths(&self.playlist_view.selection())
+                } else {
+                    let tracks = self.library_view.selected_tracks_of(&self.library);
+                    self.paths_of(&tracks)
+                };
+                self.tag_editor.open(ctx, paths);
+            }
+            Cmd::View(n) => {
+                if crate::ui::library::choose_view(&mut self.settings, usize::from(n)) {
+                    self.place_changed = Some(Instant::now());
+                }
+            }
+            Cmd::Settings => self.settings_dialog.toggle(),
+            Cmd::About => self.about.toggle(),
         }
     }
 
@@ -1376,7 +1423,6 @@ impl eframe::App for App {
         {
             ctx.memory_mut(|m| m.surrender_focus(id));
         }
-        // The file info: Alt+3, or I (not while typing).
         let typing = ctx.memory(|m| m.focused().is_some());
         // Letters typed over the artists' pane go to an artist, not to
         // the keys below.
@@ -1385,86 +1431,24 @@ impl eframe::App for App {
             && !self.settings.library_folders.is_empty()
             && self.library_view.pointer_over_artists(&ctx);
         self.library_view.letters = letters;
-        if !modal
-            && ctx.input_mut(|i| {
-                i.consume_key(Modifiers::ALT, Key::Num3)
-                    || (!typing && !letters && i.consume_key(Modifiers::NONE, Key::I))
-            })
-        {
-            self.info_request = self.info_path();
-        }
+        // The keys as the settings' Keys page set them: none while a modal
+        // is open; while a text field has the focus only those it does
+        // not take (F-keys, Alt and most Ctrl chords); letters typed over
+        // the artists go to an artist.
         if !modal {
-            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F1)) {
-                self.about.toggle();
+            let cmds = crate::keymap::take(&ctx, &self.settings.keys, |chord| {
+                !(typing && chord.edits_text()) && !(letters && chord.types())
+            });
+            for cmd in cmds {
+                self.run_key(cmd, &ctx, frame);
             }
-            // F5 as metalmpv's, or Ctrl+P.
-            if ctx.input_mut(|i| {
-                i.consume_key(Modifiers::NONE, Key::F5) || i.consume_key(Modifiers::COMMAND, Key::P)
-            }) {
-                self.settings_dialog.toggle();
-            }
-            if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::O)) {
-                self.pick_folder(frame);
-            }
-            if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::R)) {
-                self.rescan();
-            }
-            if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::F)) {
-                self.library_view.focus_search = true;
-                self.settings.mini = false;
-            }
-            if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::O)) {
-                self.open_files(frame);
-            }
-            if ctx.input_mut(|i| i.consume_key(Modifiers::ALT, Key::E)) {
-                // From the mini player: the whole window with the playlist.
-                self.settings.playlist_visible =
-                    self.settings.mini || !self.settings.playlist_visible;
-                self.settings.mini = false;
-                self.place_changed = Some(Instant::now());
-            }
-            // Ctrl+T: over the other windows; Ctrl+M: the mini player.
-            if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::T)) {
-                self.settings.on_top = !self.settings.on_top;
-                self.place_changed = Some(Instant::now());
-            }
-            if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::M))
-                || (self.settings.mini
-                    && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)))
+            // Esc leaves the mini player.
+            if self.settings.mini
+                && !typing
+                && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
             {
-                self.settings.mini = !self.settings.mini;
+                self.settings.mini = false;
                 self.place_changed = Some(Instant::now());
-            }
-            // Ctrl+E: the tag editor for the selection of the playlist when
-            // it has the keys, else of the tracks' table.
-            if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::E)) {
-                let paths = if self.playlist_view.focused {
-                    self.playlist_paths(&self.playlist_view.selection())
-                } else {
-                    let tracks = self.library_view.selected_tracks_of(&self.library);
-                    self.paths_of(&tracks)
-                };
-                self.tag_editor.open(&ctx, paths);
-            }
-            // Ctrl+1…9: the library's views, as the row under the artists
-            // lists them.
-            const DIGITS: [Key; 9] = [
-                Key::Num1,
-                Key::Num2,
-                Key::Num3,
-                Key::Num4,
-                Key::Num5,
-                Key::Num6,
-                Key::Num7,
-                Key::Num8,
-                Key::Num9,
-            ];
-            for (n, key) in DIGITS.into_iter().enumerate() {
-                if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, key))
-                    && crate::ui::library::choose_view(&mut self.settings, n)
-                {
-                    self.place_changed = Some(Instant::now());
-                }
             }
         }
         self.take_dropped(&ctx);
@@ -1472,7 +1456,7 @@ impl eframe::App for App {
             let over_player = ctx
                 .pointer_hover_pos()
                 .is_some_and(|p| self.player_area.contains(p));
-            self.player_keys(&ctx, letters, over_player);
+            self.pointer_keys(&ctx, over_player);
         }
         if !frameless::is_maximized(&ctx) {
             frameless::resize_edges(root_ui);
@@ -1716,6 +1700,9 @@ impl eframe::App for App {
             if let Some(hwnd) = self.hwnd {
                 crate::caption::set_dark(hwnd, self.settings.theme.is_dark());
             }
+        }
+        if changed.keys {
+            crate::keymap::publish(&self.settings.keys);
         }
         if changed.any {
             self.place_changed = Some(Instant::now());

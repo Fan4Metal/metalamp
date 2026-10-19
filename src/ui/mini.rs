@@ -14,6 +14,7 @@ use std::time::Duration;
 use egui::{Color32, FontId, Rect, Sense, TextureHandle, TextureOptions, Ui, pos2, vec2};
 
 use super::player_bar::{self, BarCmd, NowPlaying};
+use crate::keymap::{Cmd, with_key};
 use crate::palette;
 use crate::player::Status;
 use crate::ui::icons::{self, Icon};
@@ -166,7 +167,7 @@ pub fn show(ui: &mut Ui, now: &NowPlaying<'_>, icon: &TextureHandle) -> Vec<BarC
     };
     icons::paint(&painter, Icon::Mini, back.center(), 14.0, color, ground);
     if resp
-        .on_hover_text(tr!("The whole window (Ctrl+M)", "Всё окно (Ctrl+M)"))
+        .on_hover_text(with_key(tr!("The whole window", "Всё окно"), Cmd::Mini))
         .clicked()
     {
         cmds.push(BarCmd::Whole);
@@ -251,21 +252,17 @@ pub fn show(ui: &mut Ui, now: &NowPlaying<'_>, icon: &TextureHandle) -> Vec<BarC
         Icon::SkipBack,
         15.0,
         BarCmd::Previous,
-        tr!("Previous (Ctrl+Left, Z)", "Предыдущий (Ctrl+Влево, Z)"),
+        &with_key(tr!("Previous", "Предыдущий"), Cmd::Previous),
         false,
     );
-    let (play, tip) = if playing {
-        (Icon::Pause, tr!("Pause (Space)", "Пауза (Пробел)"))
-    } else {
-        (Icon::Play, tr!("Play (Space)", "Воспроизвести (Пробел)"))
-    };
-    button(ui, play, 17.0, BarCmd::PlayPause, tip, true);
+    let (play, tip) = player_bar::play_pause(playing);
+    button(ui, play, 17.0, BarCmd::PlayPause, &tip, true);
     button(
         ui,
         Icon::SkipForward,
         15.0,
         BarCmd::Next,
-        tr!("Next (Ctrl+Right, B)", "Следующий (Ctrl+Вправо, B)"),
+        &with_key(tr!("Next", "Следующий"), Cmd::Next),
         false,
     );
     // The volume takes the room left, at most as wide as the bar's.

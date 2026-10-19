@@ -21,6 +21,7 @@ mod guard;
 mod icon;
 mod instance;
 mod kept;
+mod keymap;
 mod library;
 mod loudness;
 mod palette;

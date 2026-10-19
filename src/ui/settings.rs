@@ -14,6 +14,7 @@ use crate::palette::ColourText;
 use crate::audio::dsp::{DspSettings, eq};
 use crate::audio::output::Device;
 use crate::i18n::LangChoice;
+use crate::keymap::{Action, Chord, Group, Keymap};
 use crate::palette;
 use crate::palette::{Accent, Palette, Theme, Tint};
 use crate::settings::{BarLayout, EqPreset, MediaKeys, Settings};
@@ -32,16 +33,18 @@ pub enum Page {
     #[default]
     General,
     Sound,
+    Keys,
     Updates,
 }
 
 impl Page {
-    const ALL: [Page; 3] = [Page::General, Page::Sound, Page::Updates];
+    const ALL: [Page; 4] = [Page::General, Page::Sound, Page::Keys, Page::Updates];
 
     fn title(self) -> &'static str {
         match self {
             Page::General => tr!("General", "Общие"),
             Page::Sound => tr!("Sound", "Звук"),
+            Page::Keys => tr!("Keyboard shortcuts", "Горячие клавиши"),
             Page::Updates => tr!("Updates", "Обновления"),
         }
     }
@@ -56,6 +59,10 @@ impl Page {
             Page::Sound => tr!(
                 "The device the sound goes to; one loudness for every track, the limiter, the equalizer, the crossfade and the enhancer.",
                 "Устройство, на которое выводится звук; одна громкость у всех треков, лимитер, эквалайзер, кроссфейд и улучшение звука."
+            ),
+            Page::Keys => tr!(
+                "The keys of the player and what they do.",
+                "Клавиши плеера и что они делают."
             ),
             Page::Updates => tr!(
                 "Asking GitHub whether a newer version is out.",
@@ -74,6 +81,8 @@ pub struct Changed {
     pub dsp: bool,
     /// The crossfade (`settings.crossfade`, `crossfade_in_albums`).
     pub crossfade: bool,
+    /// The keys (`keymap::publish`).
+    pub keys: bool,
     /// The theme or the accent: `palette::set` and `apply`.
     pub look: bool,
     /// Anything to save.
@@ -93,6 +102,18 @@ pub struct SettingsDialog {
     naming: Option<String>,
     /// A scroll offset to put the page at once (`from_env`).
     scroll_to: Option<f32>,
+    /// A key being chosen on the Keys page: the action, and which of its
+    /// keys it replaces (`None`: one more).
+    capture: Option<(Action, Option<usize>)>,
+    /// The press that gave the choice up: its click must not start it
+    /// again.
+    gave_up: Option<(Action, Option<usize>)>,
+    /// What the last change of keys did that may not have been meant (a
+    /// key taken from another action, an action's own keys reset) and the
+    /// keys before, for Undo.
+    taken: Option<(String, Keymap)>,
+    /// What the Keys page shows: actions whose name or keys have it.
+    key_filter: String,
 }
 
 impl SettingsDialog {
@@ -106,6 +127,7 @@ impl SettingsDialog {
             let (page, offset) = spec.split_once(':').unwrap_or((&spec, ""));
             dialog.page = match page {
                 "sound" => Page::Sound,
+                "keys" => Page::Keys,
                 "updates" => Page::Updates,
                 _ => Page::General,
             };
@@ -137,6 +159,10 @@ impl SettingsDialog {
         }
         let fresh = std::mem::take(&mut self.fresh);
         let before = settings.clone();
+        if self.page != Page::Keys {
+            self.capture = None;
+        }
+        self.capture_key(ctx, &mut settings.keys);
         // Kept by the update check, saved with the settings.
         let checking = updates.enabled;
         let mut close = false;
@@ -199,6 +225,8 @@ impl SettingsDialog {
                 {
                     reset(settings, updates);
                     self.naming = None;
+                    self.capture = None;
+                    self.taken = None;
                 }
                 close |= child(ui, close_rect)
                     .add_sized(
@@ -244,6 +272,7 @@ impl SettingsDialog {
                         .show(ui, |ui| match self.page {
                             Page::General => general(ui, settings),
                             Page::Sound => sound(ui, settings, &self.devices, &mut self.naming),
+                            Page::Keys => self.keys_page(ui, &mut settings.keys),
                             Page::Updates => updates_page(ui, updates),
                         });
                 });
@@ -260,6 +289,7 @@ impl SettingsDialog {
         changed.crossfade = (settings.crossfade, settings.crossfade_in_albums)
             != (before.crossfade, before.crossfade_in_albums);
         changed.look = settings.look() != before.look();
+        changed.keys = settings.keys != before.keys;
         changed.any = *settings != before || updates.enabled != checking;
         changed
     }
@@ -307,6 +337,366 @@ impl SettingsDialog {
         if response.clicked() {
             self.page = page;
         }
+    }
+}
+
+impl SettingsDialog {
+    /// The next press while a key is being chosen: a key with its
+    /// modifiers, or a side button of the mouse; Esc or another click
+    /// gives up. The keys pressed meanwhile reach no widget and do not
+    /// close the window.
+    fn capture_key(&mut self, ctx: &egui::Context, keys: &mut Keymap) {
+        let Some((action, slot)) = self.capture else {
+            return;
+        };
+        let (events, modifiers) = ctx.input(|i| (i.events.clone(), i.modifiers));
+        for event in &events {
+            match event {
+                egui::Event::Key {
+                    key: egui::Key::Escape,
+                    pressed: true,
+                    ..
+                } => {
+                    self.capture = None;
+                    break;
+                }
+                egui::Event::PointerButton {
+                    button,
+                    pressed: true,
+                    ..
+                } if Chord::of_button(*button, egui::Modifiers::NONE).is_none() => {
+                    self.gave_up = self.capture.take();
+                    break;
+                }
+                _ => {}
+            }
+            if let Some((chord, false)) = Chord::of_event(event, modifiers) {
+                let before = keys.clone();
+                self.taken = keys
+                    .assign(action, slot, chord)
+                    .map(|other| (lost_keys(&[(chord, other)]), before));
+                self.capture = None;
+                break;
+            }
+        }
+        ctx.input_mut(|i| {
+            i.events.retain(|e| {
+                !matches!(
+                    e,
+                    egui::Event::Key { .. }
+                        | egui::Event::Text(_)
+                        | egui::Event::Copy
+                        | egui::Event::Cut
+                        | egui::Event::Paste(_)
+                )
+            });
+        });
+    }
+
+    /// The keys page: every action with its keys; a click on a key waits
+    /// for the one to take its place, `+` for one more, the cross removes
+    /// it.
+    fn keys_page(&mut self, ui: &mut Ui, keys: &mut Keymap) {
+        section(ui, tr!("Choosing keys", "Выбор клавиш"), |ui| {
+            row(
+                ui,
+                tr!("Default keys", "Клавиши по умолчанию"),
+                Some(tr!(
+                    "A click on a key waits for another to take its place, + for one more; Esc gives up. A key another action had is taken from it.",
+                    "Щелчок по клавише ждёт нажатия новой на её место, «+» — ещё одной; Esc — отмена. Клавиша другого действия переходит к этому."
+                )),
+                150.0,
+                |ui| {
+                    if ui
+                        .add_enabled(
+                            !keys.is_default(),
+                            egui::Button::new(tr!("Reset the keys", "Сбросить клавиши")),
+                        )
+                        .clicked()
+                    {
+                        *keys = Keymap::default();
+                        self.capture = None;
+                        self.taken = None;
+                    }
+                },
+            );
+        });
+        let mut undo = None;
+        if let Some((what, before)) = &self.taken {
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(what).size(12.5).color(palette::accent()));
+                if ui.small_button(tr!("Undo", "Отменить")).clicked() {
+                    undo = Some(before.clone());
+                }
+            });
+        }
+        if let Some(before) = undo {
+            *keys = before;
+            self.taken = None;
+        }
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.key_filter)
+                    .hint_text(tr!("Find an action or a key", "Найти действие или клавишу"))
+                    .desired_width(260.0),
+            );
+            if !self.key_filter.is_empty() && ui.small_button("×").clicked() {
+                self.key_filter.clear();
+            }
+        });
+        let filter = self.key_filter.trim().to_lowercase();
+        let shown: Vec<Action> = Action::ALL
+            .iter()
+            .copied()
+            .filter(|&action| {
+                filter.is_empty()
+                    || action.name().to_lowercase().contains(&filter)
+                    || keys
+                        .chords(action)
+                        .iter()
+                        .any(|c| c.label().to_lowercase().contains(&filter))
+            })
+            .collect();
+        let mut any = false;
+        for group in Group::ALL {
+            let actions: Vec<Action> = shown
+                .iter()
+                .copied()
+                .filter(|a| a.group() == group)
+                .collect();
+            if actions.is_empty() {
+                continue;
+            }
+            any = true;
+            section(ui, group.title(), |ui| {
+                for (i, &action) in actions.iter().enumerate() {
+                    if i > 0 {
+                        divider(ui);
+                    }
+                    // Many or long keys take more room from the name.
+                    let width = self
+                        .chips_width(ui, keys, action)
+                        .clamp(KEYS_WIDTH, (ui.available_width() - 120.0).max(KEYS_WIDTH));
+                    row(ui, action.name(), None, width, |ui| {
+                        self.key_chips(ui, keys, action);
+                    });
+                }
+            });
+        }
+        if !any {
+            ui.add_space(12.0);
+            ui.label(
+                RichText::new(tr!("Nothing found.", "Ничего не найдено."))
+                    .color(palette::text_weak()),
+            );
+        }
+        ui.add_space(12.0);
+        ui.label(
+            RichText::new(tr!(
+                "Not chosen here: the arrows, Page Up/Down, Home, End and Enter move in the library and the playlist and play; Delete removes from the playlist; letters typed with the pointer over the artists go to an artist; with the pointer over the title row or the player bar Left and Right seek by 5 s and Up and Down change the volume, as the mouse wheel does there; Esc leaves the mini player; the media keys play, pause, stop and change tracks. While a text field has the focus only the F-keys, Alt and Ctrl chords act. Ctrl+V and Shift+Insert cannot be chosen, and Ctrl+Insert is taken as Ctrl+C.",
+                "Здесь не выбираются: стрелки, Page Up/Down, Home, End и Enter перемещают по библиотеке и плейлисту и запускают воспроизведение; Delete убирает из плейлиста; буквы, набранные с указателем над исполнителями, ведут к исполнителю; с указателем над строкой заголовка или панелью плеера Влево и Вправо перематывают на 5 с, а Вверх и Вниз меняют громкость, как там же колесо мыши; Esc закрывает мини-плеер; медиаклавиши запускают, приостанавливают, останавливают и переключают треки. Пока в текстовом поле курсор, действуют только F-клавиши и сочетания с Alt и Ctrl. Ctrl+V и Shift+Insert выбрать нельзя, а Ctrl+Insert считается сочетанием Ctrl+C."
+            ))
+            .size(12.5)
+            .color(palette::text_weak()),
+        );
+        // The click that gave a choice up has ended (every key has seen
+        // it): another one starts a choice again.
+        if !ui.input(|i| i.pointer.any_down()) {
+            self.gave_up = None;
+        }
+    }
+
+    /// The width the keys of `action` take, as [`key_chip`] draws them.
+    fn chips_width(&self, ui: &Ui, keys: &Keymap, action: Action) -> f32 {
+        const GAP: f32 = 6.0;
+        let chip = |label: String, waiting: bool| {
+            let text = ui.painter().layout_no_wrap(
+                label,
+                FontId::proportional(13.0),
+                palette::text_bright(),
+            );
+            text.size().x + 18.0 + if waiting { 0.0 } else { 18.0 } + GAP
+        };
+        // `+` and the round arrow back.
+        let mut width = 26.0 + GAP + TOOL + GAP;
+        if self.capture == Some((action, None)) {
+            width += chip(waiting(), true);
+        }
+        for (slot, chord) in keys.chords(action).iter().enumerate() {
+            width += if self.capture == Some((action, Some(slot))) {
+                chip(waiting(), true)
+            } else {
+                chip(chord.label(), false)
+            };
+        }
+        width
+    }
+
+    /// The keys of `action` in a right-to-left layout: the arrow back and
+    /// `+` first, then the keys from the last.
+    fn key_chips(&mut self, ui: &mut Ui, keys: &mut Keymap, action: Action) {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        // The round arrow back to the action's own keys, at the right as
+        // the equalizer's is; grey while they are.
+        let defaults: Vec<String> = action.defaults().iter().map(|c| c.label()).collect();
+        let tip = if defaults.is_empty() {
+            tr!(
+                "Back to the default: no key",
+                "Вернуть по умолчанию: без клавиши"
+            )
+            .to_owned()
+        } else {
+            tr!(
+                format!("Back to the default: {}", defaults.join(", ")),
+                format!("Вернуть по умолчанию: {}", defaults.join(", "))
+            )
+        };
+        let off = !keys.is_default_for(action);
+        if tool(ui, &tip, off, Icon::RotateLeft).clicked() {
+            let before = keys.clone();
+            let taken = keys.reset(action);
+            self.capture = None;
+            // Its own keys besides the defaults go too: Undo brings them back.
+            let what = if taken.is_empty() {
+                tr!(
+                    format!("“{}” has its default keys again.", action.name()),
+                    format!("У «{}» снова клавиши по умолчанию.", action.name())
+                )
+            } else {
+                lost_keys(&taken)
+            };
+            self.taken = Some((what, before));
+        }
+        let add = ui
+            .add(egui::Button::new("+").min_size(vec2(26.0, KEY_HEIGHT)))
+            .on_hover_text(tr!("Add a key", "Добавить клавишу"));
+        if add.clicked() && self.gave_up != Some((action, None)) {
+            self.capture = Some((action, None));
+            self.taken = None;
+        }
+        if self.capture == Some((action, None)) {
+            key_chip(ui, (action, usize::MAX), &waiting(), true);
+        }
+        let chords = keys.chords(action).to_vec();
+        for (slot, chord) in chords.iter().enumerate().rev() {
+            let capturing = self.capture == Some((action, Some(slot)));
+            let label = if capturing { waiting() } else { chord.label() };
+            match key_chip(ui, (action, slot), &label, capturing) {
+                Some(Chip::Change) if self.gave_up != Some((action, Some(slot))) => {
+                    self.capture = Some((action, Some(slot)));
+                    self.taken = None;
+                }
+                Some(Chip::Remove) => {
+                    keys.remove(action, slot);
+                    self.capture = None;
+                    self.taken = None;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// The least width of the keys of a row.
+const KEYS_WIDTH: f32 = 260.0;
+/// The height of a key.
+const KEY_HEIGHT: f32 = 24.0;
+
+/// What a key on the keys page was clicked for.
+enum Chip {
+    Change,
+    Remove,
+}
+
+/// The label of a key waiting for a press.
+fn waiting() -> String {
+    tr!("Press a key…", "Нажмите клавишу…").to_owned()
+}
+
+/// What the actions that lost their keys no longer do, a sentence each.
+fn lost_keys(taken: &[(Chord, Action)]) -> String {
+    taken
+        .iter()
+        .map(|(chord, other)| {
+            tr!(
+                format!("{} no longer does “{}”.", chord.label(), other.name()),
+                format!("{} больше не делает «{}».", chord.label(), other.name())
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A key on a keycap ground with a cross that removes it; while it waits
+/// for a press, in the accent colour without the cross.
+fn key_chip(ui: &mut Ui, id: (Action, usize), label: &str, waiting: bool) -> Option<Chip> {
+    const CROSS: f32 = 18.0;
+    let text_colour = if waiting {
+        palette::on_accent()
+    } else {
+        palette::text_bright()
+    };
+    let text =
+        ui.painter()
+            .layout_no_wrap(label.to_owned(), FontId::proportional(13.0), text_colour);
+    let cross_width = if waiting { 0.0 } else { CROSS };
+    let size = vec2(text.size().x + 18.0 + cross_width, KEY_HEIGHT);
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let key_rect = Rect::from_min_max(rect.min, pos2(rect.right() - cross_width, rect.bottom()));
+    let id = ui.id().with(("key_chip", id));
+    let key = ui
+        .interact(key_rect, id, Sense::CLICK)
+        .on_hover_text(if waiting {
+            tr!("Esc or a click gives up", "Esc или щелчок — отмена")
+        } else {
+            tr!("Choose another key", "Выбрать другую клавишу")
+        });
+    let cross = (!waiting).then(|| {
+        let r = Rect::from_min_max(pos2(key_rect.right(), rect.top()), rect.max);
+        ui.interact(r, id.with("remove"), Sense::CLICK)
+            .on_hover_text(tr!("Remove the key", "Убрать клавишу"))
+    });
+    let hovered = key.hovered() || cross.as_ref().is_some_and(Response::hovered);
+    let fill = if waiting {
+        palette::accent()
+    } else if hovered {
+        palette::hover()
+    } else {
+        palette::panel_bg()
+    };
+    let painter = ui.painter();
+    painter.rect(
+        rect,
+        5.0,
+        fill,
+        Stroke::new(1.0, palette::line()),
+        egui::StrokeKind::Inside,
+    );
+    painter.galley(
+        pos2(rect.left() + 9.0, rect.center().y - text.size().y / 2.0),
+        text,
+        text_colour,
+    );
+    if let Some(cross) = &cross {
+        let c = if cross.hovered() {
+            palette::text_bright()
+        } else {
+            palette::text_weak()
+        };
+        let o = pos2(cross.rect.center().x - 2.0, cross.rect.center().y);
+        let d = 3.5;
+        let stroke = Stroke::new(1.4, c);
+        painter.line_segment([o + vec2(-d, -d), o + vec2(d, d)], stroke);
+        painter.line_segment([o + vec2(-d, d), o + vec2(d, -d)], stroke);
+    }
+    if cross.is_some_and(|c| c.clicked()) {
+        Some(Chip::Remove)
+    } else if key.clicked() {
+        Some(Chip::Change)
+    } else {
+        None
     }
 }
 
@@ -1622,6 +2012,7 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     settings.selection = d.selection;
     settings.playing = d.playing;
     settings.media_keys = d.media_keys;
+    settings.keys = d.keys;
     settings.output_device = d.output_device;
     settings.output_device_name = d.output_device_name;
     settings.dsp = d.dsp;
