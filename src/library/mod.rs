@@ -59,7 +59,17 @@ pub struct Track {
     /// tracks of an index written before this was kept, and for the first
     /// scan of a library (which would make all of it new). 0: not known.
     pub added: u64,
+    /// The artist its album is filed under when the tags leave it out
+    /// ([`filed_without_album_artist`]): [`VARIOUS_ARTISTS`] for a
+    /// compilation, the artist for an album with guests. Worked out by
+    /// `Library::new` each time, not kept.
+    #[serde(skip)]
+    pub filed: Option<String>,
 }
+
+/// The artist a compilation without an album artist is filed under: the
+/// name taggers and players use, in every language.
+pub const VARIOUS_ARTISTS: &str = "Various Artists";
 
 impl Track {
     /// When it came into the library, or the file's time if not known.
@@ -76,7 +86,9 @@ impl Track {
     /// The artist an album is filed under: the album artist, else the
     /// track's artist.
     pub fn filed_artist(&self) -> &str {
-        if self.album_artist.trim().is_empty() {
+        if let Some(filed) = &self.filed {
+            filed
+        } else if self.album_artist.trim().is_empty() {
             &self.artist
         } else {
             &self.album_artist
@@ -149,6 +161,10 @@ impl Library {
     pub fn new(mut tracks: Vec<Track>) -> Library {
         // A stable order of tracks makes the grouping deterministic.
         tracks.sort_by(|a, b| a.path.cmp(&b.path));
+        let filed = filed_without_album_artist(&tracks);
+        for (t, f) in tracks.iter_mut().zip(filed) {
+            t.filed = f;
+        }
         let mut albums: Vec<Album> = Vec::new();
         let mut album_index: HashMap<String, AlbumId> = HashMap::new();
         let mut album_of = Vec::with_capacity(tracks.len());
@@ -279,6 +295,96 @@ pub fn query_words(query: &str) -> Vec<String> {
     query.split_whitespace().map(search_form).collect()
 }
 
+/// The artist to file tracks under whose tags have no album artist, where
+/// the track's artist would split their album (one album per artist): the
+/// tracks of a folder sharing an album title (not empty), none of them
+/// with an album artist. By at least three main artists of whom none has
+/// more than half of them (at least three tracks): a compilation, filed
+/// under [`VARIOUS_ARTISTS`]. By one main artist under several names (an
+/// album with guests: "A", "A feat. B", "A & C"): filed under that artist,
+/// as one of its tracks names it alone (else as the first names it). The
+/// main artist is the name before "feat.", "&", "," and the like.
+fn filed_without_album_artist(tracks: &[Track]) -> Vec<Option<String>> {
+    let mut groups: HashMap<(PathBuf, String), Vec<usize>> = HashMap::new();
+    for (i, t) in tracks.iter().enumerate() {
+        let album = t.album.trim().to_lowercase();
+        if album.is_empty() {
+            continue;
+        }
+        groups.entry((folder_of(t), album)).or_default().push(i);
+    }
+    let mut filed = vec![None; tracks.len()];
+    for ids in groups.values() {
+        if ids.len() < 2
+            || ids
+                .iter()
+                .any(|&i| !tracks[i].album_artist.trim().is_empty())
+        {
+            continue;
+        }
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for &i in ids {
+            *counts.entry(main_artist(&tracks[i].artist)).or_default() += 1;
+        }
+        let most = counts.values().copied().max().unwrap_or(0);
+        let name = if ids.len() >= 3 && counts.len() >= 3 && most * 2 <= ids.len() {
+            Some(VARIOUS_ARTISTS.to_owned())
+        } else if counts.len() == 1 {
+            // One artist; under several names only with guests.
+            let names: std::collections::HashSet<String> = ids
+                .iter()
+                .map(|&i| tracks[i].artist.trim().to_lowercase())
+                .collect();
+            (names.len() > 1).then(|| {
+                let main = counts.keys().next().cloned().unwrap_or_default();
+                ids.iter()
+                    .map(|&i| tracks[i].artist.trim())
+                    .find(|a| a.to_lowercase() == main)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| {
+                        // None names it alone: as the first names it.
+                        let first = tracks[ids[0]].artist.trim();
+                        first.get(..main.len()).unwrap_or(first).trim().to_owned()
+                    })
+            })
+        } else {
+            None
+        };
+        if let Some(name) = name {
+            for &i in ids {
+                filed[i] = Some(name.clone());
+            }
+        }
+    }
+    filed
+}
+
+/// The artist before any guests: "A feat. B", "A & B", "A, B" are "a".
+fn main_artist(artist: &str) -> String {
+    let lower = artist.trim().to_lowercase();
+    let cut = [
+        " feat.",
+        " feat ",
+        " ft.",
+        " ft ",
+        " featuring ",
+        " & ",
+        " and ",
+        ", ",
+        " x ",
+        " vs.",
+        " vs ",
+        " with ",
+        " / ",
+        ";",
+    ]
+    .iter()
+    .filter_map(|sep| lower.find(sep))
+    .min()
+    .unwrap_or(lower.len());
+    lower[..cut].trim().to_owned()
+}
+
 /// The lower-case filed artist and album title of `t`'s album.
 fn album_key(t: &Track) -> String {
     format!(
@@ -366,6 +472,48 @@ fn album_order(a: &Track, b: &Track) -> Ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn in_folder(folder: &str, artist: &str, album: &str, n: u16) -> Track {
+        Track {
+            path: PathBuf::from(format!(r"D:\Music\{folder}\{n:02}.mp3")),
+            artist: artist.into(),
+            album: album.into(),
+            track: n,
+            ..Track::default()
+        }
+    }
+
+    #[test]
+    fn albums_without_an_album_artist_are_not_split_by_artist() {
+        let comp = ["Abba", "Queen", "Toto", "Abba feat. X"]
+            .iter()
+            .enumerate()
+            .map(|(i, a)| in_folder("Hits", a, "Hits of the 80s", i as u16 + 1));
+        // An artist's album with guests stays the artist's.
+        let guests = ["Ayreon", "Ayreon feat. Floor", "Ayreon & Hansi", "Ayreon"]
+            .iter()
+            .enumerate()
+            .map(|(i, a)| in_folder("Ayreon", a, "01011001", i as u16 + 1));
+        // Guests on every track: the name before them.
+        let all_guests = ["Edguy feat. A", "Edguy feat. B"]
+            .iter()
+            .enumerate()
+            .map(|(i, a)| in_folder("Edguy", a, "Mandrake", i as u16 + 1));
+        let lib = Library::new(comp.chain(guests).chain(all_guests).collect());
+        assert_eq!(lib.albums.len(), 3, "{:?}", lib.albums);
+        let names: Vec<&str> = lib.artists.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, ["Ayreon", "Edguy", VARIOUS_ARTISTS]);
+        // One with an album artist is left as tagged.
+        let mut tagged: Vec<Track> = ["Abba", "Queen", "Toto"]
+            .iter()
+            .enumerate()
+            .map(|(i, a)| in_folder("Tagged", a, "Mix", i as u16 + 1))
+            .collect();
+        tagged[0].album_artist = "DJ".into();
+        let lib = Library::new(tagged);
+        assert_eq!(lib.albums.len(), 3);
+        assert_eq!(main_artist("Hans Zimmer & Lisa Gerrard"), "hans zimmer");
+    }
 
     fn track(
         path: &str,
