@@ -54,8 +54,8 @@ impl Page {
                 "Язык, тема и цвет, вид панели плеера и медиаклавиши."
             ),
             Page::Sound => tr!(
-                "The device the sound goes to; one loudness for every track, the limiter, the equalizer and the enhancer.",
-                "Устройство, на которое выводится звук; одна громкость у всех треков, лимитер, эквалайзер и улучшение звука."
+                "The device the sound goes to; one loudness for every track, the limiter, the equalizer, the crossfade and the enhancer.",
+                "Устройство, на которое выводится звук; одна громкость у всех треков, лимитер, эквалайзер, кроссфейд и улучшение звука."
             ),
             Page::Updates => tr!(
                 "Asking GitHub whether a newer version is out.",
@@ -72,6 +72,8 @@ pub struct Changed {
     pub device: bool,
     /// The sound processing (`settings.dsp`).
     pub dsp: bool,
+    /// The crossfade (`settings.crossfade`, `crossfade_in_albums`).
+    pub crossfade: bool,
     /// The theme or the accent: `palette::set` and `apply`.
     pub look: bool,
     /// Anything to save.
@@ -255,6 +257,8 @@ impl SettingsDialog {
         }
         changed.device = settings.output_device != before.output_device;
         changed.dsp = settings.dsp != before.dsp;
+        changed.crossfade = (settings.crossfade, settings.crossfade_in_albums)
+            != (before.crossfade, before.crossfade_in_albums);
         changed.look = settings.look() != before.look();
         changed.any = *settings != before || updates.enabled != checking;
         changed
@@ -649,7 +653,13 @@ fn sound(ui: &mut Ui, settings: &mut Settings, devices: &[Device], naming: &mut 
             },
         );
     });
-    processing(ui, &mut settings.dsp, &mut settings.eq_presets, naming);
+    processing(
+        ui,
+        &mut settings.dsp,
+        &mut settings.eq_presets,
+        naming,
+        (&mut settings.crossfade, &mut settings.crossfade_in_albums),
+    );
 }
 
 /// The loudness, the equalizer and the enhancer.
@@ -658,6 +668,7 @@ fn processing(
     dsp: &mut DspSettings,
     presets: &mut Vec<EqPreset>,
     naming: &mut Option<String>,
+    crossfade: (&mut u8, &mut bool),
 ) {
     section(ui, tr!("Loudness", "Громкость"), |ui| {
         row(
@@ -689,6 +700,39 @@ fn processing(
         ui.add_space(8.0);
         equalizer(ui, dsp, presets, naming);
     });
+    section(
+        ui,
+        tr!("Between tracks", "Между треками"),
+        |ui| {
+            row(
+                ui,
+                tr!("Crossfade", "Кроссфейд"),
+                Some(tr!(
+                    "The end of a track fades into the start of the next, this many seconds; 0: one after the other, without a gap.",
+                    "Конец трека плавно переходит в начало следующего за столько секунд; 0 — один за другим, без паузы."
+                )),
+                CONTROL,
+                |ui| {
+                    ui.spacing_mut().slider_width = CONTROL - 70.0;
+                    ui.add(
+                        egui::Slider::new(crossfade.0, 0..=crate::player::MAX_CROSSFADE)
+                            .suffix(tr!(" s", " с")),
+                    );
+                },
+            );
+            divider(ui);
+            row(
+                ui,
+                tr!("Also within an album", "И внутри альбома"),
+                Some(tr!(
+                    "Off: the tracks of one folder play one after the other without a gap, as an album is meant to.",
+                    "Выключено — треки одной папки играют подряд без паузы, как задуман альбом."
+                )),
+                50.0,
+                |ui| ui.add_enabled_ui(*crossfade.0 > 0, |ui| switch(ui, crossfade.1)),
+            );
+        },
+    );
     section(ui, tr!("Enhancer", "Улучшение звука"), |ui| {
         row(
             ui,

@@ -151,6 +151,7 @@ impl App {
             settings.dsp.clone(),
         );
         let mut player = player;
+        player.set_crossfade(settings.crossfade, settings.crossfade_in_albums);
         let saved_playlist = load_playlist(&mut player, settings.playlist_current);
         // Played where it was left, once Play is pressed.
         if settings.playlist_position > 0
@@ -1411,6 +1412,10 @@ impl eframe::App for App {
         }
         if changed.dsp {
             self.player.set_dsp(&self.settings.dsp);
+        }
+        if changed.crossfade {
+            self.player
+                .set_crossfade(self.settings.crossfade, self.settings.crossfade_in_albums);
         }
         if changed.look {
             palette::set(self.settings.look());

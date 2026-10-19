@@ -14,6 +14,12 @@
 //!
 //! A device that goes away (unplugged, disabled) or a change of Windows'
 //! default device reopens the output and goes on from the position heard.
+//!
+//! Crossfade: a next track preloaded with a fade (`Cmd::Preload`'s last
+//! field, the player's choice) of the same format starts that long before
+//! the playing one ends: both are decoded and mixed into the ring with
+//! equal-power curves ([`Fade`]); the next track's segment starts where the
+//! fade does, so it is heard (and reported) from then on.
 
 pub mod decoder;
 pub mod dsp;
@@ -44,8 +50,8 @@ pub enum Cmd {
         gain: f32,
     },
     /// The track to play after the current one, without a gap (or none),
-    /// with its loudness gain.
-    Preload(Option<(u64, PathBuf, f32)>),
+    /// with its loudness gain and the crossfade into it (ms; 0: none).
+    Preload(Option<(u64, PathBuf, f32, u64)>),
     /// The loudness gain of the track `id`, measured meanwhile.
     Gain {
         id: u64,
@@ -175,6 +181,52 @@ struct Open {
     decoder: Decoder,
     /// The loudness gain (`dsp::track_gain`), 1 when not known.
     gain: f32,
+    /// Frames decoded so far (from where it was opened or sought).
+    decoded: u64,
+    /// The crossfade into it from the track before (ms; 0: none).
+    fade_ms: u64,
+}
+
+impl Open {
+    fn new(id: u64, path: PathBuf, decoder: Decoder, gain: f32, fade_ms: u64) -> Open {
+        Open {
+            id,
+            path,
+            decoder,
+            gain,
+            decoded: 0,
+            fade_ms,
+        }
+    }
+
+    /// Its length in frames, from the decoder's duration.
+    fn total_frames(&self) -> u64 {
+        (self.decoder.duration.max(0) as i128 * i128::from(self.decoder.rate) / i128::from(SECOND))
+            as u64
+    }
+}
+
+/// A crossfade under way: the track ending (`from`) and the next one
+/// (`Player::decoding`) decoded side by side and mixed into the ring.
+struct Fade {
+    from: Open,
+    /// Its length in frames, and the frames mixed so far.
+    len: u64,
+    done: u64,
+    /// Decoded and not yet mixed, of each.
+    a: VecDeque<f32>,
+    b: VecDeque<f32>,
+    a_ended: bool,
+    /// The ending track's loudness gain over the next one's: the chain
+    /// applies the next one's to the mix.
+    ratio: f32,
+}
+
+/// The gains of the ending and the next track at `t` (0 to 1) of a fade:
+/// equal power, so the sum is as loud throughout.
+pub fn fade_gains(t: f32) -> (f32, f32) {
+    let x = t.clamp(0.0, 1.0) * std::f32::consts::FRAC_PI_2;
+    (x.cos(), x.sin())
 }
 
 /// Where a track's first frame went among the frames written since the
@@ -205,6 +257,8 @@ struct Player<'a> {
     format: (u32, u16),
     decoding: Option<Open>,
     next: Option<Open>,
+    /// A crossfade into `decoding` under way.
+    fade: Option<Fade>,
     ring: VecDeque<f32>,
     written: u64,
     segments: VecDeque<Segment>,
@@ -250,6 +304,7 @@ fn run(
         format: (0, 0),
         decoding: None,
         next: None,
+        fade: None,
         ring: VecDeque::new(),
         written: 0,
         segments: VecDeque::new(),
@@ -317,15 +372,7 @@ impl Player<'_> {
                 // the one after this is preloaded anew once it starts.
                 self.next = None;
                 match Decoder::open(&path) {
-                    Ok(decoder) => self.begin(
-                        Open {
-                            id,
-                            path,
-                            decoder,
-                            gain,
-                        },
-                        0,
-                    ),
+                    Ok(decoder) => self.begin(Open::new(id, path, decoder, gain, 0), 0),
                     Err(e) => {
                         // Not the track before going on meanwhile.
                         self.stop();
@@ -337,18 +384,13 @@ impl Player<'_> {
                 }
             }
             Cmd::Preload(None) => self.next = None,
-            Cmd::Preload(Some((id, path, gain))) => {
+            Cmd::Preload(Some((id, path, gain, fade_ms))) => {
                 if self.next.as_ref().is_some_and(|n| n.id == id) {
                     return;
                 }
                 match Decoder::open(&path) {
                     Ok(decoder) => {
-                        self.next = Some(Open {
-                            id,
-                            path,
-                            decoder,
-                            gain,
-                        });
+                        self.next = Some(Open::new(id, path, decoder, gain, fade_ms));
                         // The track decoded to its end before the next was
                         // known (a short one, one with nothing in it, an
                         // entry added at the end): it goes on now.
@@ -419,6 +461,7 @@ impl Player<'_> {
     fn stop(&mut self) {
         self.decoding = None;
         self.next = None;
+        self.fade = None;
         self.ring.clear();
         self.segments.clear();
         self.heard_id = None;
@@ -442,6 +485,9 @@ impl Player<'_> {
         {
             log::warn!("cannot seek: {}", mf::describe(&e));
         }
+        open.decoded = from_ms * u64::from(open.decoder.rate) / 1000;
+        // A fade under way was of the sound before.
+        self.fade = None;
         if self.out.is_none() || self.format != format {
             self.out = None;
             match Wasapi::open(format.0, format.1, &self.device) {
@@ -520,14 +566,10 @@ impl Player<'_> {
                 if let Some(mut a) = ahead
                     && a.decoder.seek(0).is_ok()
                 {
+                    a.decoded = 0;
                     self.next = Some(a);
                 }
-                Decoder::open(&path).map(|decoder| Open {
-                    id,
-                    path,
-                    decoder,
-                    gain,
-                })
+                Decoder::open(&path).map(|decoder| Open::new(id, path, decoder, gain, 0))
             }
         };
         match open {
@@ -559,11 +601,21 @@ impl Player<'_> {
         if !self.paused {
             let target = out.buffer_frames() as usize * 2 * channels;
             while self.ring.len() < target && !self.eos && !self.format_change {
+                if self.fade.is_some() {
+                    self.fade_step(channels);
+                    continue;
+                }
+                if self.start_fade(channels) {
+                    continue;
+                }
                 let Some(open) = self.decoding.as_mut() else {
                     break;
                 };
                 match open.decoder.next() {
-                    Ok(Some(block)) => self.ring.extend(block),
+                    Ok(Some(block)) => {
+                        open.decoded += (block.len() / channels) as u64;
+                        self.ring.extend(block);
+                    }
                     Ok(None) => self.track_decoded(),
                     Err(e) => {
                         // A damaged end of a file: as if it ended there.
@@ -683,6 +735,106 @@ impl Player<'_> {
         }
     }
 
+    /// Starts a crossfade when the next track asks for one, has the same
+    /// format, and the decoding one is that close to its end; true if it
+    /// started. The next track's segment starts here: it is heard from
+    /// the fade's start.
+    fn start_fade(&mut self, channels: usize) -> bool {
+        let (Some(cur), Some(next)) = (&self.decoding, &self.next) else {
+            return false;
+        };
+        if next.fade_ms == 0 || (next.decoder.rate, next.decoder.channels) != self.format {
+            return false;
+        }
+        let total = cur.total_frames();
+        let left = total.saturating_sub(cur.decoded);
+        // Not longer than half of either track.
+        let want = (next.fade_ms * u64::from(self.format.0) / 1000)
+            .min(total / 2)
+            .min(next.total_frames() / 2);
+        if want == 0 || left > want || left == 0 {
+            return false;
+        }
+        let (Some(from), Some(next)) = (self.decoding.take(), self.next.take()) else {
+            return false;
+        };
+        self.segments.push_back(Segment {
+            start: self.written + (self.ring.len() / channels) as u64,
+            id: next.id,
+            path: next.path.clone(),
+            origin_ms: 0,
+            duration_ms: (next.decoder.duration / (SECOND / 1000)) as u64,
+            gain: next.gain,
+        });
+        let ratio = if next.gain > 0.0 {
+            from.gain / next.gain
+        } else {
+            1.0
+        };
+        log::debug!("audio: crossfade of {left} frames into {}", next.id);
+        self.fade = Some(Fade {
+            from,
+            len: left,
+            done: 0,
+            a: VecDeque::new(),
+            b: VecDeque::new(),
+            a_ended: false,
+            ratio,
+        });
+        self.decoding = Some(next);
+        true
+    }
+
+    /// A piece of the crossfade decoded and mixed into the ring; at its end
+    /// the ending track is dropped and the next goes on alone.
+    fn fade_step(&mut self, channels: usize) {
+        const CHUNK: usize = 4096;
+        let (Some(fade), Some(next)) = (self.fade.as_mut(), self.decoding.as_mut()) else {
+            self.fade = None;
+            return;
+        };
+        while fade.a.len() < CHUNK * channels && !fade.a_ended {
+            match fade.from.decoder.next() {
+                Ok(Some(block)) => fade.a.extend(block),
+                // Its end (or a damaged end): silence for the rest.
+                _ => fade.a_ended = true,
+            }
+        }
+        let mut next_ended = false;
+        while fade.b.len() < CHUNK * channels {
+            match next.decoder.next() {
+                Ok(Some(block)) => {
+                    next.decoded += (block.len() / channels) as u64;
+                    fade.b.extend(block);
+                }
+                _ => {
+                    next_ended = true;
+                    break;
+                }
+            }
+        }
+        let n = (fade.b.len() / channels).min((fade.len - fade.done) as usize);
+        for i in 0..n {
+            let t = (fade.done + i as u64) as f32 / fade.len as f32;
+            let (ga, gb) = fade_gains(t);
+            for _ in 0..channels {
+                let a = fade.a.pop_front().unwrap_or(0.0);
+                let b = fade.b.pop_front().unwrap_or(0.0);
+                self.ring.push_back(a * ga * fade.ratio + b * gb);
+            }
+        }
+        fade.done += n as u64;
+        if fade.done >= fade.len || n == 0 {
+            // The rest of the next track's samples as they are.
+            let rest: Vec<f32> = fade.b.drain(..).collect();
+            self.ring.extend(rest);
+            self.fade = None;
+            if next_ended {
+                self.track_decoded();
+            }
+        }
+    }
+
     /// The decoding track ended: the next one goes on in the same ring if
     /// it has the same format.
     fn track_decoded(&mut self) {
@@ -720,6 +872,17 @@ impl Player<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fade_gains_keep_the_power() {
+        for i in 0..=10 {
+            let (a, b) = fade_gains(i as f32 / 10.0);
+            assert!((a * a + b * b - 1.0).abs() < 1e-5);
+        }
+        assert_eq!(fade_gains(0.0), (1.0, 0.0));
+        let (a, b) = fade_gains(1.0);
+        assert!(a.abs() < 1e-6 && (b - 1.0).abs() < 1e-6);
+    }
 
     #[test]
     fn volume_to_gain() {
@@ -800,7 +963,7 @@ mod tests {
         assert!(wait(&|e| matches!(e, Event::Started { id: 1 }), 5));
         let duration = engine.duration_ms();
         assert!(duration > 5000, "{duration}");
-        engine.send(Cmd::Preload(Some((2, second, 1.0))));
+        engine.send(Cmd::Preload(Some((2, second, 1.0, 0))));
         engine.send(Cmd::Seek(duration - 1500));
         // The second starts within the second and a half left, and the
         // first does not end on its own.
@@ -810,6 +973,73 @@ mod tests {
         let duration = engine.duration_ms();
         engine.send(Cmd::Seek(duration - 1000));
         assert!(wait(&|e| matches!(e, Event::Ended), 4));
+    }
+
+    /// A crossfade of 2 s: with 4 s of the first track left, the second
+    /// is heard (`Started`) about 2 s later, not 4, from its start; the
+    /// first never ends on its own. `METALAMP_SAMPLE` as above.
+    #[test]
+    #[ignore = "needs METALAMP_SAMPLE and a sound device; plays a few seconds"]
+    fn engine_crossfades() {
+        use std::time::Instant;
+        let first = PathBuf::from(std::env::var("METALAMP_SAMPLE").expect("METALAMP_SAMPLE"));
+        let mut files: Vec<PathBuf> = std::fs::read_dir(first.parent().unwrap())
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| crate::filetypes::is_audio(p))
+            .collect();
+        files.sort();
+        let second = files
+            .iter()
+            .skip_while(|p| **p != first)
+            .nth(1)
+            .cloned()
+            .expect("a second file in the folder");
+        let engine = Engine::start(
+            egui::Context::default(),
+            String::new(),
+            dsp::DspSettings::default(),
+        );
+        engine.set_gain(0.05);
+        engine.send(Cmd::Play {
+            id: 1,
+            path: first,
+            gain: 1.0,
+        });
+        let until = Instant::now() + Duration::from_secs(5);
+        while engine.duration_ms() == 0 && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let duration = engine.duration_ms();
+        assert!(duration > 10_000, "{duration}");
+        engine.send(Cmd::Preload(Some((2, second, 1.0, 2000))));
+        engine.send(Cmd::Seek(duration - 4000));
+        // Let the seek take effect before the clock starts.
+        std::thread::sleep(Duration::from_millis(200));
+        let _ = engine.poll();
+        let from = Instant::now();
+        let mut started = None;
+        while from.elapsed() < Duration::from_secs(6) && started.is_none() {
+            for e in engine.poll() {
+                assert!(!matches!(e, Event::Ended | Event::Failed { .. }), "{e:?}");
+                if matches!(e, Event::Started { id: 2 }) {
+                    started = Some((from.elapsed(), engine.position_ms()));
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let (after, position) = started.expect("the second track started");
+        println!(
+            "the second heard {} ms after, at {position} ms",
+            after.as_millis()
+        );
+        assert!(
+            (1300..2700).contains(&after.as_millis()),
+            "{} ms",
+            after.as_millis()
+        );
+        assert!(position < 1000, "{position}");
+        engine.send(Cmd::Stop);
     }
 
     /// A track chosen while paused plays (the pause used to stay on in the

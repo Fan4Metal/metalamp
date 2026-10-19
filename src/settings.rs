@@ -87,6 +87,10 @@ pub struct Settings {
     pub dsp: crate::audio::dsp::DspSettings,
     /// The user's equalizer presets (the classic ones are built in).
     pub eq_presets: Vec<EqPreset>,
+    /// The crossfade between tracks, in seconds (0: none), and whether
+    /// between the tracks of one folder too (else albums play gapless).
+    pub crossfade: u8,
+    pub crossfade_in_albums: bool,
     /// When the media keys are the player's.
     pub media_keys: MediaKeys,
     /// The look: the base theme and the controls' colour.
@@ -259,6 +263,8 @@ impl Default for Settings {
             output_device_name: String::new(),
             dsp: Default::default(),
             eq_presets: Vec::new(),
+            crossfade: 0,
+            crossfade_in_albums: false,
             media_keys: MediaKeys::default(),
             theme: Default::default(),
             accent: Default::default(),

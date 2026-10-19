@@ -14,6 +14,9 @@ use crate::audio::{self, Cmd, Engine, Event};
 use crate::loudness::Loudness;
 use crate::queue::{Queue, Repeat};
 
+/// The longest crossfade, in seconds.
+pub const MAX_CROSSFADE: u8 = 12;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
     Stopped,
@@ -41,6 +44,10 @@ pub struct Player {
     failed_in_row: usize,
     /// The last failure, for the status line.
     pub error: Option<String>,
+    /// The crossfade (ms; 0: none), and whether between tracks of one
+    /// folder too (else an album plays gapless).
+    crossfade_ms: u64,
+    crossfade_in_albums: bool,
     /// Stop when the track heard ends (Shift+V): nothing is preloaded;
     /// off again once it has stopped.
     pub stop_after: bool,
@@ -90,6 +97,8 @@ impl Player {
             error: None,
             resume: None,
             stop_after: false,
+            crossfade_ms: 0,
+            crossfade_in_albums: false,
             loudness,
             dsp,
         }
@@ -225,6 +234,37 @@ impl Player {
         let at = self.queue.move_next(indices);
         self.refresh_preload();
         at
+    }
+
+    /// The crossfade between tracks: `seconds` (0: none), between the
+    /// tracks of one folder too or not. The track preloaded is preloaded
+    /// again with it.
+    pub fn set_crossfade(&mut self, seconds: u8, in_albums: bool) {
+        let ms = u64::from(seconds.min(MAX_CROSSFADE)) * 1000;
+        if (ms, in_albums) == (self.crossfade_ms, self.crossfade_in_albums) {
+            return;
+        }
+        self.crossfade_ms = ms;
+        self.crossfade_in_albums = in_albums;
+        self.preloaded = None;
+        self.refresh_preload();
+    }
+
+    /// The crossfade into `next` from the current entry (ms): none between
+    /// tracks of one folder (an album, gapless) unless asked for.
+    fn fade_into(&self, next: &Path) -> u64 {
+        if self.crossfade_ms == 0 {
+            return 0;
+        }
+        let same_folder = self
+            .queue
+            .current_entry()
+            .is_some_and(|c| c.path.parent() == next.parent());
+        if same_folder && !self.crossfade_in_albums {
+            0
+        } else {
+            self.crossfade_ms
+        }
     }
 
     /// Stop after the track heard, or not (Shift+V).
@@ -397,7 +437,9 @@ impl Player {
                 let token = self.token_for(e.id);
                 self.preloaded = Some((token, e.id));
                 let gain = self.gain_for(&e.path);
-                self.engine.send(Cmd::Preload(Some((token, e.path, gain))));
+                let fade = self.fade_into(&e.path);
+                self.engine
+                    .send(Cmd::Preload(Some((token, e.path, gain, fade))));
             }
             None => {
                 self.preloaded = None;
@@ -480,7 +522,9 @@ impl Player {
                             let token = self.token_for(e.id);
                             self.preloaded = Some((token, e.id));
                             let gain = self.gain_for(&e.path);
-                            self.engine.send(Cmd::Preload(Some((token, e.path, gain))));
+                            let fade = self.fade_into(&e.path);
+                            self.engine
+                                .send(Cmd::Preload(Some((token, e.path, gain, fade))));
                         }
                         continue;
                     }
