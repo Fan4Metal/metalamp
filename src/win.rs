@@ -256,13 +256,12 @@ fn dwm_set(hwnd: isize, attribute: u32, value: i32) -> bool {
 
 /// Round the corners of the frameless window as Windows 11 does its own
 /// (`DWMWA_WINDOW_CORNER_PREFERENCE` = `DWMWCP_ROUND`); Windows 10 has no
-/// such attribute and keeps them square. Also the dark frame colours for
-/// the window's border on Windows 11.
+/// such attribute and keeps them square. The border's colours follow the
+/// theme (`caption::set_dark`), not set here: a light theme started with
+/// a dark border.
 pub fn round_corners(hwnd: isize) {
-    const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
     const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
     const DWMWCP_ROUND: i32 = 2;
-    dwm_set(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, 1);
     dwm_set(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND);
 }
 
