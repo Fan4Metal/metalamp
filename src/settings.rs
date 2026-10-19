@@ -46,8 +46,10 @@ pub struct Settings {
     /// The library, the player bar and the playlist beside it; or the
     /// player bar over the playlist alone, as the early Winamp.
     pub window_layout: WindowLayout,
-    /// The visualization the switch turns back on (the last one shown).
-    pub visual_last: Visual,
+    /// The visualization at all (the settings' switch): off, its display
+    /// is dark and takes no click; on, `visualization` is the one chosen,
+    /// "none" among them.
+    pub visual_enabled: bool,
     /// The folders of the media library.
     pub library_folders: Vec<PathBuf>,
     /// The views of the library (filters over its tracks, `library::filter`),
@@ -255,14 +257,7 @@ pub enum Visual {
 }
 
 impl Visual {
-    /// The visualizations themselves, without `Off`.
-    pub const KINDS: [Visual; 4] = [
-        Visual::Spectrum,
-        Visual::Waveform,
-        Visual::Scope,
-        Visual::Spectrogram,
-    ];
-
+    /// As the display's menu and the settings list them, "none" last.
     pub const ALL: [Visual; 5] = [
         Visual::Spectrum,
         Visual::Waveform,
@@ -277,7 +272,7 @@ impl Visual {
             Visual::Waveform => tr!("Waveform", "Волна"),
             Visual::Scope => tr!("Oscilloscope", "Осциллограф"),
             Visual::Spectrogram => tr!("Spectrogram", "Спектрограмма"),
-            Visual::Off => tr!("Off", "Выключена"),
+            Visual::Off => tr!("No visualization", "Без визуализации"),
         }
     }
 
@@ -305,7 +300,7 @@ impl Default for Settings {
             window: None,
             playlist_window: None,
             window_layout: WindowLayout::default(),
-            visual_last: Visual::default(),
+            visual_enabled: true,
             library_folders: Vec::new(),
             views: Vec::new(),
             view: String::new(),
@@ -475,27 +470,14 @@ impl Settings {
         }
     }
 
-    /// The visualization on, as it was, or off.
-    pub fn set_visual_on(&mut self, on: bool) {
-        if on {
-            if self.visualization == Visual::Off {
-                self.visualization = self.visual_last;
-            }
+    /// The visualization shown: the one chosen while the switch is on,
+    /// else none.
+    pub fn visual_shown(&self) -> Visual {
+        if self.visual_enabled {
+            self.visualization
         } else {
-            self.set_visual(Visual::Off);
+            Visual::Off
         }
-    }
-
-    /// `visual` shown; the one before kept for the switch when it is off.
-    pub fn set_visual(&mut self, visual: Visual) {
-        if visual == Visual::Off {
-            if self.visualization != Visual::Off {
-                self.visual_last = self.visualization;
-            }
-        } else {
-            self.visual_last = visual;
-        }
-        self.visualization = visual;
     }
 
     pub fn from_json(bytes: &[u8]) -> Option<Settings> {
@@ -553,17 +535,18 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn the_visualization_switch_brings_the_last_one_back() {
-        let mut s = Settings::default();
-        s.set_visual(Visual::Scope);
-        s.set_visual_on(false);
-        assert_eq!(s.visualization, Visual::Off);
-        s.set_visual_on(true);
-        assert_eq!(s.visualization, Visual::Scope);
-        // Off from the display's menu, then the switch.
-        s.set_visual(Visual::Off);
-        s.set_visual_on(true);
-        assert_eq!(s.visualization, Visual::Scope);
+    fn the_visualization_switch_keeps_the_one_chosen() {
+        let mut s = Settings {
+            visualization: Visual::Scope,
+            visual_enabled: false,
+            ..Settings::default()
+        };
+        assert_eq!(s.visual_shown(), Visual::Off);
+        s.visual_enabled = true;
+        assert_eq!(s.visual_shown(), Visual::Scope);
+        // A click goes through "none" too.
+        assert_eq!(Visual::Spectrogram.next(), Visual::Off);
+        assert_eq!(Visual::Off.next(), Visual::Spectrum);
     }
 
     #[test]

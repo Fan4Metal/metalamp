@@ -1114,34 +1114,23 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
             ui,
             tr!("Visualization", "Визуализация"),
             Some(tr!(
-                "On the right of the player bar with a visualization; off, its display shows the program's name and takes no time. A click on it goes on to the next one.",
-                "Справа на панели плеера с визуализацией; выключенная, она показывает название программы и не тратит время. Щелчок по ней переключает на следующую."
+                "On the right of the player bar with a visualization; a click on it goes on to the next one, the right button lists them, \"No visualization\" (the program's name) among them. Switched off, it shows the program's name (the narrow player's room stays dark), takes no clicks and no time.",
+                "Справа на панели плеера с визуализацией; щелчок по ней переключает на следующую, правая кнопка показывает список, в том числе «Без визуализации» (название программы). Выключенная здесь, она показывает название программы (в узком плеере место остаётся тёмным), не отзывается на щелчки и не тратит время."
             )),
             CONTROL,
             |ui| {
-                let mut on = settings.visualization != Visual::Off;
-                if switch(ui, &mut on).changed() {
-                    settings.set_visual_on(on);
-                }
-                let shown = if on {
-                    settings.visualization
-                } else {
-                    settings.visual_last
-                };
-                let mut kind = shown;
+                switch(ui, &mut settings.visual_enabled);
+                let on = settings.visual_enabled;
                 ui.add_enabled_ui(on, |ui| {
                     egui::ComboBox::from_id_salt("settings_visual")
-                        .selected_text(kind.label())
+                        .selected_text(settings.visualization.label())
                         .width(CONTROL - 70.0)
                         .show_ui(ui, |ui| {
-                            for v in Visual::KINDS {
-                                ui.selectable_value(&mut kind, v, v.label());
+                            for v in Visual::ALL {
+                                ui.selectable_value(&mut settings.visualization, v, v.label());
                             }
                         });
                 });
-                if kind != shown {
-                    settings.set_visual(kind);
-                }
             },
         );
     });
@@ -2189,7 +2178,7 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     settings.bar_layout = d.bar_layout;
     settings.window_layout = d.window_layout;
     settings.visualization = d.visualization;
-    settings.visual_last = d.visual_last;
+    settings.visual_enabled = d.visual_enabled;
     settings.theme = d.theme;
     settings.accent = d.accent;
     settings.selection = d.selection;

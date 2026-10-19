@@ -9,9 +9,10 @@
 //! rolling from the right: the loud ones bright). The waveform and the
 //! spectrogram count the frames heard since the frame before (the tap's
 //! `end`), so they roll with the sound, whatever the frame rate; paused,
-//! they stand; stopped, they roll silence until they are empty. Off, the
-//! display shows the app icon and the name, and the app repaints only as
-//! the time needs.
+//! they stand; stopped, they roll silence until they are empty. None
+//! ("No visualization"), the display shows the app icon and the name, and
+//! the app repaints only as the time needs; switched off in the settings,
+//! nothing is painted (`player_bar::visual_display`).
 
 use std::collections::VecDeque;
 use std::time::Instant;

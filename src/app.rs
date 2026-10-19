@@ -550,6 +550,7 @@ impl App {
             heading,
             layout: self.bar_layout(),
             visual: self.settings.visualization,
+            visual_enabled: self.settings.visual_enabled,
             status: self.player.status,
             title,
             artist,
@@ -581,7 +582,7 @@ impl App {
             .player
             .heard_samples(crate::ui::visual::FETCH, &mut heard);
         self.visual.feed(
-            self.settings.visualization,
+            self.settings.visual_shown(),
             at.map(|h| (heard.as_slice(), h)),
             size,
         );
@@ -629,7 +630,7 @@ impl App {
                     self.place_changed = Some(Instant::now());
                 }
                 BarCmd::Visual(v) => {
-                    self.settings.set_visual(v);
+                    self.settings.visualization = v;
                     self.place_changed = Some(Instant::now());
                 }
                 BarCmd::Equalizer(button) => self.eq_window.toggle(button),
@@ -777,8 +778,7 @@ impl App {
                 self.place_changed = Some(Instant::now());
             }
             Cmd::Visualization => {
-                let on = self.settings.visualization == crate::settings::Visual::Off;
-                self.settings.set_visual_on(on);
+                self.settings.visual_enabled = !self.settings.visual_enabled;
                 self.place_changed = Some(Instant::now());
             }
             Cmd::WindowLayout => {
@@ -1518,7 +1518,7 @@ impl eframe::App for App {
         // the compact bar, the window minimized) only the time, the seek
         // bar and the taskbar's progress move.
         let shown = self.bar_layout() != crate::settings::BarLayout::Classic
-            && self.settings.visualization != crate::settings::Visual::Off
+            && self.settings.visual_shown() != crate::settings::Visual::Off
             && !self.settings.mini
             && ctx.input(|i| i.viewport().minimized) != Some(true);
         let moving = match self.player.status {

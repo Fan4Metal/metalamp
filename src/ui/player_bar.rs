@@ -83,6 +83,9 @@ pub struct NowPlaying<'a> {
     pub mute: bool,
     pub shuffle: bool,
     pub repeat: Repeat,
+    /// The visualization at all (the settings' switch): off, the display
+    /// takes no click and has no menu.
+    pub visual_enabled: bool,
     /// The equalizer is on.
     pub eq: bool,
     /// Playing stops after the track heard (Shift+V): Stop is lit.
@@ -200,7 +203,16 @@ fn full(
             egui::Stroke::new(1.0, palette::line()),
             egui::StrokeKind::Inside,
         );
-        visual_display(ui, painter, display, display.shrink(4.0), now, visual, cmds);
+        visual_display(
+            ui,
+            painter,
+            display,
+            display.shrink(4.0),
+            now,
+            visual,
+            true,
+            cmds,
+        );
     }
 }
 
@@ -271,7 +283,11 @@ fn time(
 }
 
 /// The visualization painted in `inner` of `display`; a click on the
-/// display goes on to the next one, the right button lists them.
+/// display goes on to the next one, the right button lists them. `logo`:
+/// "No visualization", or the visualization switched off, shows the
+/// program's name (the full bar), else the room stays dark (the narrow
+/// bar's, under the time).
+#[allow(clippy::too_many_arguments)]
 fn visual_display(
     ui: &mut Ui,
     painter: &egui::Painter,
@@ -279,9 +295,20 @@ fn visual_display(
     inner: Rect,
     now: &NowPlaying<'_>,
     visual: &mut Visualizer,
+    logo: bool,
     cmds: &mut Vec<BarCmd>,
 ) {
-    visual.paint(painter, inner);
+    // Switched off in the settings (or by its key): the logo (or the dark
+    // room), and no click and no menu.
+    if !now.visual_enabled {
+        if logo {
+            visual.paint(painter, inner);
+        }
+        return;
+    }
+    if logo || now.visual != Visual::Off {
+        visual.paint(painter, inner);
+    }
     let response = ui
         .interact(display, ui.id().with("visual"), Sense::click())
         .on_hover_text(format!(
@@ -355,6 +382,7 @@ fn winamp(
         winamp_visual_rect(rect),
         now,
         visual,
+        false,
         cmds,
     );
 
