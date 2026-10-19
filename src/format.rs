@@ -57,7 +57,8 @@ pub fn size_in(lang: Lang, bytes: u64) -> String {
     }
     let mut value = bytes as f64;
     let mut unit = 0;
-    while value >= 1024.0 && unit < units.len() - 1 {
+    // Rounded as shown: 1023.996 KB is 1.00 MB, not 1024.00 KB.
+    while (value * 100.0).round() >= 102_400.0 && unit < units.len() - 1 {
         value /= 1024.0;
         unit += 1;
     }
@@ -82,18 +83,24 @@ pub fn millis_in(lang: Lang, secs: f64) -> String {
     }
 }
 
-/// A sample rate: `44.1 kHz` / `44,1 кГц`, `48 kHz`.
+/// A sample rate: `44.1 kHz` / `44,1 кГц`, `48 kHz`, `22.05 kHz`.
 pub fn sample_rate(hz: u32) -> String {
-    let khz = hz as f32 / 1000.0;
-    let khz = if khz.fract() == 0.0 {
-        format!("{khz:.0}")
-    } else {
-        format!("{khz:.1}")
-    };
+    let khz = khz(hz);
     tr!(
         format!("{khz} kHz"),
         format!("{} кГц", khz.replace('.', ","))
     )
+}
+
+/// Hertz as kilohertz, every digit it has: `44.1`, `48`, `22.05` (from
+/// the integer: 22050 / 1000 in floats printed as `22.0`).
+fn khz(hz: u32) -> String {
+    let (whole, part) = (hz / 1000, hz % 1000);
+    if part == 0 {
+        whole.to_string()
+    } else {
+        format!("{whole}.{}", format!("{part:03}").trim_end_matches('0'))
+    }
 }
 
 /// The channels in words; `None` for 0.
@@ -190,6 +197,17 @@ mod tests {
         assert_eq!(size_in(Lang::En, 1536), "1.50 KB");
         assert_eq!(millis_in(Lang::Ru, 0.00042), "0,4 мс");
         assert_eq!(millis_in(Lang::En, 0.036), "36.0 ms");
+    }
+
+    #[test]
+    fn rates_and_rounded_sizes() {
+        assert_eq!(khz(44_100), "44.1");
+        assert_eq!(khz(48_000), "48");
+        assert_eq!(khz(22_050), "22.05");
+        assert_eq!(khz(11_025), "11.025");
+        assert_eq!(size_in(Lang::En, 1_048_575), "1.00 MB");
+        assert_eq!(size_in(Lang::En, 1_048_000), "1023.44 KB");
+        assert_eq!(size_in(Lang::En, 2048), "2.00 KB");
     }
 
     #[test]
