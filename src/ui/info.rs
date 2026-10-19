@@ -5,8 +5,10 @@
 //! properties as chips; the tag's fields in their usual order in two columns
 //! (empty ones as a dash), the tag's other fields under them; the file's
 //! path and the rest. Shown, not edited; the text can be selected and
-//! copied. The cross, Esc, Enter or a click outside closes it. The file is
-//! read on a thread of its own (`library::details`).
+//! copied. The cross, Esc, Enter or a click outside closes it. When the
+//! program's window cannot hold it (the player and playlist layout), it
+//! is a window of its own, as the settings are. The file is read on a
+//! thread of its own (`library::details`).
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -62,7 +64,17 @@ pub struct InfoView {
     /// To the reading thread, started with the first file asked for.
     requests: Option<Sender<PathBuf>>,
     results: Option<Receiver<Read>>,
+    /// In a window of its own (decided as it opens), and its handle once
+    /// found.
+    windowed: bool,
+    window_hwnd: Option<isize>,
 }
+
+/// The window of its own: its title (by which it is found) and height.
+fn window_title() -> &'static str {
+    tr!("File info", "Сведения о файле")
+}
+const WINDOW_HEIGHT: f32 = 640.0;
 
 impl InfoView {
     /// Open the window for `path`; it is read again (the tag may have been
@@ -122,24 +134,34 @@ impl InfoView {
 
     /// Draws the window while it is open; closes it on the cross, the
     /// button, Esc, Enter or a click outside.
-    pub fn show(&mut self, ctx: &egui::Context) {
+    pub fn show(&mut self, ctx: &egui::Context, owner: Option<isize>) {
         self.poll(ctx);
         if !self.open {
             return;
         }
         let fresh = std::mem::take(&mut self.fresh);
         let wanted = self.wanted.clone().unwrap_or_default();
-        let shown = self
-            .shown
-            .as_ref()
-            .filter(|(p, _)| *p == wanted)
-            .map(|(_, d)| d);
+        let read = self.shown.take();
+        let shown = read.as_ref().filter(|(p, _)| *p == wanted).map(|(_, d)| d);
         let cover = self
             .cover
             .as_ref()
             .filter(|(p, _)| *p == wanted)
             .map(|(_, t)| t.clone());
         let mut close = false;
+        if fresh {
+            let room = ctx.content_rect().size();
+            self.windowed = room.x < WIDTH + 64.0 || room.y < 420.0;
+            self.window_hwnd = None;
+        }
+        if self.windowed {
+            close |= self.window(ctx, owner, shown, &wanted, cover.as_ref(), fresh);
+            if close {
+                self.open = false;
+            }
+            self.shown = read;
+            return;
+        }
         let modal = egui::Modal::new(egui::Id::new("file_info"))
             .frame(
                 egui::Frame::window(&ctx.style_of(egui::Theme::Dark))
@@ -148,63 +170,152 @@ impl InfoView {
                     .corner_radius(10.0),
             )
             .show(ctx, |ui| {
-                ui.set_width(WIDTH);
-                ui.spacing_mut().item_spacing = vec2(8.0, 4.0);
-                match shown {
-                    None => {
-                        close |= hero(ui, None, &wanted, None);
-                        ui.add_space(16.0);
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            ui.weak(tr!("Reading…", "Чтение…"));
-                        });
-                    }
-                    Some(Err(e)) => {
-                        close |= hero(ui, None, &wanted, None);
-                        ui.add_space(16.0);
-                        ui.colored_label(
-                            palette::error(),
-                            tr!(
-                                format!("Cannot read the file: {e}"),
-                                format!("Не удалось прочитать файл: {e}")
-                            ),
-                        );
-                    }
-                    Some(Ok(d)) => {
-                        close |= hero(ui, Some(d), &wanted, cover.as_ref());
-                        // A long tag (lyrics, many fields) scrolls within
-                        // the screen instead of pushing the window off it.
-                        // The height is forced (`min_scrolled_height`), not
-                        // left to the room below: a centred modal is placed
-                        // by its size of the frame before, so an area that
-                        // only took the room left froze at the height the
-                        // window had while the file was read.
-                        let room =
-                            (ctx.content_rect().height() - 2.0 * 20.0 - COVER - 60.0).max(120.0);
-                        egui::ScrollArea::vertical()
-                            .id_salt("file_info_body")
-                            .min_scrolled_height(room)
-                            .max_height(room)
-                            .auto_shrink([false, true])
-                            .show(ui, |ui| {
-                                // Room for the scroll bar at the right edge
-                                // (`set_max_width` here also shrank the
-                                // area's height to its minimum).
-                                egui::Frame::new()
-                                    .inner_margin(egui::Margin {
-                                        right: 14,
-                                        ..egui::Margin::ZERO
-                                    })
-                                    .show(ui, |ui| body(ui, d));
-                            });
-                    }
-                }
+                let height = ctx.content_rect().height();
+                close |= content(ui, shown, &wanted, cover.as_ref(), Some(height));
             });
         let keys = !fresh && ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Enter));
         if close || keys || (!fresh && modal.should_close()) {
             self.open = false;
         }
+        self.shown = read;
     }
+
+    /// The info in a window of its own (the settings' way): frameless,
+    /// owned by the program's window, centred over it; moved by its top,
+    /// closed by the cross, Esc or Enter. Whether to close.
+    fn window(
+        &mut self,
+        ctx: &egui::Context,
+        owner: Option<isize>,
+        shown: Option<&Result<Details, String>>,
+        wanted: &Path,
+        cover: Option<&TextureHandle>,
+        fresh: bool,
+    ) -> bool {
+        let size = vec2(WIDTH + 40.0, WINDOW_HEIGHT);
+        let centre = ctx
+            .input(|i| i.viewport().outer_rect)
+            .unwrap_or(ctx.content_rect())
+            .center();
+        let builder = egui::ViewportBuilder::default()
+            .with_title(window_title())
+            .with_decorations(false)
+            .with_resizable(true)
+            .with_inner_size(size)
+            .with_min_inner_size(vec2(WIDTH + 40.0, 360.0))
+            .with_position(centre - size / 2.0)
+            .with_minimize_button(false)
+            .with_maximize_button(false)
+            .with_taskbar(false)
+            .with_icon(crate::window_icon());
+        let id = egui::ViewportId::from_hash_of("file_info_window");
+        let mut close = false;
+        ctx.show_viewport_immediate(id, builder, |ui, _class| {
+            let ctx = ui.ctx().clone();
+            close |= ctx.input(|i| i.viewport().close_requested());
+            close |=
+                !fresh && ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Enter));
+            crate::frameless::resize_edges(ui);
+            egui::CentralPanel::default()
+                .frame(
+                    egui::Frame::NONE
+                        .fill(palette::panel_bg())
+                        .inner_margin(egui::Margin::same(20)),
+                )
+                .show(ui, |ui| {
+                    // Its top moves it; the widgets on it come later and
+                    // take their clicks first.
+                    let top = egui::Rect::from_min_size(
+                        ctx.content_rect().min,
+                        vec2(ctx.content_rect().width(), 20.0 + COVER),
+                    );
+                    crate::frameless::drag_area(
+                        ui,
+                        top,
+                        ui.id().with("info_drag"),
+                        egui::Sense::hover(),
+                    );
+                    close |= content(ui, shown, wanted, cover, None);
+                });
+        });
+        if self.window_hwnd.is_none()
+            && let Some(main) = owner
+            && let Some(hwnd) = crate::win::thread_window(window_title())
+        {
+            self.window_hwnd = Some(hwnd);
+            crate::win::adopt(hwnd, main);
+        }
+        close
+    }
+}
+
+/// The window's content: the hero and, once read, the body in a scroll
+/// area for `height` (the program's window), or the rest of a window of
+/// its own (none);
+/// whether the cross was clicked.
+fn content(
+    ui: &mut Ui,
+    shown: Option<&Result<Details, String>>,
+    wanted: &Path,
+    cover: Option<&TextureHandle>,
+    height: Option<f32>,
+) -> bool {
+    let mut close = false;
+    ui.set_width(WIDTH);
+    ui.spacing_mut().item_spacing = vec2(8.0, 4.0);
+    match shown {
+        None => {
+            close |= hero(ui, None, wanted, None);
+            ui.add_space(16.0);
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.weak(tr!("Reading…", "Чтение…"));
+            });
+        }
+        Some(Err(e)) => {
+            close |= hero(ui, None, wanted, None);
+            ui.add_space(16.0);
+            ui.colored_label(
+                palette::error(),
+                tr!(
+                    format!("Cannot read the file: {e}"),
+                    format!("Не удалось прочитать файл: {e}")
+                ),
+            );
+        }
+        Some(Ok(d)) => {
+            close |= hero(ui, Some(d), wanted, cover);
+            // A long tag (lyrics, many fields) scrolls within
+            // the screen instead of pushing the window off it.
+            // The height is forced (`min_scrolled_height`), not
+            // left to the room below: a centred modal is placed
+            // by its size of the frame before, so an area that
+            // only took the room left froze at the height the
+            // window had while the file was read.
+            // In a window of its own (`height` none) the area takes the
+            // rest of it.
+            let room = height.map_or(ui.available_height(), |h| {
+                (h - 2.0 * 20.0 - COVER - 60.0).max(120.0)
+            });
+            egui::ScrollArea::vertical()
+                .id_salt("file_info_body")
+                .min_scrolled_height(room)
+                .max_height(room)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    // Room for the scroll bar at the right edge
+                    // (`set_max_width` here also shrank the
+                    // area's height to its minimum).
+                    egui::Frame::new()
+                        .inner_margin(egui::Margin {
+                            right: 14,
+                            ..egui::Margin::ZERO
+                        })
+                        .show(ui, |ui| body(ui, d));
+                });
+        }
+    }
+    close
 }
 
 /// The top of the window: the cover, the title, the artist, the album

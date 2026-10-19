@@ -410,9 +410,7 @@ impl SettingsDialog {
         // thread that is not the program's, found once it shows.
         if self.window_hwnd.is_none()
             && let Some(main) = owner
-            && let Some(hwnd) = crate::win::thread_windows()
-                .into_iter()
-                .find(|h| *h != main)
+            && let Some(hwnd) = crate::win::thread_window(tr!("Settings", "Настройки"))
         {
             self.window_hwnd = Some(hwnd);
             crate::win::adopt(hwnd, main);

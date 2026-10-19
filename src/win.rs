@@ -947,6 +947,17 @@ pub fn thread_windows() -> Vec<isize> {
     out
 }
 
+/// The visible window of this thread titled `title` (a viewport of the
+/// program's: eframe gives no handle for it).
+pub fn thread_window(title: &str) -> Option<isize> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowTextW;
+    thread_windows().into_iter().find(|&h| {
+        let mut text = [0u16; 128];
+        let n = unsafe { GetWindowTextW(h as _, text.as_mut_ptr(), text.len() as i32) };
+        n > 0 && String::from_utf16_lossy(&text[..n as usize]) == title
+    })
+}
+
 /// A window of the program's own (the settings'): owned by `owner`, so it
 /// stays over it and is minimized with it, rounded as it is, and centred
 /// over it within its work area.

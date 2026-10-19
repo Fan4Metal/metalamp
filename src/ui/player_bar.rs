@@ -386,9 +386,25 @@ fn winamp(
             galley,
             palette::text_bright(),
         );
-        if cut {
-            ui.interact(field, ui.id().with("winamp_title"), Sense::hover())
-                .on_hover_text(text);
+        // A double click: the file info.
+        let resp = ui.interact(field, ui.id().with("winamp_title"), Sense::click());
+        let tip = if cut {
+            format!(
+                "{text}\n{}",
+                tr!(
+                    "A double click: file info",
+                    "Двойной щелчок: сведения о файле"
+                )
+            )
+        } else {
+            tr!(
+                "A double click: file info",
+                "Двойной щелчок: сведения о файле"
+            )
+            .to_owned()
+        };
+        if crate::ui::double_clicked(&resp.on_hover_text(tip)) {
+            cmds.push(BarCmd::Info);
         }
         let facts = line(ui, &facts(now), 11.5, palette::text_weak(), right.width());
         painter.galley(

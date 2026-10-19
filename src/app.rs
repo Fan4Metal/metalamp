@@ -1546,6 +1546,12 @@ impl eframe::App for App {
     fn ui(&mut self, root_ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = root_ui.ctx().clone();
         self.uncloak(&ctx);
+        // `METALAMP_INFO=<file>`: the file info at start (GUI checks).
+        if let Some(path) = std::env::var_os("METALAMP_INFO")
+            && ctx.cumulative_frame_nr() == 1
+        {
+            self.info_request = Some(PathBuf::from(path));
+        }
         // `METALAMP_TAG_EDITOR=<file>`: the tag editor at start (GUI checks).
         if let Some(path) = std::env::var_os("METALAMP_TAG_EDITOR")
             && !self.tag_editor.open
@@ -1797,7 +1803,7 @@ impl eframe::App for App {
         if (&self.settings.dsp, &self.settings.eq_presets) != (&before.0, &before.1) {
             self.place_changed = Some(Instant::now());
         }
-        self.file_info.show(&ctx);
+        self.file_info.show(&ctx, self.hwnd);
         self.about.show(&ctx);
         if self
             .view_editor
