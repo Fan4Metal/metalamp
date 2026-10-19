@@ -68,6 +68,19 @@ fn read_tagged(path: &Path) -> Result<TaggedFile, FileParseError> {
 /// wrote a new tag in front of an old one leaves the old one's album
 /// behind it (an album that split in two).
 pub fn open(path: &Path, options: ParseOptions) -> Result<TaggedFile, FileParseError> {
+    let (holed, file_type) = first_tag_view(path)?;
+    let probe = Probe::new(BufReader::new(holed));
+    let probe = match file_type {
+        Some(t) => probe.set_file_type(t),
+        None => probe.guess_file_type()?,
+    };
+    probe.options(options).read()
+}
+
+/// `path` as `open` reads it (an MP3 without the ID3v2 tags after its
+/// first), and its type by its extension; also for writing its tags
+/// (`edit`), which must start from the tag that is read.
+pub(super) fn first_tag_view(path: &Path) -> std::io::Result<(Holed, Option<FileType>)> {
     let file_type = FileType::from_path(path);
     let mut file = File::open(path)?;
     let tags = if file_type == Some(FileType::Mpeg) {
@@ -95,17 +108,12 @@ pub fn open(path: &Path, options: ParseOptions) -> Result<TaggedFile, FileParseE
         pos: 0,
         real: None,
     };
-    let probe = Probe::new(BufReader::new(holed));
-    let probe = match file_type {
-        Some(t) => probe.set_file_type(t),
-        None => probe.guess_file_type()?,
-    };
-    probe.options(options).read()
+    Ok((holed, file_type))
 }
 
 /// A file seen without `skipped` bytes from `start` (the ID3v2 tags
 /// after the first; none skipped for most files).
-struct Holed {
+pub(super) struct Holed {
     file: File,
     start: u64,
     skipped: u64,

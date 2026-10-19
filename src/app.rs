@@ -88,6 +88,8 @@ pub struct App {
     /// The plays and ratings, and the clock of the track heard.
     pub(crate) stats: crate::stats::Stats,
     listening: crate::stats::Listening,
+    /// The tag editor.
+    tag_editor: crate::ui::tag_editor::TagEditor,
     /// The equalizer's window (the player bar's button).
     eq_window: crate::ui::eq_window::EqWindow,
     /// `METALAMP_VIEW_EDITOR` is set: open the editor once the library is
@@ -198,6 +200,7 @@ impl App {
             stats: crate::stats::Stats::load(),
             listening: crate::stats::Listening::default(),
             eq_window: crate::ui::eq_window::EqWindow::from_env(),
+            tag_editor: crate::ui::tag_editor::TagEditor::default(),
             env_view_editor: std::env::var_os("METALAMP_VIEW_EDITOR").is_some(),
         }
     }
@@ -345,6 +348,12 @@ impl App {
                 track,
                 to_album,
             } => self.go_to(album, track, to_album),
+            LibraryAction::EditTags(tracks) => {
+                let paths = self.paths_of(&tracks);
+                if let Some(ctx) = self.wake.get().cloned() {
+                    self.tag_editor.open(&ctx, paths);
+                }
+            }
             LibraryAction::Rate(tracks, n) => {
                 let paths = self.paths_of(&tracks);
                 self.stats.rate(&paths, n);
@@ -768,6 +777,15 @@ impl App {
         }
     }
 
+    /// The paths of the playlist's entries at `indices`.
+    fn playlist_paths(&self, indices: &[usize]) -> Vec<PathBuf> {
+        let entries = self.player.queue.entries();
+        indices
+            .iter()
+            .filter_map(|&i| entries.get(i).map(|e| e.path.clone()))
+            .collect()
+    }
+
     /// The name of the library view in use, if one narrows the library.
     pub(crate) fn view_name(&self) -> Option<&str> {
         self.settings.current_view().map(|v| v.name.as_str())
@@ -1056,6 +1074,13 @@ impl eframe::App for App {
     fn ui(&mut self, root_ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = root_ui.ctx().clone();
         self.uncloak(&ctx);
+        // `METALAMP_TAG_EDITOR=<file>`: the tag editor at start (GUI checks).
+        if let Some(path) = std::env::var_os("METALAMP_TAG_EDITOR")
+            && !self.tag_editor.open
+            && ctx.cumulative_frame_nr() == 1
+        {
+            self.tag_editor.open(&ctx, vec![PathBuf::from(path)]);
+        }
         if self.env_view_editor && self.loaded {
             self.env_view_editor = false;
             self.view_editor
@@ -1065,7 +1090,8 @@ impl eframe::App for App {
         let modal = self.about.open
             || self.file_info.open
             || self.settings_dialog.open
-            || self.view_editor.open;
+            || self.view_editor.open
+            || self.tag_editor.open;
         // Outside the modals only the search fields keep the focus: a
         // button that Tab focused took every key of the player until a
         // click elsewhere (the keys wait while anything has the focus).
@@ -1117,6 +1143,17 @@ impl eframe::App for App {
             if ctx.input_mut(|i| i.consume_key(Modifiers::ALT, Key::E)) {
                 self.settings.playlist_visible = !self.settings.playlist_visible;
                 self.place_changed = Some(Instant::now());
+            }
+            // Ctrl+E: the tag editor for the selection of the playlist when
+            // it has the keys, else of the tracks' table.
+            if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::E)) {
+                let paths = if self.playlist_view.focused {
+                    self.playlist_paths(&self.playlist_view.selection())
+                } else {
+                    let tracks = self.library_view.selected_tracks_of(&self.library);
+                    self.paths_of(&tracks)
+                };
+                self.tag_editor.open(&ctx, paths);
             }
             // Ctrl+1…9: the library's views, as the row under the artists
             // lists them.
@@ -1227,6 +1264,10 @@ impl eframe::App for App {
                     crate::ui::playlist::PlaylistAction::InfoPlaying => {
                         self.info_request = self.playing_or_current_path();
                     }
+                    crate::ui::playlist::PlaylistAction::EditTags(indices) => {
+                        let paths = self.playlist_paths(&indices);
+                        self.tag_editor.open(&ctx, paths);
+                    }
                     crate::ui::playlist::PlaylistAction::GoTo(i, to_album) => {
                         let track = self
                             .player
@@ -1280,6 +1321,10 @@ impl eframe::App for App {
             self.file_info.open(&ctx, &path);
         }
         crate::ui::paint_dragged_tracks(&ctx);
+        if self.tag_editor.show(&ctx).written {
+            // The files written: their tags read again.
+            self.rescan();
+        }
         // The equalizer's window, under the modals.
         let before = (self.settings.dsp.clone(), self.settings.eq_presets.clone());
         self.eq_window.show(

@@ -95,6 +95,11 @@ impl PlaylistView {
         self.dragging = false;
     }
 
+    /// The entries selected, in the list's order.
+    pub fn selection(&self) -> Vec<usize> {
+        self.selected.iter().copied().collect()
+    }
+
     /// The entry selected last, if any.
     pub fn selected_entry(&self) -> Option<usize> {
         self.anchor
@@ -114,6 +119,8 @@ pub enum PlaylistAction {
     /// "Go to album" (`true`) or "Go to artist" in the library for an
     /// entry.
     GoTo(usize, bool),
+    /// The tag editor for entries.
+    EditTags(Vec<usize>),
 }
 
 /// The line of an entry: "Artist – Title" from the library, else the
@@ -513,6 +520,16 @@ pub fn show(
                 && let Some(i) = pv.selected_entry()
             {
                 actions.push(PlaylistAction::Info(i));
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    first.is_some(),
+                    egui::Button::new(super::library::edit_tags_label()),
+                )
+                .clicked()
+            {
+                actions.push(PlaylistAction::EditTags(pv.selection()));
                 ui.close();
             }
             // To the library, for an entry it holds.

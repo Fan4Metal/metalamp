@@ -71,6 +71,8 @@ pub enum LibraryAction {
     EditView(String),
     /// Rate tracks: 0 (none) to 5 stars.
     Rate(Vec<TrackId>, u8),
+    /// Open the tag editor for tracks.
+    EditTags(Vec<TrackId>),
     /// "Go to album" (`to_album`) or "Go to artist": `album`'s, from
     /// `track` if a track's menu asked (it is selected there then).
     GoTo {
@@ -338,6 +340,21 @@ impl LibraryView {
             .as_ref()
             .filter(|k| k.library == Arc::as_ptr(library) as usize)?;
         self.selected_track()
+    }
+
+    /// The tracks selected in the tracks' table, if the view is of
+    /// `library` (see `selected_track_of`).
+    pub fn selected_tracks_of(&self, library: &Arc<Library>) -> Vec<TrackId> {
+        let (Some(key), Some(view)) = (&self.key, &self.view) else {
+            return Vec::new();
+        };
+        if key.library != Arc::as_ptr(library) as usize {
+            return Vec::new();
+        }
+        self.selected
+            .iter()
+            .filter_map(|&r| view.tracks.get(r).copied())
+            .collect()
     }
 
     /// The track selected last in the tracks' table, if any.
@@ -1978,6 +1995,7 @@ fn tracks_pane(
             MenuChoice::GoToAlbum,
             MenuChoice::GoToArtist,
             MenuChoice::Rating,
+            MenuChoice::EditTags,
             MenuChoice::Info,
         ]
     };
@@ -2003,6 +2021,10 @@ fn tracks_pane(
             if let Some(t) = lv.selected_track() {
                 actions.push(LibraryAction::Info(t));
             }
+        }
+        Some(MenuChoice::EditTags) => {
+            let tracks: Vec<TrackId> = lv.selected.iter().map(|&r| view.tracks[r]).collect();
+            actions.push(LibraryAction::EditTags(tracks));
         }
         Some(MenuChoice::Rate(n)) => {
             let tracks: Vec<TrackId> = lv.selected.iter().map(|&r| view.tracks[r]).collect();
@@ -2087,6 +2109,7 @@ enum MenuChoice {
     Rating,
     /// A rating chosen in it.
     Rate(u8),
+    EditTags,
 }
 
 /// A pane's context menu, opened where the right button was let go on a
@@ -2155,6 +2178,9 @@ fn context_menu(
                 MenuChoice::ShowInFolder,
                 tr!("Show in folder", "Показать в папке"),
             );
+            if extras.contains(&MenuChoice::EditTags) {
+                item(ui, MenuChoice::EditTags, edit_tags_label());
+            }
             if extras.contains(&MenuChoice::Info) {
                 item(
                     ui,
@@ -2164,6 +2190,11 @@ fn context_menu(
             }
         });
     choice.get()
+}
+
+/// The menus' "Edit tags…", shared with the playlist's.
+pub fn edit_tags_label() -> &'static str {
+    tr!("Edit tags… (Ctrl+E)", "Изменить теги… (Ctrl+E)")
 }
 
 /// The menus' "Go to album", shared with the playlist's.

@@ -7,6 +7,7 @@
 //! library at once and a rescan reads only the files that changed.
 
 pub mod details;
+pub mod edit;
 pub mod filter;
 pub mod index;
 pub mod scan;
