@@ -152,7 +152,7 @@ fn bench_loudness(files: &[PathBuf], out: &mut impl Write) {
         let started = Instant::now();
         match crate::loudness::measure_file(file) {
             Some(m) => {
-                let gain = dsp::biquad::gain_to_db(dsp::track_gain(m.lufs, m.peak));
+                let gain = dsp::biquad::gain_to_db(dsp::track_gain(m.lufs, m.peak, true));
                 let _ = writeln!(
                     out,
                     "{}: {:.1} LUFS, peak {:.2} dBFS, gain {gain:+.1} dB, {} ms",

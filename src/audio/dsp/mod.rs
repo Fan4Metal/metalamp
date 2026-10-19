@@ -1,7 +1,9 @@
 //! The sound processing between the decoder and the device, on the audio
 //! thread, a block at a time: the track's loudness gain (`normalize`),
 //! the ten-band equalizer, the enhancer, and a look-ahead limiter after
-//! them whenever any of them is on, so nothing clips. `DspSettings` is
+//! them whenever any of them is on, so nothing clips (unless `limiter` is
+//! turned off: then what goes past full scale is clipped by Windows, as in
+//! the players of old, and a raised preamp is heard). `DspSettings` is
 //! what the settings window edits (`settings.dsp`); the engine gets a
 //! copy with `Cmd::Dsp` and keeps the filters' state across changes.
 
@@ -39,6 +41,8 @@ pub struct DspSettings {
     pub clarity: u8,
     pub width: u8,
     pub warmth: u8,
+    /// The look-ahead limiter after the rest; on by default.
+    pub limiter: bool,
 }
 
 impl Default for DspSettings {
@@ -53,6 +57,7 @@ impl Default for DspSettings {
             clarity: 0,
             width: 0,
             warmth: 0,
+            limiter: true,
         }
     }
 }
@@ -76,10 +81,17 @@ impl DspSettings {
 
 /// The gain that brings a track measured at `lufs` with a sample peak of
 /// `peak` (1 = full scale) to `TARGET_LUFS`, capped so that its peaks
-/// stay within `PEAK_HEADROOM_DB` of the limiter's ceiling.
-pub fn track_gain(lufs: f32, peak: f32) -> f32 {
+/// stay within `PEAK_HEADROOM_DB` of the limiter's ceiling; without the
+/// limiter (`limiter` false), within full scale, so that normalisation
+/// alone never clips.
+pub fn track_gain(lufs: f32, peak: f32, limiter: bool) -> f32 {
     let wanted = TARGET_LUFS - lufs;
-    let cap = CEILING_DB + PEAK_HEADROOM_DB - biquad::gain_to_db(peak.max(1e-4));
+    let top = if limiter {
+        CEILING_DB + PEAK_HEADROOM_DB
+    } else {
+        0.0
+    };
+    let cap = top - biquad::gain_to_db(peak.max(1e-4));
     db_to_gain(wanted.min(cap))
 }
 
@@ -133,6 +145,11 @@ impl Chain {
         if settings.amounts() != self.settings.amounts() {
             self.enhancer.configure(settings.amounts());
         }
+        // A limiter turned on again starts empty, not with the sound of
+        // when it was turned off.
+        if settings.limiter && !self.settings.limiter {
+            self.limiter = limiter::Limiter::new(self.rate, self.channels, db_to_gain(CEILING_DB));
+        }
         self.settings = settings.clone();
     }
 
@@ -164,7 +181,9 @@ impl Chain {
         if s.enhancer {
             self.enhancer.process(samples);
         }
-        self.limiter.process(samples);
+        if s.limiter {
+            self.limiter.process(samples);
+        }
     }
 }
 
@@ -175,10 +194,12 @@ mod tests {
     #[test]
     fn track_gain_brings_to_the_target_within_the_peak_cap() {
         // A track at -10 LUFS is turned down 8 dB.
-        assert!((biquad::gain_to_db(track_gain(-10.0, 1.0)) + 8.0).abs() < 0.01);
+        assert!((biquad::gain_to_db(track_gain(-10.0, 1.0, true)) + 8.0).abs() < 0.01);
         // A quiet track at -30 LUFS with peaks at -6 dBFS: it wants +12 dB,
         // which would put its peaks at +6; the cap allows +2 dBFS, so +8.
-        assert!((biquad::gain_to_db(track_gain(-30.0, 0.5)) - 8.02).abs() < 0.05);
+        assert!((biquad::gain_to_db(track_gain(-30.0, 0.5, true)) - 8.02).abs() < 0.05);
+        // Without the limiter, up to full scale: +6.
+        assert!((biquad::gain_to_db(track_gain(-30.0, 0.5, false)) - 6.02).abs() < 0.05);
     }
 
     #[test]
@@ -207,9 +228,14 @@ mod tests {
     /// chain with the equalizer on, its preamp at `preamp` dB and the bands
     /// flat, past the limiter's start.
     fn through_preamp(level: f32, preamp: f32) -> f32 {
+        through(level, preamp, true)
+    }
+
+    fn through(level: f32, preamp: f32, limiter: bool) -> f32 {
         let settings = DspSettings {
             eq: true,
             preamp,
+            limiter,
             ..Default::default()
         };
         let mut c = Chain::new(48000, 2, &settings);
@@ -234,5 +260,7 @@ mod tests {
         assert!((through_preamp(-20.0, 6.0) + 14.0).abs() < 0.1);
         // ...a loud track is held at it.
         assert!((through_preamp(-3.0, 12.0) - CEILING_DB).abs() < 0.2);
+        // Without the limiter, raised past full scale (Windows clips it).
+        assert!((through(-3.0, 12.0, false) - 9.0).abs() < 0.1);
     }
 }

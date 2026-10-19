@@ -731,6 +731,18 @@ fn processing(
             &mut dsp.warmth,
         );
     });
+    section(ui, tr!("Limiter", "Лимитер"), |ui| {
+        row(
+            ui,
+            tr!("Limiter", "Лимитер"),
+            Some(tr!(
+                "Holds the peaks at -1 dBFS after the processing, so raised bands, preamp or enhancer never clip; a raised preamp then makes a loud track denser rather than louder. Turned off, a raise is heard in full, and what passes full scale is clipped by Windows.",
+                "Держит пики на -1 dBFS после обработки, чтобы поднятые полосы, предусиление или улучшение звука не клиповали; поднятое предусиление тогда делает громкий трек плотнее, а не громче. Если его выключить, подъём слышен целиком, а то, что выходит за полную шкалу, обрезает Windows."
+            )),
+            50.0,
+            |ui| switch(ui, &mut dsp.limiter),
+        );
+    });
 }
 
 /// A row with a slider of 0 to 10.
