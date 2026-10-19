@@ -1804,6 +1804,7 @@ impl eframe::App for App {
             &mut self.settings.dsp,
             &mut self.settings.eq_presets,
             !modal,
+            self.hwnd,
         );
         if self.settings.dsp != before.0 {
             self.player.set_dsp(&self.settings.dsp);
