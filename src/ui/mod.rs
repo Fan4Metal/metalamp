@@ -83,6 +83,14 @@ impl OwnWindow {
             ctx.request_repaint();
             ctx.request_repaint_of(egui::ViewportId::ROOT);
         };
+        // A viewport left out of a frame (the main window growing paints
+        // only its ground) is destroyed by egui and made again hidden:
+        // the new window is found and shown anew.
+        if let Some(Some(hwnd)) = self.hwnd
+            && !crate::win::is_window(hwnd)
+        {
+            self.reset();
+        }
         match self.hwnd {
             None => {
                 self.looked += 1;

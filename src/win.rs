@@ -946,6 +946,11 @@ pub fn thread_windows() -> Vec<isize> {
     out
 }
 
+/// Whether `hwnd` is still a window (not destroyed).
+pub fn is_window(hwnd: isize) -> bool {
+    unsafe { windows_sys::Win32::UI::WindowsAndMessaging::IsWindow(hwnd as _) != 0 }
+}
+
 /// The window of this thread titled `title` (a viewport of the program's:
 /// eframe gives no handle for it), hidden or not.
 pub fn thread_window(title: &str) -> Option<isize> {
