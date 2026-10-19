@@ -494,7 +494,9 @@ impl Player {
                     changes.track = true;
                     self.refresh_preload();
                 }
-                Event::Ended => {
+                // The end of a play before the last: the new one starts.
+                Event::Ended { id: token } if token != 0 && token < self.last_play => {}
+                Event::Ended { .. } => {
                     // Stopped as asked: the next play goes on as usual.
                     self.stop_after = false;
                     self.status = Status::Stopped;

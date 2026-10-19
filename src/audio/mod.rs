@@ -74,8 +74,8 @@ pub enum Event {
     /// The track `id` is now heard (asked for, or the preloaded one after
     /// the last one ended).
     Started { id: u64 },
-    /// The last track ended and nothing was preloaded.
-    Ended,
+    /// The last track, `id`, ended and nothing was preloaded.
+    Ended { id: u64 },
     /// The track `id` cannot be played (or preloaded).
     Failed { id: u64, message: String },
 }
@@ -686,6 +686,7 @@ impl Player<'_> {
                 {
                     self.begin(next, 0);
                 } else {
+                    let id = self.segments.back().map_or(0, |s| s.id);
                     self.decoding = None;
                     self.next = None;
                     self.vis().clear();
@@ -696,7 +697,7 @@ impl Player<'_> {
                     if let Some(out) = &mut self.out {
                         let _ = out.reset();
                     }
-                    self.send(Event::Ended);
+                    self.send(Event::Ended { id });
                 }
             }
         }
@@ -980,7 +981,7 @@ mod tests {
         assert!(position < 1500, "the second began at {position} ms");
         let duration = engine.duration_ms();
         engine.send(Cmd::Seek(duration - 1000));
-        assert!(wait(&|e| matches!(e, Event::Ended), 4));
+        assert!(wait(&|e| matches!(e, Event::Ended { .. }), 4));
     }
 
     /// A crossfade of 2 s: with 4 s of the first track left, the second
@@ -1029,7 +1030,10 @@ mod tests {
         let mut started = None;
         while from.elapsed() < Duration::from_secs(6) && started.is_none() {
             for e in engine.poll() {
-                assert!(!matches!(e, Event::Ended | Event::Failed { .. }), "{e:?}");
+                assert!(
+                    !matches!(e, Event::Ended { .. } | Event::Failed { .. }),
+                    "{e:?}"
+                );
                 if matches!(e, Event::Started { id: 2 }) {
                     started = Some((from.elapsed(), engine.position_ms()));
                 }
