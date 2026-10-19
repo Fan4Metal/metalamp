@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use crate::format::natural_cmp;
 use crate::library::filter::{Field, Filter, Kind, Op, Rule, ViewIcon};
-use crate::library::{ArtistId, Library, search_form};
+use crate::library::{Library, search_form};
 use crate::palette;
 use crate::settings::Settings;
 use crate::stats::Stats;
@@ -36,8 +36,9 @@ pub struct ViewEditor {
     /// The name of the view being edited; `None` for a new one.
     editing: Option<String>,
     suggestions: Suggestions,
-    /// The counts, and the draft and statistics they were counted for.
-    counted: Option<(Filter, u64, Counts)>,
+    /// The counts, and the draft, statistics and library they were
+    /// counted for.
+    counted: Option<(Filter, u64, Shape, Counts)>,
 }
 
 /// The values the library holds, offered for a rule's value.
@@ -48,8 +49,25 @@ struct Suggestions {
     album_artists: Vec<String>,
     albums: Vec<String>,
     folders: Vec<String>,
-    /// Each album's artist, for the counts.
-    artist_of_album: Vec<ArtistId>,
+}
+
+/// Which library the counts are of: a scan swaps it while the editor is
+/// open.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Shape {
+    at: usize,
+    tracks: usize,
+    albums: usize,
+}
+
+impl Shape {
+    fn of(library: &Library) -> Shape {
+        Shape {
+            at: std::ptr::from_ref(library) as usize,
+            tracks: library.tracks.len(),
+            albums: library.albums.len(),
+        }
+    }
 }
 
 /// How many artists, albums and tracks a draft leaves.
@@ -73,12 +91,6 @@ impl Suggestions {
             v
         }
         let tracks = &library.tracks;
-        let mut artist_of_album = vec![0; library.albums.len()];
-        for (i, a) in library.artists.iter().enumerate() {
-            for &album in &a.albums {
-                artist_of_album[album as usize] = i as ArtistId;
-            }
-        }
         // The library's folders and the artists' folders under them.
         let folder_names = folders
             .iter()
@@ -100,7 +112,6 @@ impl Suggestions {
             album_artists: distinct(tracks.iter().map(|t| t.album_artist.as_str())),
             albums: distinct(library.albums.iter().map(|a| a.title.as_str())),
             folders: distinct(folders.iter().map(String::as_str)),
-            artist_of_album,
         }
     }
 
@@ -151,9 +162,11 @@ impl ViewEditor {
     /// The counts for the draft as it is, counted anew only when it
     /// changed.
     fn count(&mut self, library: &Library, stats: &Stats) -> Counts {
-        if let Some((draft, revision, counts)) = &self.counted
+        let shape = Shape::of(library);
+        if let Some((draft, revision, counted_for, counts)) = &self.counted
             && *draft == self.draft
             && *revision == stats.revision
+            && *counted_for == shape
         {
             return *counts;
         }
@@ -166,18 +179,19 @@ impl ViewEditor {
                 albums[library.album_of[t] as usize] = true;
             }
         }
-        let mut artists = vec![false; library.artists.len()];
-        for (a, &has) in albums.iter().enumerate() {
-            if has {
-                artists[self.suggestions.artist_of_album[a] as usize] = true;
-            }
-        }
+        // By the library counted, not the one the editor opened with: a
+        // scan under way swaps it with more albums.
+        let artists = library
+            .artists
+            .iter()
+            .filter(|a| a.albums.iter().any(|&album| albums[album as usize]))
+            .count();
         let counts = Counts {
-            artists: artists.iter().filter(|&&b| b).count(),
+            artists,
             albums: albums.iter().filter(|&&b| b).count(),
             tracks,
         };
-        self.counted = Some((self.draft.clone(), stats.revision, counts));
+        self.counted = Some((self.draft.clone(), stats.revision, shape, counts));
         counts
     }
 
