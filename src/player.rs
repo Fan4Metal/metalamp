@@ -192,6 +192,27 @@ impl Player {
         first
     }
 
+    /// `paths` right after the current entry (Play next); played if
+    /// nothing plays, as `enqueue`.
+    pub fn play_next(&mut self, paths: Vec<PathBuf>) {
+        if paths.is_empty() {
+            return;
+        }
+        let at = self.queue.current().map_or(self.queue.len(), |c| c + 1);
+        let first = self.insert(at, paths, true);
+        if self.status == Status::Stopped {
+            self.play_index(first);
+        }
+    }
+
+    /// The playlist's entries at `indices` moved right after the current
+    /// one; the index of the first.
+    pub fn move_next(&mut self, indices: &[usize]) -> usize {
+        let at = self.queue.move_next(indices);
+        self.refresh_preload();
+        at
+    }
+
     pub fn toggle_pause(&mut self) {
         match self.status {
             Status::Playing => {

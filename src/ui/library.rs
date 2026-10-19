@@ -56,6 +56,8 @@ pub enum LibraryAction {
     },
     /// Add `tracks` to the playlist's end.
     Enqueue(Vec<TrackId>),
+    /// Put `tracks` right after the playlist's current entry.
+    PlayNext(Vec<TrackId>),
     Rescan,
     /// Read every file's tags again, changed or not.
     ReadAll,
@@ -1324,6 +1326,7 @@ fn artists_pane(
     match context_menu(resp.area.as_ref(), resp.secondary.is_some(), "artists", &[]) {
         Some(MenuChoice::Play) => lv.play_shown = true,
         Some(MenuChoice::Enqueue) => actions.push(LibraryAction::Enqueue(view.tracks.clone())),
+        Some(MenuChoice::PlayNext) => actions.push(LibraryAction::PlayNext(view.tracks.clone())),
         Some(MenuChoice::ShowInFolder) => {
             if let Some(&t) = view.tracks.first() {
                 show_folder_of(library, t);
@@ -1493,6 +1496,11 @@ fn album_menu(
         Some(MenuChoice::Enqueue) => {
             if let LibraryAction::Play { tracks, .. } = play_albums(library, view, album) {
                 actions.push(LibraryAction::Enqueue(tracks));
+            }
+        }
+        Some(MenuChoice::PlayNext) => {
+            if let LibraryAction::Play { tracks, .. } = play_albums(library, view, album) {
+                actions.push(LibraryAction::PlayNext(tracks));
             }
         }
         Some(MenuChoice::ShowInFolder) => {
@@ -2012,6 +2020,10 @@ fn tracks_pane(
             let tracks: Vec<TrackId> = lv.selected.iter().map(|&r| view.tracks[r]).collect();
             actions.push(LibraryAction::Enqueue(tracks));
         }
+        Some(MenuChoice::PlayNext) => {
+            let tracks: Vec<TrackId> = lv.selected.iter().map(|&r| view.tracks[r]).collect();
+            actions.push(LibraryAction::PlayNext(tracks));
+        }
         Some(MenuChoice::ShowInFolder) => {
             if let Some(&row) = lv.selected.first() {
                 show_folder_of(library, view.tracks[row]);
@@ -2100,6 +2112,7 @@ fn tracks_pane(
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MenuChoice {
     Play,
+    PlayNext,
     Enqueue,
     ShowInFolder,
     Info,
@@ -2140,6 +2153,7 @@ fn context_menu(
                 }
             };
             item(ui, MenuChoice::Play, tr!("Play", "Воспроизвести"));
+            item(ui, MenuChoice::PlayNext, play_next_label());
             item(
                 ui,
                 MenuChoice::Enqueue,
@@ -2190,6 +2204,11 @@ fn context_menu(
             }
         });
     choice.get()
+}
+
+/// The menus' "Play next", shared with the playlist's.
+pub fn play_next_label() -> &'static str {
+    tr!("Play next", "Воспроизвести следующим")
 }
 
 /// The menus' "Edit tags…", shared with the playlist's.

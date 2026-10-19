@@ -123,6 +123,8 @@ pub enum PlaylistAction {
     GoTo(usize, bool),
     /// The tag editor for entries.
     EditTags(Vec<usize>),
+    /// Entries moved right after the current one.
+    PlayNext(Vec<usize>),
     /// Save the list under a name; open (and play) a saved one; delete
     /// one; save the list to a file of one's choice.
     SaveAs(String),
@@ -497,6 +499,16 @@ pub fn show(
                 && let Some(i) = first
             {
                 actions.push(PlaylistAction::Play(i));
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    first.is_some(),
+                    egui::Button::new(super::library::play_next_label()),
+                )
+                .clicked()
+            {
+                actions.push(PlaylistAction::PlayNext(pv.selection()));
                 ui.close();
             }
             if ui

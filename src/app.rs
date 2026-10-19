@@ -333,6 +333,10 @@ impl App {
                 let paths = self.paths_of(&tracks);
                 self.player.play_paths(paths, start);
             }
+            LibraryAction::PlayNext(tracks) => {
+                let paths = self.paths_of(&tracks);
+                self.player.play_next(paths);
+            }
             LibraryAction::Enqueue(tracks) => {
                 let paths = self.paths_of(&tracks);
                 self.player.enqueue(paths);
@@ -1283,6 +1287,9 @@ impl eframe::App for App {
                     }
                     crate::ui::playlist::PlaylistAction::InfoPlaying => {
                         self.info_request = self.playing_or_current_path();
+                    }
+                    crate::ui::playlist::PlaylistAction::PlayNext(indices) => {
+                        self.player.move_next(&indices);
                     }
                     crate::ui::playlist::PlaylistAction::SaveAs(name) => {
                         if let Err(e) = crate::playlists::save(&name, &self.playlist_m3u8()) {

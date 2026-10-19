@@ -209,6 +209,35 @@ impl Queue {
         at
     }
 
+    /// The entries at `indices` moved right after the current one (the
+    /// list's start without one), also in the order of play when shuffled;
+    /// the index of the first.
+    pub fn move_next(&mut self, indices: &[usize]) -> usize {
+        let moved: Vec<u64> = indices
+            .iter()
+            .filter_map(|&i| self.entries.get(i))
+            .filter(|e| Some(e.id) != self.current_entry().map(|c| c.id))
+            .map(|e| e.id)
+            .collect();
+        let rows: Vec<usize> = moved.iter().filter_map(|&id| self.index_of(id)).collect();
+        let slot = self.current.map_or(0, |c| c + 1);
+        let at = self.move_to(&rows, slot);
+        if self.shuffle {
+            let current_id = self.current_entry().map(|e| e.id);
+            let mut ids: Vec<u64> = self
+                .order_ids()
+                .into_iter()
+                .filter(|id| !moved.contains(id))
+                .collect();
+            let after = current_id
+                .and_then(|c| ids.iter().position(|&i| i == c))
+                .map_or(0, |p| p + 1);
+            ids.splice(after..after, moved);
+            self.reorder(&ids);
+        }
+        at
+    }
+
     pub fn index_of(&self, id: u64) -> Option<usize> {
         self.entries.iter().position(|e| e.id == id)
     }
@@ -428,6 +457,22 @@ mod tests {
 
     fn paths(names: &[&str]) -> Vec<PathBuf> {
         names.iter().map(PathBuf::from).collect()
+    }
+
+    #[test]
+    fn move_next_puts_entries_after_the_current_one() {
+        let mut q = Queue::default();
+        q.replace(paths(&["a", "b", "c", "d", "e"]));
+        q.set_current(Some(1));
+        let at = q.move_next(&[4, 3]);
+        let names: Vec<_> = q.entries().iter().map(|e| e.path.clone()).collect();
+        assert_eq!(names, paths(&["a", "b", "d", "e", "c"]));
+        assert_eq!((at, q.current()), (2, Some(1)));
+        // Shuffled: "a" comes next in the order of play too.
+        q.set_shuffle(true);
+        q.move_next(&[0]);
+        let next = q.after(q.current()).unwrap();
+        assert_eq!(q.entries()[next].path, PathBuf::from("a"));
     }
 
     #[test]
