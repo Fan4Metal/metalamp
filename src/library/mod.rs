@@ -379,9 +379,18 @@ fn filed_without_album_artist(tracks: &[Track]) -> Vec<Option<String>> {
                     .find(|a| a.to_lowercase() == main)
                     .map(str::to_owned)
                     .unwrap_or_else(|| {
-                        // None names it alone: as the first names it.
-                        let first = tracks[ids[0]].artist.trim();
-                        first.get(..main.len()).unwrap_or(first).trim().to_owned()
+                        // None names it alone: what the names begin with,
+                        // before a guest; not the main artist cut at its
+                        // own "&" or "," (Earth, Wind & Fire).
+                        let names: Vec<&str> =
+                            ids.iter().map(|&i| tracks[i].artist.trim()).collect();
+                        let shared = shared_name(&names);
+                        if shared.is_empty() {
+                            let first = names[0];
+                            first.get(..main.len()).unwrap_or(first).trim().to_owned()
+                        } else {
+                            shared
+                        }
                     })
             })
         } else {
@@ -394,6 +403,60 @@ fn filed_without_album_artist(tracks: &[Track]) -> Vec<Option<String>> {
         }
     }
     filed
+}
+
+/// What every name of `names` begins with (whatever the case), cut before
+/// a guest ("feat.", "with", "vs") and the signs left at its end: "Edguy"
+/// of "Edguy feat. A" and "Edguy feat. B", "Earth, Wind & Fire" of it and
+/// "Earth, Wind & Fire feat. The Emotions"; empty when nothing is shared.
+fn shared_name(names: &[&str]) -> String {
+    let Some((first, rest)) = names.split_first() else {
+        return String::new();
+    };
+    let chars = rest
+        .iter()
+        .map(|n| {
+            first
+                .chars()
+                .zip(n.chars())
+                .take_while(|(a, b)| a.to_lowercase().eq(b.to_lowercase()))
+                .count()
+        })
+        .min()
+        .unwrap_or(first.chars().count());
+    let end = first
+        .char_indices()
+        .nth(chars)
+        .map_or(first.len(), |(i, _)| i);
+    let mut shared = &first[..end];
+    // Not into a word ("Above & Beyond f" of "feat." and "ft.").
+    if first[end..].starts_with(char::is_alphanumeric) {
+        let word = shared
+            .char_indices()
+            .rfind(|(_, c)| !c.is_alphanumeric())
+            .map_or(0, |(i, c)| i + c.len_utf8());
+        shared = &shared[..word];
+    }
+    // ASCII lower case keeps the places of the bytes.
+    let lower = shared.to_ascii_lowercase();
+    let cut = [
+        " feat.",
+        " feat ",
+        " ft.",
+        " ft ",
+        " featuring ",
+        " vs.",
+        " vs ",
+        " with ",
+    ]
+    .iter()
+    .filter_map(|sep| lower.find(sep))
+    .min()
+    .unwrap_or(shared.len());
+    shared[..cut]
+        .trim_end_matches(|c: char| c.is_whitespace() || ",&/;-(".contains(c))
+        .trim()
+        .to_owned()
 }
 
 /// The artist before any guests: "A feat. B", "A & B", "A, B" are "a".
@@ -569,6 +632,25 @@ mod tests {
         let lib = Library::new(tagged);
         assert_eq!(lib.albums.len(), 3);
         assert_eq!(main_artist("Hans Zimmer & Lisa Gerrard"), "hans zimmer");
+        // A band with "&" or "," in its name keeps it whole.
+        let band = [
+            "Earth, Wind & Fire",
+            "Earth, Wind & Fire feat. The Emotions",
+            "Earth, Wind & Fire",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, a)| in_folder("EWF", a, "Faces", i as u16 + 1));
+        let all_guests = ["Above & Beyond feat. A", "Above & Beyond ft. B"]
+            .iter()
+            .enumerate()
+            .map(|(i, a)| in_folder("AB", a, "Group Therapy", i as u16 + 1));
+        let lib = Library::new(band.chain(all_guests).collect());
+        let names: Vec<&str> = lib.artists.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, ["Above & Beyond", "Earth, Wind & Fire"]);
+        assert_eq!(lib.albums.len(), 2);
+        assert_eq!(shared_name(&["Ария", "АРИЯ feat. Кипелов"]), "Ария");
+        assert_eq!(shared_name(&["Abba", "Queen"]), "");
     }
 
     fn track(
