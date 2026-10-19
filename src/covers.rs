@@ -164,6 +164,12 @@ impl Covers {
         None
     }
 
+    /// The albums without a cover asked for again (after a scan: a
+    /// picture may have been put into a folder).
+    pub fn look_again(&mut self) {
+        self.missing.clear();
+    }
+
     /// Whether `album` is known to have no cover.
     pub fn is_missing(&self, library: &Library, album: &Album) -> bool {
         self.missing.contains(&key_of(library, album))
@@ -276,13 +282,24 @@ fn work(queue: &Queue, tx: &Sender<Found>, dir: Option<&Path>, ctx: &egui::Conte
 fn cover(job: &Job, dir: Option<&Path>) -> Option<egui::ColorImage> {
     let cached = dir.map(|d| d.join(format!("{:016x}.jpg", job.key)));
     let none = dir.map(|d| d.join(format!("{:016x}.none", job.key)));
+    // A picture put into the folder (or one replaced) since the thumbnail
+    // or the "none" was made: the folder is newer, and looked at again.
+    let folder_time = std::fs::metadata(&job.folder)
+        .and_then(|m| m.modified())
+        .ok();
+    let current = |p: &Path| {
+        std::fs::metadata(p)
+            .and_then(|m| m.modified())
+            .is_ok_and(|made| folder_time.is_none_or(|f| made >= f))
+    };
     if let Some(path) = &cached
+        && current(path)
         && let Ok(bytes) = std::fs::read(path)
         && let Some(picture) = decode(&bytes)
     {
         return Some(color_image(&picture));
     }
-    if none.as_ref().is_some_and(|p| p.exists()) {
+    if none.as_ref().is_some_and(|p| current(p)) {
         return None;
     }
     // The folder's picture, else the tag's: also when the folder's cannot
@@ -310,6 +327,9 @@ fn cover(job: &Job, dir: Option<&Path>) -> Option<egui::ColorImage> {
     };
     if let Some(path) = cached {
         save_jpeg(&thumb, &path);
+    }
+    if let Some(none) = none {
+        let _ = std::fs::remove_file(none);
     }
     Some(color_image(&thumb))
 }

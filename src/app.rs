@@ -273,6 +273,7 @@ impl App {
                     if scanned.read > 0 {
                         crate::covers::prune(Arc::clone(&scanned.library));
                     }
+                    self.library_view.covers.look_again();
                     self.library = scanned.library;
                     self.loaded = true;
                     finished = true;
