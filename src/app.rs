@@ -1668,9 +1668,11 @@ impl eframe::App for App {
             self.place_changed = Some(Instant::now());
         }
         // The mini player: the cover and its controls alone, as long as
-        // the window has been made it (`apply_modes`, in this frame's
-        // logic).
-        let mini = self.settings.mini && self.applied_modes.is_some_and(|m| m.1);
+        // the window is it (`apply_modes`, in the frames' logic). Left by
+        // a key or a window asked for, it is drawn until the window is
+        // whole again: the layout drawn in its size squeezed the playlist
+        // under its least width (a panic) or kept that width.
+        let mini = self.applied_modes.is_some_and(|m| m.1);
         if let Some(at) = self.growing {
             let least = self.settings.min_size();
             let grown = ctx.content_rect().width() >= least[0] - 1.0
@@ -1818,6 +1820,14 @@ impl eframe::App for App {
                 );
                 crate::ui::start::show(ui, &mut self.start_icon, hint);
             });
+        }
+        // The windows and modals that ended the mini player show once the
+        // window is whole, laid out in its size.
+        if mini {
+            if !self.settings.mini {
+                ctx.request_repaint();
+            }
+            return;
         }
         if let Some(path) = self.info_request.take() {
             self.file_info.open(&ctx, &path);
