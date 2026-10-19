@@ -125,6 +125,24 @@ pub enum Icon {
     /// Three slider tracks with their knobs at different heights: the
     /// equalizer.
     Equalizer,
+    // The library's views (`ui::view_editor`).
+    /// An eighth note.
+    Note,
+    /// A clapperboard: films, soundtracks.
+    Film,
+    /// A lightning bolt (the app's own).
+    Bolt,
+    /// A filled heart: favourites.
+    Heart,
+    /// A clock face: recent.
+    Clock,
+    /// A disc with its hole.
+    Disc,
+    /// A microphone on its stand.
+    Mic,
+    Headphones,
+    /// A globe with a meridian and parallels.
+    Globe,
 }
 
 impl Icon {
@@ -188,6 +206,15 @@ impl Icon {
         Icon::Library,
         Icon::Filter,
         Icon::Equalizer,
+        Icon::Note,
+        Icon::Film,
+        Icon::Bolt,
+        Icon::Heart,
+        Icon::Clock,
+        Icon::Disc,
+        Icon::Mic,
+        Icon::Headphones,
+        Icon::Globe,
     ];
 }
 
@@ -653,6 +680,122 @@ pub fn paint(painter: &Painter, icon: Icon, c: Pos2, size: f32, color: Color32, 
             for (x, y) in [(-4.6, 2.2), (0.0, -2.6), (4.6, 0.8)] {
                 painter.line_segment([p(x, -6.0), p(x, 6.0)], line);
                 painter.rect_filled(rect(x - 2.0, y - 1.3, 4.0, 2.6), 0.8 * k, color);
+            }
+        }
+        Icon::Note => {
+            // A slanted oval head, the stem up from its right, a flag.
+            let head: Vec<Pos2> = (0..24)
+                .map(|i| {
+                    let a = TAU * i as f32 / 24.0;
+                    let (x, y) = (2.9 * a.cos(), 2.0 * a.sin());
+                    let t = -0.45f32;
+                    p(
+                        -2.2 + x * t.cos() - y * t.sin(),
+                        4.0 + x * t.sin() + y * t.cos(),
+                    )
+                })
+                .collect();
+            painter.add(Shape::convex_polygon(head, color, Stroke::NONE));
+            painter.line_segment([p(0.35, 3.0), p(0.35, -6.5)], pen(1.4));
+            round_line(
+                painter,
+                vec![p(0.35, -6.5), p(2.6, -4.6), p(4.4, -3.0), p(4.6, -0.8)],
+                pen(1.4),
+            );
+        }
+        Icon::Film => {
+            // A clapperboard: the board, and its clapper raised at an angle
+            // with two stripes across it.
+            painter.rect_stroke(
+                rect(-6.0, -1.0, 12.0, 7.0),
+                1.0 * k,
+                line,
+                StrokeKind::Middle,
+            );
+            let (sn, co) = (18f32.to_radians().sin(), 18f32.to_radians().cos());
+            let at = |x: f32, y: f32| (-6.0 + x * co + y * sn, -1.6 - x * sn + y * co);
+            painter.add(closed(&[
+                at(0.0, 0.0),
+                at(12.0, 0.0),
+                at(12.0, -3.0),
+                at(0.0, -3.0),
+            ]));
+            for x in [3.6, 7.8] {
+                painter.add(polyline(&[at(x, 0.0), at(x + 1.6, -3.0)]));
+            }
+        }
+        Icon::Bolt => {
+            // Two convex halves overlapping in the middle: the zigzag.
+            painter.add(solid(
+                &[(3.2, -7.2), (-4.8, 1.4), (0.8, 1.4), (2.0, -1.0)],
+                color,
+            ));
+            painter.add(solid(
+                &[(-3.2, 7.2), (4.8, -1.4), (-0.8, -1.4), (-2.0, 1.0)],
+                color,
+            ));
+        }
+        Icon::Heart => {
+            painter.circle_filled(p(-2.9, -2.1), 3.2 * k, color);
+            painter.circle_filled(p(2.9, -2.1), 3.2 * k, color);
+            painter.add(solid(&[(-6.0, -1.0), (6.0, -1.0), (0.0, 6.2)], color));
+        }
+        Icon::Clock => {
+            painter.circle_stroke(c, 6.2 * k, line);
+            round_line(
+                painter,
+                vec![p(0.0, -3.8), p(0.0, 0.0), p(2.8, 1.8)],
+                pen(1.4),
+            );
+        }
+        Icon::Disc => {
+            painter.circle_stroke(c, 6.2 * k, line);
+            painter.circle_stroke(c, 1.9 * k, line);
+        }
+        Icon::Mic => {
+            painter.rect_stroke(
+                rect(-2.3, -6.6, 4.6, 8.4),
+                2.3 * k,
+                line,
+                StrokeKind::Middle,
+            );
+            // The holder: the lower half of a ring round the capsule.
+            let holder: Vec<Pos2> = (0..=16)
+                .map(|i| {
+                    let a = PI * i as f32 / 16.0;
+                    c + vec2(4.6 * a.cos(), -0.8 + 4.6 * a.sin()) * k
+                })
+                .collect();
+            round_line(painter, holder, line);
+            painter.line_segment([p(0.0, 3.8), p(0.0, 6.4)], line);
+            round_line(painter, vec![p(-2.6, 6.4), p(2.6, 6.4)], line);
+        }
+        Icon::Headphones => {
+            // The band, the upper half of a ring, and two filled cups.
+            let band: Vec<Pos2> = (0..=20)
+                .map(|i| {
+                    let a = PI + PI * i as f32 / 20.0;
+                    c + vec2(5.6 * a.cos(), 1.0 + 5.6 * a.sin()) * k
+                })
+                .collect();
+            round_line(painter, band, line);
+            painter.rect_filled(rect(-6.9, 0.6, 3.0, 5.6), 1.0 * k, color);
+            painter.rect_filled(rect(3.9, 0.6, 3.0, 5.6), 1.0 * k, color);
+        }
+        Icon::Globe => {
+            painter.circle_stroke(c, 6.2 * k, line);
+            // A meridian: an ellipse half as wide.
+            let meridian: Vec<Pos2> = (0..32)
+                .map(|i| {
+                    let a = TAU * i as f32 / 32.0;
+                    c + vec2(2.7 * a.cos(), 6.2 * a.sin()) * k
+                })
+                .collect();
+            painter.add(Shape::closed_line(meridian, line));
+            painter.line_segment([p(-6.2, 0.0), p(6.2, 0.0)], line);
+            for y in [-3.3f32, 3.3] {
+                let half = (6.2f32 * 6.2 - y * y).sqrt() - 0.4;
+                painter.line_segment([p(-half, y), p(half, y)], pen(1.0));
             }
         }
         Icon::Plus => {

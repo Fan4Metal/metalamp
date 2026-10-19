@@ -20,6 +20,9 @@ use std::path::Path;
 #[serde(default)]
 pub struct Filter {
     pub name: String,
+    /// Shown before the name, in the row under the artists and its menu.
+    #[serde(deserialize_with = "icon_or_note")]
+    pub icon: ViewIcon,
     /// One rule holding is enough; else every rule must hold.
     pub any: bool,
     pub rules: Vec<Rule>,
@@ -42,6 +45,64 @@ impl Default for Rule {
             op: Op::Contains,
             value: String::new(),
             to: String::new(),
+        }
+    }
+}
+
+/// A view's icon, one of a set drawn for the purpose (`ui::icons`); an
+/// unknown name (a later version's) reads as the note (`icon_or_note`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewIcon {
+    #[default]
+    Note,
+    Film,
+    Bolt,
+    Heart,
+    Star,
+    Clock,
+    Disc,
+    Mic,
+    Headphones,
+    Globe,
+    Folder,
+}
+
+/// A view's icon as written; one this version does not know (a later
+/// one's, a typo) is the note, so the view keeps its rules.
+fn icon_or_note<'de, D: serde::Deserializer<'de>>(d: D) -> Result<ViewIcon, D::Error> {
+    let name = String::deserialize(d).unwrap_or_default();
+    Ok(serde_json::from_value(serde_json::Value::String(name)).unwrap_or_default())
+}
+
+impl ViewIcon {
+    pub const ALL: [ViewIcon; 11] = [
+        ViewIcon::Note,
+        ViewIcon::Film,
+        ViewIcon::Bolt,
+        ViewIcon::Heart,
+        ViewIcon::Star,
+        ViewIcon::Clock,
+        ViewIcon::Disc,
+        ViewIcon::Mic,
+        ViewIcon::Headphones,
+        ViewIcon::Globe,
+        ViewIcon::Folder,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ViewIcon::Note => tr!("Music", "Музыка"),
+            ViewIcon::Film => tr!("Films", "Кино"),
+            ViewIcon::Bolt => tr!("Lightning", "Молния"),
+            ViewIcon::Heart => tr!("Favourites", "Любимое"),
+            ViewIcon::Star => tr!("Star", "Звезда"),
+            ViewIcon::Clock => tr!("Time", "Время"),
+            ViewIcon::Disc => tr!("Disc", "Диск"),
+            ViewIcon::Mic => tr!("Voice", "Голос"),
+            ViewIcon::Headphones => tr!("Headphones", "Наушники"),
+            ViewIcon::Globe => tr!("World", "Мир"),
+            ViewIcon::Folder => tr!("Folder", "Папка"),
         }
     }
 }
@@ -424,8 +485,8 @@ mod tests {
     fn filter(rules: Vec<Rule>) -> Compiled {
         Filter {
             name: "test".into(),
-            any: false,
             rules,
+            ..Filter::default()
         }
         .compile(1_000_000 + 10 * 86_400)
     }
@@ -509,6 +570,7 @@ mod tests {
             name: "any".into(),
             any: true,
             rules,
+            ..Filter::default()
         }
         .compile(0);
         assert!(any.matches(&t));
@@ -519,8 +581,8 @@ mod tests {
     fn completeness() {
         let mut f = Filter {
             name: "x".into(),
-            any: false,
             rules: vec![rule(Field::Genre, Op::Contains, "")],
+            ..Filter::default()
         };
         assert!(!f.is_complete());
         f.rules[0].value = "rock".into();
@@ -539,13 +601,22 @@ mod tests {
     fn json_names() {
         let f = Filter {
             name: "Soundtracks".into(),
-            any: false,
+            icon: ViewIcon::Film,
             rules: vec![rule(Field::AlbumArtist, Op::NotContains, "x")],
+            ..Filter::default()
         };
         let json = serde_json::to_string(&f).unwrap();
         assert!(json.contains(r#""field":"album_artist""#), "{json}");
         assert!(json.contains(r#""op":"not_contains""#), "{json}");
+        assert!(json.contains(r#""icon":"film""#), "{json}");
         let back: Filter = serde_json::from_str(&json).unwrap();
         assert_eq!(back, f);
+        // A view without an icon (written before there were any) or with
+        // one of a later version keeps its rules and gets the note.
+        let old: Filter = serde_json::from_str(r#"{"name":"a","rules":[]}"#).unwrap();
+        assert_eq!(old.icon, ViewIcon::Note);
+        let later: Filter =
+            serde_json::from_str(r#"{"name":"a","icon":"rocket","any":true}"#).unwrap();
+        assert_eq!((later.icon, later.any), (ViewIcon::Note, true));
     }
 }

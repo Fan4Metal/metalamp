@@ -12,7 +12,7 @@ use egui::{Align, Key, Layout, RichText, Sense, Stroke, Ui, pos2, vec2};
 use std::path::PathBuf;
 
 use crate::format::natural_cmp;
-use crate::library::filter::{Field, Filter, Kind, Op, Rule};
+use crate::library::filter::{Field, Filter, Kind, Op, Rule, ViewIcon};
 use crate::library::{ArtistId, Library, search_form};
 use crate::palette;
 use crate::settings::Settings;
@@ -120,9 +120,8 @@ impl ViewEditor {
     /// Opens the editor for a new view.
     pub fn open_new(&mut self, library: &Library, folders: &[PathBuf]) {
         let draft = Filter {
-            name: String::new(),
-            any: false,
             rules: vec![Rule::default()],
+            ..Filter::default()
         };
         self.start(library, folders, draft, None);
     }
@@ -258,6 +257,19 @@ impl ViewEditor {
                         .color(palette::error()),
                     );
                 }
+                ui.add_space(4.0);
+                // The icon, one of the set.
+                ui.horizontal(|ui| {
+                    ui.add_sized(
+                        vec2(70.0, ui.spacing().interact_size.y),
+                        egui::Label::new(tr!("Icon", "Иконка")),
+                    );
+                    for icon in ViewIcon::ALL {
+                        if icon_choice(ui, icon, self.draft.icon == icon) {
+                            self.draft.icon = icon;
+                        }
+                    }
+                });
                 ui.add_space(8.0);
 
                 // The rules.
@@ -527,6 +539,36 @@ fn rule_row(
         });
     });
     remove
+}
+
+/// One of the views' icons to choose: the chosen one in the accent on the
+/// selection's ground, as the player bar's toggles. True when clicked.
+fn icon_choice(ui: &mut Ui, icon: ViewIcon, chosen: bool) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 28.0), Sense::click());
+    let ground = if chosen {
+        palette::selected_bg()
+    } else if resp.hovered() {
+        palette::hover()
+    } else {
+        palette::panel_bg()
+    };
+    ui.painter().rect_filled(rect, 5.0, ground);
+    let colour = if chosen {
+        palette::accent()
+    } else if resp.hovered() {
+        palette::text_bright()
+    } else {
+        palette::text()
+    };
+    crate::ui::icons::paint(
+        ui.painter(),
+        super::library::view_icon(icon),
+        rect.center(),
+        crate::ui::icons::SIZE,
+        colour,
+        ground,
+    );
+    resp.on_hover_text(icon.label()).clicked()
 }
 
 /// A field for a number, red while it is not one.

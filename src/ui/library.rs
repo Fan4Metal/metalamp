@@ -18,7 +18,7 @@ use egui::{Align2, FontId, Key, Modifiers, Rect, Sense, Shape, Stroke, Ui, pos2,
 
 use crate::covers::Covers;
 use crate::format::{self, natural_cmp};
-use crate::library::filter::Filter;
+use crate::library::filter::{Filter, ViewIcon};
 use crate::library::{AlbumId, ArtistId, Library, TrackId, unknown_artist};
 use crate::palette;
 use crate::settings::{AlbumView, Settings};
@@ -793,14 +793,16 @@ fn view_row(
         Stroke::new(1.0, palette::line()),
     );
     let whole = tr!("Whole library", "Вся библиотека");
-    let (name, icon_colour) = match settings.current_view() {
-        Some(v) => (v.name.clone(), palette::accent()),
-        None => (whole.to_owned(), palette::text_weak()),
+    // The view's icon in the accent while it narrows the library; the
+    // library's own, weak, for the whole of it.
+    let (name, icon, icon_colour) = match settings.current_view() {
+        Some(v) => (v.name.clone(), view_icon(v.icon), palette::accent()),
+        None => (whole.to_owned(), Icon::Library, palette::text_weak()),
     };
     let cy = rect.center().y;
     icons::paint(
         &painter,
-        Icon::Filter,
+        icon,
         pos2(rect.left() + 16.0, cy),
         icons::SIZE,
         icon_colour,
@@ -837,14 +839,15 @@ fn view_row(
         .show(|ui| {
             ui.set_min_width(240.0);
             let current = settings.current_view().map(|v| v.name.as_str());
-            let names =
-                std::iter::once(None).chain(settings.views.iter().map(|v| Some(v.name.as_str())));
-            for (i, name) in names.enumerate() {
-                let mut button = egui::Button::selectable(name == current, name.unwrap_or(whole));
-                if i < 9 {
-                    button = button.shortcut_text(format!("Ctrl+{}", i + 1));
-                }
-                if ui.add(button).clicked() {
+            let items = std::iter::once((None, Icon::Library)).chain(
+                settings
+                    .views
+                    .iter()
+                    .map(|v| (Some(v.name.as_str()), view_icon(v.icon))),
+            );
+            for (i, (name, icon)) in items.enumerate() {
+                let shortcut = (i < 9).then(|| format!("Ctrl+{}", i + 1));
+                if view_item(ui, icon, name.unwrap_or(whole), name == current, shortcut) {
                     pick = Some(name.unwrap_or("").to_owned());
                     ui.close();
                 }
@@ -879,6 +882,71 @@ fn view_row(
         "The library's views (Ctrl+1…9)",
         "Представления библиотеки (Ctrl+1…9)"
     ));
+}
+
+/// The painted icon of a view's `ViewIcon`.
+pub fn view_icon(icon: ViewIcon) -> Icon {
+    match icon {
+        ViewIcon::Note => Icon::Note,
+        ViewIcon::Film => Icon::Film,
+        ViewIcon::Bolt => Icon::Bolt,
+        ViewIcon::Heart => Icon::Heart,
+        ViewIcon::Star => Icon::StarFilled,
+        ViewIcon::Clock => Icon::Clock,
+        ViewIcon::Disc => Icon::Disc,
+        ViewIcon::Mic => Icon::Mic,
+        ViewIcon::Headphones => Icon::Headphones,
+        ViewIcon::Globe => Icon::Globe,
+        ViewIcon::Folder => Icon::Folder,
+    }
+}
+
+/// A line of the views' menu: the icon, the name, the shortcut on the
+/// right; the one in use on the selection's ground. True when clicked.
+fn view_item(ui: &mut Ui, icon: Icon, name: &str, on: bool, shortcut: Option<String>) -> bool {
+    let width = ui.available_width();
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 24.0), Sense::click());
+    let painter = ui.painter();
+    let ground = if on {
+        palette::selected_bg()
+    } else if resp.hovered() {
+        palette::hover()
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    painter.rect_filled(rect, 4.0, ground);
+    let text = if on {
+        palette::selected_text()
+    } else {
+        palette::text()
+    };
+    let cy = rect.center().y;
+    let icon_colour = if on { palette::accent() } else { text };
+    icons::paint(
+        painter,
+        icon,
+        pos2(rect.left() + 13.0, cy),
+        icons::SIZE,
+        icon_colour,
+        ground,
+    );
+    let mut right = rect.right() - 6.0;
+    if let Some(keys) = shortcut {
+        let g = painter.layout_no_wrap(keys, FontId::proportional(12.0), palette::text_weak());
+        right -= g.size().x;
+        painter.galley(pos2(right, cy - g.size().y / 2.0), g, palette::text_weak());
+        right -= 16.0;
+    }
+    let left = rect.left() + 28.0;
+    let g = crate::ui::elided(
+        painter,
+        name.to_owned(),
+        FontId::proportional(14.0),
+        text,
+        right - left,
+    );
+    painter.galley(pos2(left, cy - g.size().y / 2.0), g, text);
+    resp.clicked()
 }
 
 /// Ctrl+1…9: the whole library (1) or a view by its place in the menu
@@ -2106,13 +2174,13 @@ mod tests {
         // So is a view that hides it.
         settings.views.push(crate::library::filter::Filter {
             name: "ABBA".into(),
-            any: false,
             rules: vec![crate::library::filter::Rule {
                 field: crate::library::filter::Field::Artist,
                 op: crate::library::filter::Op::Is,
                 value: "abba".into(),
                 to: String::new(),
             }],
+            ..Filter::default()
         });
         settings.view = "ABBA".into();
         assert!(
