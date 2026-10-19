@@ -471,6 +471,11 @@ impl Player {
         for event in self.engine.poll() {
             match event {
                 Event::Started { id: token } => {
+                    // A track of the play before the last (the engine went
+                    // on into it just before it took the Play): not news.
+                    if token < self.last_play {
+                        continue;
+                    }
                     let Some(&entry) = self.tokens.get(&token) else {
                         continue;
                     };
@@ -528,7 +533,12 @@ impl Player {
                         }
                         continue;
                     }
-                    if token < self.last_play {
+                    // A play before the last, or a preload sent again since
+                    // (the crossfade changed, stop after): not the track
+                    // heard, which goes on.
+                    if token < self.last_play
+                        || token != self.last_play && self.playing != Some(entry)
+                    {
                         continue;
                     }
                     self.failed_in_row += 1;
