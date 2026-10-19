@@ -525,7 +525,18 @@ fn editions(tracks: &[Track]) -> HashMap<(String, PathBuf), u16> {
         if t.year > 0 && (f.0 == 0 || t.year < f.0) {
             f.0 = t.year;
         }
-        f.1.insert(t.disc);
+        // Discs not tagged: the folder's name may tell (CD1, CD2 of a
+        // compilation whose tracks carry their years of release).
+        let disc = match t.disc {
+            0 => t
+                .path
+                .parent()
+                .and_then(Path::file_name)
+                .and_then(|n| disc_in_name(&n.to_string_lossy()))
+                .unwrap_or(0),
+            d => d,
+        };
+        f.1.insert(disc);
     }
     let mut out = HashMap::new();
     for (key, folders) in folders {
@@ -558,6 +569,22 @@ fn editions(tracks: &[Track]) -> HashMap<(String, PathBuf), u16> {
         }
     }
     out
+}
+
+/// The disc a folder's name gives: "CD1", "CD 2", "Disc 3 - Bonus",
+/// "disk_4", "Диск 1".
+fn disc_in_name(name: &str) -> Option<u16> {
+    let lower = name.trim().to_lowercase();
+    let rest = ["cd", "disc", "disk", "диск"]
+        .iter()
+        .find_map(|p| lower.strip_prefix(p))?;
+    let rest = rest.trim_start_matches([' ', '_', '-', '.', '#']);
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    let after = rest[digits.len()..].chars().next();
+    if after.is_some_and(char::is_alphanumeric) {
+        return None;
+    }
+    digits.parse().ok().filter(|&n| n > 0)
 }
 
 /// The order of tracks within an album: disc, track number, then the file
@@ -761,6 +788,18 @@ mod tests {
         // One folder: one album, whatever the years.
         let lib = Library::new(vec![at("c/1.mp3", 1970, 0), at("c/2.mp3", 1999, 0)]);
         assert_eq!(lib.albums.len(), 1);
+        // Discs in folders named for them, not tagged: one album.
+        let lib = Library::new(vec![
+            at("d/CD1/1.mp3", 1985, 0),
+            at("d/CD 2/1.mp3", 1979, 0),
+        ]);
+        assert_eq!(lib.albums.len(), 1);
+        assert_eq!(disc_in_name("Disc 3 - Bonus"), Some(3));
+        assert_eq!(disc_in_name("Диск 1"), Some(1));
+        assert_eq!(disc_in_name("CD1"), Some(1));
+        assert_eq!(disc_in_name("CDX"), None);
+        assert_eq!(disc_in_name("Discography"), None);
+        assert_eq!(disc_in_name("1990"), None);
     }
 
     #[test]
