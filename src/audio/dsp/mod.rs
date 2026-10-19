@@ -202,4 +202,37 @@ mod tests {
         assert!(s[2 * 300] > 0.49, "{}", s[2 * 300]);
         assert!((s[2 * 48000 - 1] - 0.25).abs() < 0.01);
     }
+
+    /// The peak in dBFS of a stereo 1 kHz sine at `level` dBFS through a
+    /// chain with the equalizer on, its preamp at `preamp` dB and the bands
+    /// flat, past the limiter's start.
+    fn through_preamp(level: f32, preamp: f32) -> f32 {
+        let settings = DspSettings {
+            eq: true,
+            preamp,
+            ..Default::default()
+        };
+        let mut c = Chain::new(48000, 2, &settings);
+        let a = db_to_gain(level);
+        let mut s: Vec<f32> = (0..48000)
+            .flat_map(|i| {
+                let x = a * (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / 48000.0).sin();
+                [x, x]
+            })
+            .collect();
+        c.process(&mut s, 1.0);
+        let peak = s[48000..].iter().fold(0f32, |m, x| m.max(x.abs()));
+        biquad::gain_to_db(peak)
+    }
+
+    #[test]
+    fn the_preamp_is_heard_within_the_ceiling() {
+        // Down: always heard.
+        assert!((through_preamp(-20.0, -6.0) + 26.0).abs() < 0.1);
+        assert!((through_preamp(-3.0, -12.0) + 15.0).abs() < 0.1);
+        // Up: heard as long as it stays under the limiter's ceiling...
+        assert!((through_preamp(-20.0, 6.0) + 14.0).abs() < 0.1);
+        // ...a loud track is held at it.
+        assert!((through_preamp(-3.0, 12.0) - CEILING_DB).abs() < 0.2);
+    }
 }
