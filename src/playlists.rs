@@ -15,7 +15,8 @@ fn folder() -> Option<PathBuf> {
 }
 
 /// A name as a file name: the letters Windows refuses in one become "_",
-/// dots and spaces at the ends dropped.
+/// dots and spaces at the ends dropped; a name left empty, or one of
+/// Windows' devices (CON, NUL, COM1…), followed by "_".
 fn file_name(name: &str) -> String {
     let cleaned: String = name
         .trim()
@@ -30,8 +31,23 @@ fn file_name(name: &str) -> String {
         })
         .collect();
     let cleaned = cleaned.trim_matches(|c| c == '.' || c == ' ');
-    if cleaned.is_empty() {
-        "_".to_owned()
+    // "CON.x" is the device too.
+    let upper = cleaned
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_uppercase();
+    let device = ["CON", "PRN", "AUX", "NUL"].contains(&upper.as_str())
+        || (upper.len() == 4
+            && (upper.starts_with("COM") || upper.starts_with("LPT"))
+            && upper.as_bytes()[3].is_ascii_digit());
+    if device {
+        // The "_" before the first dot: Windows reads the name up to it.
+        let (base, rest) = cleaned.split_at(cleaned.find('.').unwrap_or(cleaned.len()));
+        format!("{base}_{rest}.{EXTENSION}")
+    } else if cleaned.is_empty() {
+        format!("_.{EXTENSION}")
     } else {
         format!("{cleaned}.{EXTENSION}")
     }
@@ -107,7 +123,12 @@ mod tests {
     fn names_become_file_names() {
         assert_eq!(file_name("Rock"), "Rock.m3u8");
         assert_eq!(file_name(" AC/DC: best? "), "AC_DC_ best_.m3u8");
-        assert_eq!(file_name("..."), "_");
+        // Not a file without the extension, which the list leaves out.
+        assert_eq!(file_name("..."), "_.m3u8");
+        assert_eq!(file_name("con"), "con_.m3u8");
+        assert_eq!(file_name("COM1"), "COM1_.m3u8");
+        assert_eq!(file_name("Com"), "Com.m3u8");
+        assert_eq!(file_name("nul.best"), "nul_.best.m3u8");
         assert_eq!(file_name("Ночь."), "Ночь.m3u8");
     }
 }
