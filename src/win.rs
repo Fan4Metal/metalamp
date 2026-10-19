@@ -795,8 +795,8 @@ unsafe extern "system" fn window_proc(
     use windows_sys::Win32::UI::Shell::DefSubclassProc;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         DefWindowProcW, ENDSESSION_CLOSEAPP, MINMAXINFO, PBT_APMSUSPEND, WM_APPCOMMAND, WM_CLOSE,
-        WM_COMMAND, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_KEYDOWN, WM_KEYUP,
-        WM_MOVING, WM_POWERBROADCAST, WM_QUERYENDSESSION, WM_SIZING,
+        WM_COMMAND, WM_ENDSESSION, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_KEYDOWN,
+        WM_KEYUP, WM_MOVING, WM_POWERBROADCAST, WM_QUERYENDSESSION, WM_SIZING,
     };
     // THBN_CLICKED in WM_COMMAND's high word.
     const THBN_CLICKED: usize = 0x1800;
@@ -898,6 +898,11 @@ unsafe extern "system" fn window_proc(
         // the exe) asks the app to close and waits for it.
         WM_QUERYENDSESSION if lparam as u32 & ENDSESSION_CLOSEAPP != 0 => hook(Hooked::Close),
         WM_QUERYENDSESSION => hook(Hooked::EndSession),
+        // The session ends now: the process may be ended once this is
+        // answered, before a frame saves what EndSession asked for.
+        WM_ENDSESSION if wparam != 0 && lparam as u32 & ENDSESSION_CLOSEAPP == 0 => {
+            crate::settings::Settings::save_kept();
+        }
         WM_POWERBROADCAST if wparam == PBT_APMSUSPEND as usize => hook(Hooked::Suspend),
         WM_KEYDOWN if media => {
             if let Some(key) = media_vk(wparam as u32) {

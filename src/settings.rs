@@ -18,6 +18,10 @@ use std::sync::OnceLock;
 /// The settings file's writes.
 static FILE: crate::kept::Kept = crate::kept::Kept::new();
 
+/// The settings as the app last kept them for the end of the session,
+/// written by the window's subclass itself (`save_kept`).
+static AT_END: std::sync::Mutex<Option<Settings>> = std::sync::Mutex::new(None);
+
 /// Where the window was: its restored rectangle in pixels as Windows keeps
 /// it (`GetWindowPlacement().rcNormalPosition`: left, top, right, bottom in
 /// work-area coordinates, also while maximized), and whether it was
@@ -514,6 +518,15 @@ impl Settings {
         self.save_numbered(FILE.ask());
     }
 
+    /// Kept as they are, for `save_kept` at the end of the session.
+    pub fn keep_for_the_end(&self) {
+        if let Ok(mut kept) = AT_END.lock()
+            && kept.as_ref() != Some(self)
+        {
+            *kept = Some(self.clone());
+        }
+    }
+
     /// Saves a copy on a background thread. Saves are numbered when asked
     /// for, so one asked for later, here or in [`Settings::save`], wins even
     /// if this one finishes after it.
@@ -521,6 +534,16 @@ impl Settings {
         let number = FILE.ask();
         let settings = self.clone();
         std::thread::spawn(move || settings.save_numbered(number));
+    }
+
+    /// Writes the settings last kept (`keep_for_the_end`), at once: the
+    /// session ends (`WM_ENDSESSION`), and Windows may end the process as
+    /// soon as the message is answered, before the app's next frame.
+    pub fn save_kept() {
+        let kept = AT_END.lock().ok().and_then(|k| k.clone());
+        if let Some(settings) = kept {
+            settings.save();
+        }
     }
 
     /// Writes the file unless a later save was written already.

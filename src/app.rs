@@ -107,6 +107,8 @@ pub struct App {
     /// window's panels wait, else the playlist and the library's panes
     /// took the mini player's size as their own (at most 1 s).
     growing: Option<Instant>,
+    /// When the settings were last kept for the end of the session.
+    kept_for_the_end: Instant,
     /// The window's layout as last applied (`apply_layout`).
     applied_layout: WindowLayout,
     /// The tray icon while the setting is on, and whether the window's
@@ -246,6 +248,7 @@ impl App {
             mini_cover: Default::default(),
             mini_icon: None,
             growing: None,
+            kept_for_the_end: Instant::now(),
             applied_layout: settings_layout,
             env_view_editor: std::env::var_os("METALAMP_VIEW_EDITOR").is_some(),
         }
@@ -1166,6 +1169,7 @@ impl App {
         self.remember_playlist(true);
         self.remember_place();
         self.sync_settings();
+        self.settings.keep_for_the_end();
         self.settings.save();
     }
 
@@ -1550,6 +1554,13 @@ impl eframe::App for App {
 
     /// Every frame, also while the window is minimised.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // The session may end between frames: the window's subclass
+        // writes these (the position heard among them) itself.
+        if self.kept_for_the_end.elapsed() >= Duration::from_secs(1) {
+            self.kept_for_the_end = Instant::now();
+            self.sync_settings();
+            self.settings.keep_for_the_end();
+        }
         self.updates.poll();
         self.poll_scan();
         self.follow_folders(ctx);
