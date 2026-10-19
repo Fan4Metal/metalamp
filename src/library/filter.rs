@@ -8,11 +8,13 @@
 //! `any`). A rule tests one field of a track: a text (the genre, the
 //! artist, the album, the title) against a value without regard to case,
 //! a number (the year, the bit rate, the length in minutes, the days since
-//! the file was added) against one or two, the folder the file is in, or
-//! whether its tag holds a cover. The filters are kept in the settings
+//! the file was added, the plays, the days since the last one, the rating;
+//! the last three from `stats`) against one or two, the folder the file is
+//! in, or whether its tag holds a cover. The filters are kept in the settings
 //! (`views`) and compiled ([`Filter::compile`]) once per view built.
 
 use super::{Track, search_form};
+use crate::stats::Stat;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -127,6 +129,12 @@ pub enum Field {
     Length,
     /// Days since the file was last written.
     Added,
+    /// How many times it was played (`stats`).
+    Plays,
+    /// Days since it was last played; never played: no value.
+    LastPlayed,
+    /// 0 (none) to 5 stars.
+    Rating,
     /// The tag holds a picture.
     Cover,
 }
@@ -160,7 +168,7 @@ pub enum Op {
 }
 
 impl Field {
-    pub const ALL: [Field; 11] = [
+    pub const ALL: [Field; 14] = [
         Field::Genre,
         Field::Artist,
         Field::AlbumArtist,
@@ -171,6 +179,9 @@ impl Field {
         Field::Bitrate,
         Field::Length,
         Field::Added,
+        Field::Plays,
+        Field::LastPlayed,
+        Field::Rating,
         Field::Cover,
     ];
 
@@ -186,6 +197,9 @@ impl Field {
             Field::Bitrate => tr!("Bit rate, kbps", "Битрейт, кбит/с"),
             Field::Length => tr!("Length, minutes", "Длительность, минут"),
             Field::Added => tr!("Added, days ago", "Добавлен, дней назад"),
+            Field::Plays => tr!("Plays", "Прослушиваний"),
+            Field::LastPlayed => tr!("Last played, days ago", "Прослушан, дней назад"),
+            Field::Rating => tr!("Rating, stars", "Рейтинг, звёзд"),
             Field::Cover => tr!("Cover in the tag", "Обложка в теге"),
         }
     }
@@ -195,7 +209,13 @@ impl Field {
             Field::Genre | Field::Artist | Field::AlbumArtist | Field::Album | Field::Title => {
                 Kind::Text
             }
-            Field::Year | Field::Bitrate | Field::Length | Field::Added => Kind::Number,
+            Field::Year
+            | Field::Bitrate
+            | Field::Length
+            | Field::Added
+            | Field::Plays
+            | Field::LastPlayed
+            | Field::Rating => Kind::Number,
             Field::Folder => Kind::Folder,
             Field::Cover => Kind::Flag,
         }
@@ -232,13 +252,18 @@ impl Field {
         }
     }
 
-    /// The value of a number field; `None` when the file does not say.
-    fn number(self, t: &Track, now: u64) -> Option<f64> {
+    /// The value of a number field; `None` when the file (or the
+    /// statistics) do not say.
+    fn number(self, t: &Track, s: &Stat, now: u64) -> Option<f64> {
+        let days = |at: u64| now.saturating_sub(at) as f64 / 86_400.0;
         match self {
             Field::Year => (t.year > 0).then_some(f64::from(t.year)),
             Field::Bitrate => (t.bitrate > 0).then_some(f64::from(t.bitrate)),
             Field::Length => Some(f64::from(t.duration_ms) / 60_000.0),
-            Field::Added => Some(now.saturating_sub(t.mtime) as f64 / 86_400.0),
+            Field::Added => Some(days(t.mtime)),
+            Field::Plays => Some(f64::from(s.plays)),
+            Field::LastPlayed => (s.last > 0).then(|| days(s.last)),
+            Field::Rating => Some(f64::from(s.rating)),
             _ => None,
         }
     }
@@ -373,13 +398,13 @@ enum Test {
 }
 
 impl Compiled {
-    /// Whether `t` is in the view. A filter without rules takes every
-    /// track.
-    pub fn matches(&self, t: &Track) -> bool {
+    /// Whether `t`, with its statistics `s`, is in the view. A filter
+    /// without rules takes every track.
+    pub fn matches(&self, t: &Track, s: &Stat) -> bool {
         if self.rules.is_empty() {
             return true;
         }
-        let holds = |r: &CompiledRule| r.holds(t, self.now) != r.inverted;
+        let holds = |r: &CompiledRule| r.holds(t, s, self.now) != r.inverted;
         if self.any {
             self.rules.iter().any(holds)
         } else {
@@ -390,7 +415,7 @@ impl Compiled {
 
 impl CompiledRule {
     /// The positive test, before the inversion.
-    fn holds(&self, t: &Track, now: u64) -> bool {
+    fn holds(&self, t: &Track, stat: &Stat, now: u64) -> bool {
         match &self.test {
             Test::Text { op, value } => {
                 let texts = self.field.texts(t);
@@ -406,7 +431,7 @@ impl CompiledRule {
                 })
             }
             Test::Number { op, from, to } => {
-                let Some(x) = self.field.number(t, now) else {
+                let Some(x) = self.field.number(t, stat, now) else {
                     return false;
                 };
                 match op {
@@ -494,48 +519,107 @@ mod tests {
     #[test]
     fn text_rules_ignore_case_and_negate() {
         let t = track("Soundtrack; Score", "Hans Zimmer", 2021);
-        assert!(filter(vec![rule(Field::Genre, Op::Contains, "soundtrack")]).matches(&t));
-        assert!(!filter(vec![rule(Field::Genre, Op::NotContains, "SOUNDTRACK")]).matches(&t));
-        assert!(filter(vec![rule(Field::Genre, Op::Is, "soundtrack; score")]).matches(&t));
-        assert!(!filter(vec![rule(Field::Genre, Op::Is, "soundtrack")]).matches(&t));
-        assert!(filter(vec![rule(Field::Album, Op::StartsWith, "du")]).matches(&t));
-        assert!(filter(vec![rule(Field::Title, Op::NotEmpty, "")]).matches(&t));
+        assert!(
+            filter(vec![rule(Field::Genre, Op::Contains, "soundtrack")])
+                .matches(&t, &Stat::default())
+        );
+        assert!(
+            !filter(vec![rule(Field::Genre, Op::NotContains, "SOUNDTRACK")])
+                .matches(&t, &Stat::default())
+        );
+        assert!(
+            filter(vec![rule(Field::Genre, Op::Is, "soundtrack; score")])
+                .matches(&t, &Stat::default())
+        );
+        assert!(
+            !filter(vec![rule(Field::Genre, Op::Is, "soundtrack")]).matches(&t, &Stat::default())
+        );
+        assert!(
+            filter(vec![rule(Field::Album, Op::StartsWith, "du")]).matches(&t, &Stat::default())
+        );
+        assert!(filter(vec![rule(Field::Title, Op::NotEmpty, "")]).matches(&t, &Stat::default()));
         let no_genre = track("", "x", 0);
-        assert!(filter(vec![rule(Field::Genre, Op::Empty, "")]).matches(&no_genre));
-        assert!(!filter(vec![rule(Field::Genre, Op::NotEmpty, "")]).matches(&no_genre));
+        assert!(
+            filter(vec![rule(Field::Genre, Op::Empty, "")]).matches(&no_genre, &Stat::default())
+        );
+        assert!(
+            !filter(vec![rule(Field::Genre, Op::NotEmpty, "")])
+                .matches(&no_genre, &Stat::default())
+        );
         // The search's "ё" as "е".
         let ru = track("Саундтрёк", "x", 0);
-        assert!(filter(vec![rule(Field::Genre, Op::Is, "саундтрек")]).matches(&ru));
+        assert!(
+            filter(vec![rule(Field::Genre, Op::Is, "саундтрек")]).matches(&ru, &Stat::default())
+        );
     }
 
     #[test]
     fn artist_is_the_tracks_or_the_albums() {
         let t = track("", "Zimmer feat. Someone", 2021);
-        assert!(filter(vec![rule(Field::Artist, Op::Is, "hans zimmer")]).matches(&t));
-        assert!(filter(vec![rule(Field::Artist, Op::Contains, "someone")]).matches(&t));
-        assert!(!filter(vec![rule(Field::Artist, Op::IsNot, "hans zimmer")]).matches(&t));
-        assert!(!filter(vec![rule(Field::AlbumArtist, Op::Contains, "someone")]).matches(&t));
+        assert!(
+            filter(vec![rule(Field::Artist, Op::Is, "hans zimmer")]).matches(&t, &Stat::default())
+        );
+        assert!(
+            filter(vec![rule(Field::Artist, Op::Contains, "someone")])
+                .matches(&t, &Stat::default())
+        );
+        assert!(
+            !filter(vec![rule(Field::Artist, Op::IsNot, "hans zimmer")])
+                .matches(&t, &Stat::default())
+        );
+        assert!(
+            !filter(vec![rule(Field::AlbumArtist, Op::Contains, "someone")])
+                .matches(&t, &Stat::default())
+        );
     }
 
     #[test]
     fn number_rules() {
         let t = track("", "x", 1995);
-        assert!(filter(vec![rule(Field::Year, Op::Is, "1995")]).matches(&t));
-        assert!(filter(vec![rule(Field::Year, Op::Less, "2000")]).matches(&t));
-        assert!(!filter(vec![rule(Field::Year, Op::Greater, "2000")]).matches(&t));
+        assert!(filter(vec![rule(Field::Year, Op::Is, "1995")]).matches(&t, &Stat::default()));
+        assert!(filter(vec![rule(Field::Year, Op::Less, "2000")]).matches(&t, &Stat::default()));
+        assert!(
+            !filter(vec![rule(Field::Year, Op::Greater, "2000")]).matches(&t, &Stat::default())
+        );
         let mut between = rule(Field::Year, Op::Between, "1999");
         between.to = "1990".into(); // the ends in either order
-        assert!(filter(vec![between]).matches(&t));
-        assert!(filter(vec![rule(Field::Length, Op::Greater, "4,25")]).matches(&t));
-        assert!(filter(vec![rule(Field::Bitrate, Op::Is, "320")]).matches(&t));
-        assert!(filter(vec![rule(Field::Added, Op::Less, "30")]).matches(&t));
-        assert!(!filter(vec![rule(Field::Added, Op::Less, "5")]).matches(&t));
+        assert!(filter(vec![between]).matches(&t, &Stat::default()));
+        assert!(
+            filter(vec![rule(Field::Length, Op::Greater, "4,25")]).matches(&t, &Stat::default())
+        );
+        assert!(filter(vec![rule(Field::Bitrate, Op::Is, "320")]).matches(&t, &Stat::default()));
+        assert!(filter(vec![rule(Field::Added, Op::Less, "30")]).matches(&t, &Stat::default()));
+        assert!(!filter(vec![rule(Field::Added, Op::Less, "5")]).matches(&t, &Stat::default()));
         // A number the file does not have holds for nothing but "is not".
         let no_year = track("", "x", 0);
-        assert!(!filter(vec![rule(Field::Year, Op::Less, "2000")]).matches(&no_year));
-        assert!(filter(vec![rule(Field::Year, Op::IsNot, "1995")]).matches(&no_year));
+        assert!(
+            !filter(vec![rule(Field::Year, Op::Less, "2000")]).matches(&no_year, &Stat::default())
+        );
+        assert!(
+            filter(vec![rule(Field::Year, Op::IsNot, "1995")]).matches(&no_year, &Stat::default())
+        );
         // Not a number: never.
-        assert!(!filter(vec![rule(Field::Year, Op::Less, "abc")]).matches(&t));
+        assert!(!filter(vec![rule(Field::Year, Op::Less, "abc")]).matches(&t, &Stat::default()));
+    }
+
+    #[test]
+    fn statistics_rules() {
+        let t = track("", "x", 0);
+        let now = 1_000_000 + 10 * 86_400;
+        let played = Stat {
+            plays: 7,
+            last: now - 2 * 86_400,
+            rating: 4,
+        };
+        let f = |r: Rule| filter(vec![r]);
+        assert!(f(rule(Field::Plays, Op::Greater, "5")).matches(&t, &played));
+        assert!(f(rule(Field::Plays, Op::Is, "0")).matches(&t, &Stat::default()));
+        assert!(f(rule(Field::LastPlayed, Op::Less, "7")).matches(&t, &played));
+        // Never played: no last play, only "is not" holds.
+        assert!(!f(rule(Field::LastPlayed, Op::Greater, "7")).matches(&t, &Stat::default()));
+        assert!(f(rule(Field::LastPlayed, Op::IsNot, "3")).matches(&t, &Stat::default()));
+        assert!(f(rule(Field::Rating, Op::Greater, "3")).matches(&t, &played));
+        assert!(!f(rule(Field::Rating, Op::Greater, "3")).matches(&t, &Stat::default()));
     }
 
     #[test]
@@ -547,25 +631,31 @@ mod tests {
             r"D:/Music",
         ] {
             assert!(
-                filter(vec![rule(Field::Folder, Op::Is, folder)]).matches(&t),
+                filter(vec![rule(Field::Folder, Op::Is, folder)]).matches(&t, &Stat::default()),
                 "{folder}"
             );
         }
-        assert!(!filter(vec![rule(Field::Folder, Op::Is, r"D:\Music\Sound")]).matches(&t));
-        assert!(filter(vec![rule(Field::Folder, Op::IsNot, r"D:\Music\Rock")]).matches(&t));
-        assert!(!filter(vec![rule(Field::Folder, Op::Is, "")]).matches(&t));
+        assert!(
+            !filter(vec![rule(Field::Folder, Op::Is, r"D:\Music\Sound")])
+                .matches(&t, &Stat::default())
+        );
+        assert!(
+            filter(vec![rule(Field::Folder, Op::IsNot, r"D:\Music\Rock")])
+                .matches(&t, &Stat::default())
+        );
+        assert!(!filter(vec![rule(Field::Folder, Op::Is, "")]).matches(&t, &Stat::default()));
     }
 
     #[test]
     fn flags_all_and_any() {
         let t = track("Rock", "x", 1980);
-        assert!(filter(vec![rule(Field::Cover, Op::NotEmpty, "")]).matches(&t));
-        assert!(!filter(vec![rule(Field::Cover, Op::Empty, "")]).matches(&t));
+        assert!(filter(vec![rule(Field::Cover, Op::NotEmpty, "")]).matches(&t, &Stat::default()));
+        assert!(!filter(vec![rule(Field::Cover, Op::Empty, "")]).matches(&t, &Stat::default()));
         let rules = vec![
             rule(Field::Genre, Op::Is, "rock"),
             rule(Field::Year, Op::Greater, "2000"),
         ];
-        assert!(!filter(rules.clone()).matches(&t));
+        assert!(!filter(rules.clone()).matches(&t, &Stat::default()));
         let any = Filter {
             name: "any".into(),
             any: true,
@@ -573,8 +663,8 @@ mod tests {
             ..Filter::default()
         }
         .compile(0);
-        assert!(any.matches(&t));
-        assert!(filter(vec![]).matches(&t));
+        assert!(any.matches(&t, &Stat::default()));
+        assert!(filter(vec![]).matches(&t, &Stat::default()));
     }
 
     #[test]

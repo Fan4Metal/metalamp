@@ -81,6 +81,9 @@ pub struct App {
     info_request: Option<PathBuf>,
     /// The editor of the library's views.
     view_editor: crate::ui::view_editor::ViewEditor,
+    /// The plays and ratings, and the clock of the track heard.
+    pub(crate) stats: crate::stats::Stats,
+    listening: crate::stats::Listening,
     /// The equalizer's window (the player bar's button).
     eq_window: crate::ui::eq_window::EqWindow,
     /// `METALAMP_VIEW_EDITOR` is set: open the editor once the library is
@@ -185,6 +188,8 @@ impl App {
             file_info: crate::ui::info::InfoView::default(),
             info_request: None,
             view_editor: crate::ui::view_editor::ViewEditor::default(),
+            stats: crate::stats::Stats::load(),
+            listening: crate::stats::Listening::default(),
             eq_window: crate::ui::eq_window::EqWindow::from_env(),
             env_view_editor: std::env::var_os("METALAMP_VIEW_EDITOR").is_some(),
         }
@@ -312,6 +317,10 @@ impl App {
                 track,
                 to_album,
             } => self.go_to(album, track, to_album),
+            LibraryAction::Rate(tracks, n) => {
+                let paths = self.paths_of(&tracks);
+                self.stats.rate(&paths, n);
+            }
             LibraryAction::NewView => self
                 .view_editor
                 .open_new(&self.library, &self.settings.library_folders),
@@ -704,13 +713,31 @@ impl App {
         track: Option<crate::library::TrackId>,
         to_album: bool,
     ) {
-        if self
-            .library_view
-            .go_to(&self.library, &mut self.settings, album, track, to_album)
-        {
+        if self.library_view.go_to(
+            &self.library,
+            &self.stats,
+            &mut self.settings,
+            album,
+            track,
+            to_album,
+        ) {
             self.place_changed = Some(Instant::now());
         }
         self.playlist_view.focused = false;
+    }
+
+    /// The clock of the track heard run; its play counted once it has been
+    /// heard long enough (`stats::count_after`).
+    fn count_play(&mut self) {
+        let playing = self.player.status == crate::player::Status::Playing;
+        if self.listening.tick(playing, self.player.duration_ms())
+            && let Some(path) = self.player.playing_path().cloned()
+        {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            self.stats.played(&path, now);
+        }
     }
 
     /// The name of the library view in use, if one narrows the library.
@@ -968,7 +995,9 @@ impl eframe::App for App {
         self.remember_playlist(false);
         if self.player.poll().track {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
+            self.listening.restart(self.player.playing);
         }
+        self.count_play();
         // The visualization moves: 50 frames a second while playing, and
         // after a stop while it falls; paused, it stands. Without one (off,
         // the compact bar, the window minimized) only the time, the seek
@@ -1199,6 +1228,7 @@ impl eframe::App for App {
                     &mut self.library_view,
                     &self.library,
                     &mut self.settings,
+                    &self.stats,
                     scanning,
                     playing,
                     !self.playlist_view.focused && !modal,
@@ -1238,7 +1268,7 @@ impl eframe::App for App {
         self.about.show(&ctx);
         if self
             .view_editor
-            .show(&ctx, &mut self.settings, &self.library, frame)
+            .show(&ctx, &mut self.settings, &self.library, &self.stats, frame)
         {
             self.place_changed = Some(Instant::now());
         }

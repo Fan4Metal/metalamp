@@ -619,6 +619,31 @@ pub fn show_in_folder(file: &std::path::Path) {
     }
 }
 
+/// The local calendar day (year, month, day) of Unix seconds, by Windows'
+/// time zone rules for that day; the UTC day if Windows cannot say.
+pub fn local_date(unix_secs: u64) -> (u16, u16, u16) {
+    use windows_sys::Win32::Foundation::{FILETIME, SYSTEMTIME};
+    use windows_sys::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
+    // 100 ns ticks since 1601-01-01.
+    let ticks = (unix_secs + 11_644_473_600) * 10_000_000;
+    let ft = FILETIME {
+        dwLowDateTime: ticks as u32,
+        dwHighDateTime: (ticks >> 32) as u32,
+    };
+    // SAFETY: plain structs filled by Windows; a null zone is the current one.
+    unsafe {
+        let mut utc: SYSTEMTIME = std::mem::zeroed();
+        if FileTimeToSystemTime(&ft, &mut utc) == 0 {
+            return (1970, 1, 1);
+        }
+        let mut local: SYSTEMTIME = std::mem::zeroed();
+        if SystemTimeToTzSpecificLocalTime(std::ptr::null(), &utc, &mut local) == 0 {
+            return (utc.wYear, utc.wMonth, utc.wDay);
+        }
+        (local.wYear, local.wMonth, local.wDay)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

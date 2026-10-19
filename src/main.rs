@@ -28,6 +28,7 @@ mod player;
 mod queue;
 mod settings;
 mod smtc;
+mod stats;
 mod taskbar;
 mod ui;
 mod update;

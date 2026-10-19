@@ -16,6 +16,7 @@ use crate::library::filter::{Field, Filter, Kind, Op, Rule, ViewIcon};
 use crate::library::{ArtistId, Library, search_form};
 use crate::palette;
 use crate::settings::Settings;
+use crate::stats::Stats;
 use crate::ui::icons::Icon;
 use crate::ui::settings::{TOOL, round_widgets, tool};
 
@@ -35,8 +36,8 @@ pub struct ViewEditor {
     /// The name of the view being edited; `None` for a new one.
     editing: Option<String>,
     suggestions: Suggestions,
-    /// The counts, and the draft they were counted for.
-    counted: Option<(Filter, Counts)>,
+    /// The counts, and the draft and statistics they were counted for.
+    counted: Option<(Filter, u64, Counts)>,
 }
 
 /// The values the library holds, offered for a rule's value.
@@ -149,9 +150,10 @@ impl ViewEditor {
 
     /// The counts for the draft as it is, counted anew only when it
     /// changed.
-    fn count(&mut self, library: &Library) -> Counts {
-        if let Some((draft, counts)) = &self.counted
+    fn count(&mut self, library: &Library, stats: &Stats) -> Counts {
+        if let Some((draft, revision, counts)) = &self.counted
             && *draft == self.draft
+            && *revision == stats.revision
         {
             return *counts;
         }
@@ -159,7 +161,7 @@ impl ViewEditor {
         let mut albums = vec![false; library.albums.len()];
         let mut tracks = 0;
         for (t, track) in library.tracks.iter().enumerate() {
-            if compiled.matches(track) {
+            if compiled.matches(track, &stats.get(&track.path)) {
                 tracks += 1;
                 albums[library.album_of[t] as usize] = true;
             }
@@ -175,7 +177,7 @@ impl ViewEditor {
             albums: albums.iter().filter(|&&b| b).count(),
             tracks,
         };
-        self.counted = Some((self.draft.clone(), counts));
+        self.counted = Some((self.draft.clone(), stats.revision, counts));
         counts
     }
 
@@ -186,13 +188,14 @@ impl ViewEditor {
         ctx: &egui::Context,
         settings: &mut Settings,
         library: &Library,
+        stats: &Stats,
         frame: &eframe::Frame,
     ) -> bool {
         if !self.open {
             return false;
         }
         let fresh = std::mem::take(&mut self.fresh);
-        let counts = self.count(library);
+        let counts = self.count(library, stats);
         let name = self.draft.name.trim();
         let taken = settings
             .views

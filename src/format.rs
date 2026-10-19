@@ -16,6 +16,16 @@ pub fn time(ms: u64) -> String {
     }
 }
 
+/// A day as the tables show it, in local time: `2026-10-19` in English,
+/// `19.10.2026` in Russian.
+pub fn date(unix_secs: u64) -> String {
+    let (y, m, d) = crate::win::local_date(unix_secs);
+    match lang() {
+        Lang::En => format!("{y}-{m:02}-{d:02}"),
+        Lang::Ru => format!("{d:02}.{m:02}.{y}"),
+    }
+}
+
 /// The length of many tracks, as the status line shows it:
 /// `16:40:20`, `15 days+16:40:20` / `15 дн.+16:40:20`.
 pub fn long_duration_in(lang: Lang, ms: u64) -> String {

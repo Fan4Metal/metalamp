@@ -22,6 +22,7 @@ use crate::library::filter::{Filter, ViewIcon};
 use crate::library::{AlbumId, ArtistId, Library, TrackId, unknown_artist};
 use crate::palette;
 use crate::settings::{AlbumView, Settings};
+use crate::stats::Stats;
 use crate::ui::icons::{self, Icon};
 use crate::ui::table::{self, Column, Sort, Table};
 
@@ -68,6 +69,8 @@ pub enum LibraryAction {
     NewView,
     /// Open the view editor for the view of this name.
     EditView(String),
+    /// Rate tracks: 0 (none) to 5 stars.
+    Rate(Vec<TrackId>, u8),
     /// "Go to album" (`to_album`) or "Go to artist": `album`'s, from
     /// `track` if a track's menu asked (it is selected there then).
     GoTo {
@@ -115,6 +118,8 @@ struct ViewKey {
     library: usize,
     /// The view's filter, if one is in use.
     filter: Option<Filter>,
+    /// `Stats::revision`: the plays and ratings the view was built on.
+    stats: u64,
     query: String,
     artist: Option<String>,
     album: Option<String>,
@@ -249,16 +254,25 @@ impl LibraryView {
     /// built, both scrolled into sight and `track` selected. A search or a
     /// view of the library that hides them is given up (the search
     /// cleared, the whole library shown). True when the settings changed.
+    #[allow(clippy::too_many_arguments)]
     pub fn go_to(
         &mut self,
         library: &Library,
+        stats: &Stats,
         settings: &mut Settings,
         album: AlbumId,
         track: Option<TrackId>,
         to_album: bool,
     ) -> bool {
-        let Some(target) = go_to_target(library, settings, &self.query, album, track, to_album)
-        else {
+        let Some(target) = go_to_target(
+            library,
+            stats,
+            settings,
+            &self.query,
+            album,
+            track,
+            to_album,
+        ) else {
             return false;
         };
         if target.clear_query {
@@ -337,10 +351,11 @@ impl LibraryView {
 
     /// The view for `library` as the search, the choice and the sorts are
     /// now; built again only when one of them changed.
-    fn refresh(&mut self, library: &Arc<Library>, settings: &Settings) {
+    fn refresh(&mut self, library: &Arc<Library>, settings: &Settings, stats: &Stats) {
         let key = ViewKey {
             library: Arc::as_ptr(library) as usize,
             filter: settings.current_view().cloned(),
+            stats: stats.revision,
             query: self.query.clone(),
             artist: self.artist.clone(),
             album: self.album.clone(),
@@ -360,7 +375,7 @@ impl LibraryView {
                 && k.artist == key.artist
                 && k.album == key.album
         });
-        let view = build(library, &key);
+        let view = build(library, stats, &key);
         // A choice the search or a new scan took away is dropped.
         if view.artist_row.is_none() {
             self.artist = None;
@@ -420,6 +435,7 @@ struct GoToTarget {
 
 fn go_to_target(
     library: &Library,
+    stats: &Stats,
     settings: &Settings,
     query: &str,
     album: AlbumId,
@@ -443,9 +459,10 @@ fn go_to_target(
     };
     let clear_view = settings.current_view().is_some_and(|f| {
         let f = f.compile(unix_now());
-        !wanted
-            .iter()
-            .any(|&t| f.matches(&library.tracks[t as usize]))
+        !wanted.iter().any(|&t| {
+            let track = &library.tracks[t as usize];
+            f.matches(track, &stats.get(&track.path))
+        })
     });
     let words = crate::library::query_words(query);
     let clear_query = !words.is_empty() && !wanted.iter().any(|&t| library.matches(t, &words));
@@ -466,7 +483,7 @@ fn unix_now() -> u64 {
 
 /// Builds the view: the tracks the view's filter and the search leave,
 /// the artists and albums that have any of them, each sorted.
-fn build(library: &Library, key: &ViewKey) -> View {
+fn build(library: &Library, stats: &Stats, key: &ViewKey) -> View {
     let start = Instant::now();
     let words = crate::library::query_words(&key.query);
     let filter = key.filter.as_ref().map(|f| f.compile(unix_now()));
@@ -475,7 +492,9 @@ fn build(library: &Library, key: &ViewKey) -> View {
         .iter()
         .enumerate()
         .map(|(t, track)| {
-            filter.as_ref().is_none_or(|f| f.matches(track))
+            filter
+                .as_ref()
+                .is_none_or(|f| f.matches(track, &stats.get(&track.path)))
                 && (words.is_empty() || library.matches(t as TrackId, &words))
         })
         .collect();
@@ -592,7 +611,16 @@ fn build(library: &Library, key: &ViewKey) -> View {
                 4 => a.year.cmp(&b.year),
                 5 => natural_cmp(&a.artist, &b.artist),
                 6 => natural_cmp(&a.genre, &b.genre),
-                _ => a.bitrate.cmp(&b.bitrate),
+                7 => a.bitrate.cmp(&b.bitrate),
+                // The statistics, then the album's order among equals.
+                col => {
+                    let (sa, sb) = (stats.get(&a.path), stats.get(&b.path));
+                    match col {
+                        8 => sa.rating.cmp(&sb.rating),
+                        9 => sa.plays.cmp(&sb.plays),
+                        _ => sa.last.cmp(&sb.last),
+                    }
+                }
             };
             if sort.descending { o.reverse() } else { o }
         });
@@ -632,18 +660,20 @@ fn unknown_album() -> &'static str {
 }
 
 /// The whole library pane: the bar with the search, then the three panes.
+#[allow(clippy::too_many_arguments)]
 pub fn show(
     ui: &mut Ui,
     lv: &mut LibraryView,
     library: &Arc<Library>,
     settings: &mut Settings,
+    stats: &Stats,
     scanning: bool,
     playing: Option<TrackId>,
     keys: bool,
 ) -> (Vec<LibraryAction>, bool) {
     let mut actions = Vec::new();
     let mut changed = false;
-    lv.refresh(library, settings);
+    lv.refresh(library, settings, stats);
     lv.finish_going(settings);
     if std::mem::take(&mut lv.play_shown)
         && let Some(view) = &lv.view
@@ -758,6 +788,7 @@ pub fn show(
         tracks,
         lv,
         library,
+        stats,
         settings,
         keys_free,
         playing,
@@ -1515,6 +1546,11 @@ fn album_cell(library: &Library, view: &View, row: usize, col: usize) -> String 
     }
 }
 
+/// A rating as stars: as many as it has, none for 0.
+pub fn stars(n: u8) -> String {
+    "★".repeat(usize::from(n.min(5)))
+}
+
 fn year(y: u16) -> String {
     if y == 0 { String::new() } else { y.to_string() }
 }
@@ -1814,6 +1850,7 @@ fn tracks_pane(
     rect: Rect,
     lv: &mut LibraryView,
     library: &Library,
+    stats: &Stats,
     settings: &mut Settings,
     keys_free: bool,
     playing: Option<TrackId>,
@@ -1833,11 +1870,16 @@ fn tracks_pane(
         Column::left(tr!("Artist", "Исполнитель")),
         Column::left(tr!("Genre", "Жанр")),
         Column::right(tr!("Bit rate", "Битрейт")),
+        Column::left(tr!("Rating", "Рейтинг")),
+        Column::right(tr!("Plays", "Прослуш.")),
+        Column::right(tr!("Last played", "Прослушан")),
     ];
     let mut w = widths(
         settings,
         "tracks",
-        &[44.0, 240.0, 60.0, 200.0, 50.0, 160.0, 100.0, 80.0],
+        &[
+            44.0, 240.0, 60.0, 200.0, 50.0, 160.0, 100.0, 80.0, 70.0, 60.0, 90.0,
+        ],
     );
     let mut sort = settings.sorts.get("tracks").copied();
     let rows = view.tracks.len();
@@ -1867,7 +1909,16 @@ fn tracks_pane(
                 4 => year(t.year),
                 5 => shown_name(&t.artist, unknown_artist()),
                 6 => t.genre.clone(),
-                _ => format::bitrate(t.bitrate),
+                7 => format::bitrate(t.bitrate),
+                col => {
+                    let st = stats.get(&t.path);
+                    match col {
+                        8 => stars(st.rating),
+                        9 if st.plays > 0 => st.plays.to_string(),
+                        10 if st.last > 0 => format::date(st.last),
+                        _ => String::new(),
+                    }
+                }
             }
         },
         &|row| (selected.contains(&row), Some(view.tracks[row]) == playing),
@@ -1888,6 +1939,7 @@ fn tracks_pane(
         &[
             MenuChoice::GoToAlbum,
             MenuChoice::GoToArtist,
+            MenuChoice::Rating,
             MenuChoice::Info,
         ]
     };
@@ -1913,6 +1965,10 @@ fn tracks_pane(
             if let Some(t) = lv.selected_track() {
                 actions.push(LibraryAction::Info(t));
             }
+        }
+        Some(MenuChoice::Rate(n)) => {
+            let tracks: Vec<TrackId> = lv.selected.iter().map(|&r| view.tracks[r]).collect();
+            actions.push(LibraryAction::Rate(tracks, n));
         }
         Some(choice @ (MenuChoice::GoToAlbum | MenuChoice::GoToArtist)) => {
             if let Some(t) = lv.selected_track() {
@@ -1989,6 +2045,10 @@ enum MenuChoice {
     Info,
     GoToAlbum,
     GoToArtist,
+    /// The rating's submenu (in `extras`).
+    Rating,
+    /// A rating chosen in it.
+    Rate(u8),
 }
 
 /// A pane's context menu, opened where the right button was let go on a
@@ -2005,15 +2065,16 @@ fn context_menu(
 ) -> Option<MenuChoice> {
     let area = area?;
     let open = (open || area.secondary_clicked()).then_some(egui::SetOpenCommand::Bool(true));
-    let mut choice = None;
+    // A cell: the items and the rating's submenu both set it.
+    let choice = std::cell::Cell::new(None);
     egui::Popup::context_menu(area)
         .id(egui::Id::new(("menu", id)))
         .open_memory(open)
         .show(|ui| {
             ui.set_min_width(200.0);
-            let mut item = |ui: &mut Ui, item: MenuChoice, label: &str| {
+            let item = |ui: &mut Ui, item: MenuChoice, label: &str| {
                 if ui.button(label).clicked() {
-                    choice = Some(item);
+                    choice.set(Some(item));
                     ui.close();
                 }
             };
@@ -2035,6 +2096,21 @@ fn context_menu(
                     item(ui, c, label);
                 }
             }
+            if extras.contains(&MenuChoice::Rating) {
+                ui.menu_button(tr!("Rating", "Рейтинг"), |ui| {
+                    for n in (0..=5).rev() {
+                        let label = if n == 0 {
+                            tr!("No rating", "Без рейтинга").to_owned()
+                        } else {
+                            stars(n)
+                        };
+                        if ui.button(label).clicked() {
+                            choice.set(Some(MenuChoice::Rate(n)));
+                            ui.close();
+                        }
+                    }
+                });
+            }
             ui.separator();
             item(
                 ui,
@@ -2049,7 +2125,7 @@ fn context_menu(
                 );
             }
         });
-    choice
+    choice.get()
 }
 
 /// The menus' "Go to album", shared with the playlist's.
@@ -2130,6 +2206,7 @@ mod tests {
         ViewKey {
             library: 0,
             filter: None,
+            stats: 0,
             query: query.into(),
             artist: artist.map(Into::into),
             album: album.map(Into::into),
@@ -2144,7 +2221,8 @@ mod tests {
         // "Химера" (album of a/2.mp3), found by its track.
         let t = lib.by_path[&PathBuf::from("a/2.mp3")];
         let album = lib.album_of[t as usize];
-        let target = go_to_target(&lib, &settings, "", album, Some(t), true).unwrap();
+        let target =
+            go_to_target(&lib, &Stats::default(), &settings, "", album, Some(t), true).unwrap();
         assert_eq!(target.artist, "ария");
         assert_eq!(
             target.album.as_deref(),
@@ -2153,23 +2231,49 @@ mod tests {
         assert!(!target.clear_query && !target.clear_view);
         let v = build(
             &lib,
+            &Stats::default(),
             &key("", Some(&target.artist), target.album.as_deref()),
         );
         assert!(v.artist_row.is_some() && v.album_row.is_some());
         assert!(v.tracks.contains(&t));
         // The artist alone.
-        let target = go_to_target(&lib, &settings, "", album, Some(t), false).unwrap();
+        let target = go_to_target(
+            &lib,
+            &Stats::default(),
+            &settings,
+            "",
+            album,
+            Some(t),
+            false,
+        )
+        .unwrap();
         assert_eq!(target.album, None);
         // A search that hides the track is cleared; one that shows it not.
         assert!(
-            go_to_target(&lib, &settings, "abba", album, Some(t), true)
-                .unwrap()
-                .clear_query
+            go_to_target(
+                &lib,
+                &Stats::default(),
+                &settings,
+                "abba",
+                album,
+                Some(t),
+                true
+            )
+            .unwrap()
+            .clear_query
         );
         assert!(
-            !go_to_target(&lib, &settings, "химера", album, Some(t), true)
-                .unwrap()
-                .clear_query
+            !go_to_target(
+                &lib,
+                &Stats::default(),
+                &settings,
+                "химера",
+                album,
+                Some(t),
+                true
+            )
+            .unwrap()
+            .clear_query
         );
         // So is a view that hides it.
         settings.views.push(crate::library::filter::Filter {
@@ -2184,26 +2288,38 @@ mod tests {
         });
         settings.view = "ABBA".into();
         assert!(
-            go_to_target(&lib, &settings, "", album, Some(t), false)
-                .unwrap()
-                .clear_view
+            go_to_target(
+                &lib,
+                &Stats::default(),
+                &settings,
+                "",
+                album,
+                Some(t),
+                false
+            )
+            .unwrap()
+            .clear_view
         );
     }
 
     #[test]
     fn all_then_artist_then_album() {
         let lib = lib();
-        let v = build(&lib, &key("", None, None));
+        let v = build(&lib, &Stats::default(), &key("", None, None));
         assert_eq!(v.artists.len(), 2);
         assert_eq!(v.albums.len(), 3);
         assert_eq!(v.tracks.len(), 4);
-        let v = build(&lib, &key("", Some("ария"), None));
+        let v = build(&lib, &Stats::default(), &key("", Some("ария"), None));
         assert_eq!(v.artist_row, Some(1));
         // By year: Герой асфальта (1987) before Химера (2001).
         assert_eq!(lib.albums[v.albums[0] as usize].title, "Герой асфальта");
         assert_eq!(v.tracks.len(), 3);
         let album = lib.albums[v.albums[1] as usize].key.clone();
-        let v = build(&lib, &key("", Some("ария"), Some(&album)));
+        let v = build(
+            &lib,
+            &Stats::default(),
+            &key("", Some("ария"), Some(&album)),
+        );
         assert_eq!(v.tracks.len(), 2);
     }
 
@@ -2211,15 +2327,15 @@ mod tests {
     fn search_narrows_every_pane() {
         let lib = lib();
         // Every word somewhere in the track: the artist and the album.
-        let v = build(&lib, &key("ария химера", None, None));
+        let v = build(&lib, &Stats::default(), &key("ария химера", None, None));
         assert_eq!(v.artists.len(), 1);
         assert_eq!(v.artists[0].tracks, 2);
         assert_eq!(v.albums.len(), 1);
         assert_eq!(v.tracks.len(), 2);
-        let v = build(&lib, &key("1987", None, None));
+        let v = build(&lib, &Stats::default(), &key("1987", None, None));
         assert_eq!(v.tracks.len(), 1);
         // A choice the search leaves out is no choice.
-        let v = build(&lib, &key("gold", Some("ария"), None));
+        let v = build(&lib, &Stats::default(), &key("gold", Some("ария"), None));
         assert_eq!(v.artist_row, None);
         assert_eq!(v.tracks.len(), 1);
     }
@@ -2232,7 +2348,7 @@ mod tests {
             column: 2,
             descending: true,
         });
-        let v = build(&lib, &k);
+        let v = build(&lib, &Stats::default(), &k);
         let years: Vec<u16> = v
             .albums
             .iter()
