@@ -1032,7 +1032,7 @@ fn bands(ui: &mut Ui, dsp: &mut DspSettings) {
                         let t = (*value + eq::RANGE_DB) / (2.0 * eq::RANGE_DB);
                         let knob = pos2(r.center().x, egui::lerp(bottom..=top, t));
                         ui.label(RichText::new(label).size(11.0));
-                        if response.double_clicked()
+                        if slider_double_clicked(ui, &response)
                             || tool(
                                 ui,
                                 tr!("Back to 0", "Вернуть 0"),
@@ -1096,6 +1096,20 @@ fn bands(ui: &mut Ui, dsp: &mut DspSettings) {
         ui.painter().set(under, egui::Shape::Vec(shapes));
     });
     ui.add_space(4.0);
+}
+
+/// A double click on a slider. egui's slider senses only drags, so it is
+/// never clicked and `Response::double_clicked` never holds: a press on it
+/// starts a drag at once, and the double click is the release of such a
+/// drag that the pointer reports as the second (or third) click.
+fn slider_double_clicked(ui: &Ui, response: &Response) -> bool {
+    response.drag_stopped()
+        && ui.input(|i| {
+            i.pointer
+                .button_double_clicked(egui::PointerButton::Primary)
+                || i.pointer
+                    .button_triple_clicked(egui::PointerButton::Primary)
+        })
 }
 
 /// A curve through `points` (Catmull-Rom, eight steps a span).
