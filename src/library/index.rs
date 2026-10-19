@@ -38,9 +38,18 @@ pub fn load() -> (Vec<Track>, bool) {
     let Ok(bytes) = std::fs::read(&path) else {
         return (Vec::new(), false);
     };
+    // Tracks of an index from before `added` was kept: the file's time.
+    let dated = |mut tracks: Vec<Track>| {
+        for t in &mut tracks {
+            if t.added == 0 {
+                t.added = t.mtime;
+            }
+        }
+        tracks
+    };
     match serde_json::from_slice::<Index>(&bytes) {
-        Ok(index) if index.version == VERSION => (index.tracks, false),
-        Ok(index) if READ_AGAIN.contains(&index.version) => (index.tracks, true),
+        Ok(index) if index.version == VERSION => (dated(index.tracks), false),
+        Ok(index) if READ_AGAIN.contains(&index.version) => (dated(index.tracks), true),
         Ok(_) => (Vec::new(), false),
         Err(e) => {
             log::warn!("cannot read {}: {e}", path.display());

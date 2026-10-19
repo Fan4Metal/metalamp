@@ -618,7 +618,8 @@ fn build(library: &Library, stats: &Stats, key: &ViewKey) -> View {
                     match col {
                         8 => sa.rating.cmp(&sb.rating),
                         9 => sa.plays.cmp(&sb.plays),
-                        _ => sa.last.cmp(&sb.last),
+                        10 => sa.last.cmp(&sb.last),
+                        _ => a.added_or_mtime().cmp(&b.added_or_mtime()),
                     }
                 }
             };
@@ -1873,12 +1874,13 @@ fn tracks_pane(
         Column::left(tr!("Rating", "Рейтинг")),
         Column::right(tr!("Plays", "Прослуш.")),
         Column::right(tr!("Last played", "Прослушан")),
+        Column::right(tr!("Added", "Добавлен")),
     ];
     let mut w = widths(
         settings,
         "tracks",
         &[
-            44.0, 240.0, 60.0, 200.0, 50.0, 160.0, 100.0, 80.0, 70.0, 60.0, 90.0,
+            44.0, 240.0, 60.0, 200.0, 50.0, 160.0, 100.0, 80.0, 70.0, 60.0, 90.0, 90.0,
         ],
     );
     let mut sort = settings.sorts.get("tracks").copied();
@@ -1916,6 +1918,7 @@ fn tracks_pane(
                         8 => stars(st.rating),
                         9 if st.plays > 0 => st.plays.to_string(),
                         10 if st.last > 0 => format::date(st.last),
+                        11 => format::date(t.added_or_mtime()),
                         _ => String::new(),
                     }
                 }

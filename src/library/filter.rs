@@ -8,7 +8,7 @@
 //! `any`). A rule tests one field of a track: a text (the genre, the
 //! artist, the album, the title) against a value without regard to case,
 //! a number (the year, the bit rate, the length in minutes, the days since
-//! the file was added, the plays, the days since the last one, the rating;
+//! the track came into the library, the plays, the days since the last one, the rating;
 //! the last three from `stats`) against one or two, the folder the file is
 //! in, or whether its tag holds a cover. The filters are kept in the settings
 //! (`views`) and compiled ([`Filter::compile`]) once per view built.
@@ -127,7 +127,7 @@ pub enum Field {
     Bitrate,
     /// Minutes.
     Length,
-    /// Days since the file was last written.
+    /// Days since the track came into the library (`Track::added`).
     Added,
     /// How many times it was played (`stats`).
     Plays,
@@ -260,7 +260,7 @@ impl Field {
             Field::Year => (t.year > 0).then_some(f64::from(t.year)),
             Field::Bitrate => (t.bitrate > 0).then_some(f64::from(t.bitrate)),
             Field::Length => Some(f64::from(t.duration_ms) / 60_000.0),
-            Field::Added => Some(days(t.mtime)),
+            Field::Added => Some(days(t.added_or_mtime())),
             Field::Plays => Some(f64::from(s.plays)),
             Field::LastPlayed => (s.last > 0).then(|| days(s.last)),
             Field::Rating => Some(f64::from(s.rating)),

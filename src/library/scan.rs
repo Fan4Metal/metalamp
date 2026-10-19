@@ -321,12 +321,26 @@ pub fn read_tracks(
         });
     let done = AtomicUsize::new(0);
     let last_report = std::sync::Mutex::new(Instant::now());
+    // A file read again keeps when it came; a new one came now, but on a
+    // library's first scan (nothing known) its own time stands in.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let first_scan = known.is_empty();
     let read = |f: &&Found| -> Option<Track> {
         if cancel.load(Relaxed) {
             return None;
         }
         let track = crate::guard::catch(&f.path, || tags::read(&f.path, f.size, f.mtime))
             .flatten()
+            .map(|mut t| {
+                t.added = match known.get(f.path.as_path()) {
+                    Some(old) => old.added_or_mtime(),
+                    None if first_scan => f.mtime,
+                    None => now,
+                };
+                t
+            })
             .or_else(|| known.get(f.path.as_path()).map(|t| (*t).clone()));
         let n = done.fetch_add(1, Relaxed) + 1;
         if let Ok(mut last) = last_report.try_lock()

@@ -52,6 +52,22 @@ pub struct Track {
     pub channels: u8,
     /// The tag holds a picture (the album's cover can come from it).
     pub has_cover: bool,
+    /// When the file came into the library (Unix seconds): the scan that
+    /// first found it, kept when it is read again; the file's time for the
+    /// tracks of an index written before this was kept, and for the first
+    /// scan of a library (which would make all of it new). 0: not known.
+    pub added: u64,
+}
+
+impl Track {
+    /// When it came into the library, or the file's time if not known.
+    pub fn added_or_mtime(&self) -> u64 {
+        if self.added > 0 {
+            self.added
+        } else {
+            self.mtime
+        }
+    }
 }
 
 impl Track {
