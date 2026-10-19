@@ -78,7 +78,7 @@ fn with_ctrl(m: Modifiers) -> Modifiers {
 }
 
 impl Chord {
-    const fn key(key: Key) -> Self {
+    pub const fn key(key: Key) -> Self {
         Self::of(Press::Key(key), false, false, false)
     }
 

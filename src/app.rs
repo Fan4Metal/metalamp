@@ -1648,13 +1648,18 @@ impl eframe::App for App {
             && !self.settings.mini
             && self.library_view.pointer_over_artists(&ctx);
         self.library_view.letters = letters;
+        // A space within a name typed there goes to it too.
+        let naming = self.library_view.typing_a_name();
+        let space = crate::keymap::Chord::key(Key::Space);
         // The keys as the settings' Keys page set them: none while a modal
         // is open; while a text field has the focus only those it does
         // not take (F-keys, Alt and most Ctrl chords); letters typed over
         // the artists go to an artist.
         if !modal {
             let cmds = crate::keymap::take(&ctx, &self.settings.keys, |chord| {
-                !(typing && chord.edits_text()) && !(letters && chord.types())
+                !(typing && chord.edits_text())
+                    && !(letters && chord.types())
+                    && !(naming && *chord == space)
             });
             for cmd in cmds {
                 self.run_key(cmd, &ctx, frame);

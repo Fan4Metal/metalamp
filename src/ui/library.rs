@@ -179,10 +179,17 @@ struct TypeAhead {
 impl TypeAhead {
     const PAUSE: Duration = Duration::from_secs(1);
 
-    /// Takes the letters typed this frame; true when there were any.
+    /// Letters typed within `PAUSE`: a space goes to the text looked for,
+    /// not to the player.
+    fn under_way(&self) -> bool {
+        !self.text.is_empty() && self.at.is_some_and(|at| at.elapsed() <= Self::PAUSE)
+    }
+
+    /// Takes the letters typed this frame; true when there were any. Not
+    /// with Shift: Shift and a letter are the player's keys (Shift+V).
     fn feed(&mut self, ui: &Ui) -> bool {
         let typed: String = ui.input(|i| {
-            if i.modifiers.alt || i.modifiers.command {
+            if i.modifiers.alt || i.modifiers.command || i.modifiers.shift {
                 return String::new();
             }
             i.events
@@ -193,15 +200,18 @@ impl TypeAhead {
                 })
                 .collect()
         });
-        let typed: String = typed.chars().filter(|c| !c.is_whitespace()).collect();
+        // A space only within a name ("iron maiden"), not to begin one.
+        let under_way = self.under_way();
+        let typed = if under_way {
+            &typed
+        } else {
+            typed.trim_start()
+        };
         if typed.is_empty() {
             return false;
         }
         let now = Instant::now();
-        if self
-            .at
-            .is_none_or(|at| now.duration_since(at) > Self::PAUSE)
-        {
+        if !under_way {
             self.text.clear();
         }
         self.at = Some(now);
@@ -321,6 +331,11 @@ impl LibraryView {
             self.scroll[2] = Some(row);
             self.reset_tracks = false;
         }
+    }
+
+    /// Letters are being typed over the artists: Space goes to them too.
+    pub fn typing_a_name(&self) -> bool {
+        self.letters && self.typed.under_way()
     }
 
     /// Whether the pointer is over the artists' pane (with nothing laid
