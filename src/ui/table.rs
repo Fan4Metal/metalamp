@@ -67,6 +67,8 @@ pub struct TableResponse {
     pub focused: bool,
     /// The response of the rows' area (for a context menu on empty space).
     pub area: Option<egui::Response>,
+    /// A drag started on this row (`Table::drag`).
+    pub drag_started: Option<usize>,
 }
 
 pub struct Table<'a> {
@@ -78,6 +80,8 @@ pub struct Table<'a> {
     pub rows: usize,
     /// Scroll so that this row is seen.
     pub scroll_to: Option<usize>,
+    /// Rows can be dragged (to the playlist).
+    pub drag: bool,
 }
 
 impl Table<'_> {
@@ -142,7 +146,15 @@ impl Table<'_> {
             for row in first..last {
                 let top = area_rect.top() + row as f32 * ROW_HEIGHT;
                 let r = Rect::from_min_size(pos2(area_rect.left(), top), vec2(width, ROW_HEIGHT));
-                let resp = ui.interact(r, self.id.with(("row", row)), Sense::click());
+                let sense = if self.drag {
+                    Sense::click_and_drag()
+                } else {
+                    Sense::click()
+                };
+                let resp = ui.interact(r, self.id.with(("row", row)), sense);
+                if resp.drag_started() {
+                    out.drag_started = Some(row);
+                }
                 let (selected, playing) = style(row);
                 let mut tip = None;
                 let fill = if selected {

@@ -1269,6 +1269,7 @@ fn artists_pane(
         sort: &mut sort,
         rows,
         scroll_to: lv.scroll[0].take(),
+        drag: false,
     }
     .show(
         &mut ui,
@@ -1404,6 +1405,7 @@ fn albums_table(
         sort: &mut sort,
         rows,
         scroll_to: lv.scroll[1].take(),
+        drag: true,
     }
     .show(
         &mut ui,
@@ -1414,6 +1416,10 @@ fn albums_table(
         lv.focus = Pane::Albums;
     }
     let mut choose = resp.clicked.or(resp.double_clicked).or(resp.secondary);
+    if let Some(row) = resp.drag_started {
+        let album = (row > 0).then(|| view.albums[row - 1]);
+        drag_tracks(&ui, library, &album_tracks(library, view, album));
+    }
     let menu_album = view.album_row.map(|r| view.albums[r]);
     album_menu(
         library,
@@ -1500,6 +1506,26 @@ fn album_extras(album: Option<AlbumId>) -> &'static [MenuChoice] {
         &[MenuChoice::GoToArtist]
     } else {
         &[]
+    }
+}
+
+/// `tracks` picked up for the playlist (egui's drag and drop).
+fn drag_tracks(ui: &Ui, library: &Library, tracks: &[TrackId]) {
+    if tracks.is_empty() {
+        return;
+    }
+    let paths = tracks
+        .iter()
+        .map(|&t| library.tracks[t as usize].path.clone())
+        .collect();
+    egui::DragAndDrop::set_payload(ui.ctx(), crate::ui::DraggedTracks(paths));
+}
+
+/// The tracks of `album`, or of every album shown ("All").
+fn album_tracks(library: &Library, view: &View, album: Option<AlbumId>) -> Vec<TrackId> {
+    match album {
+        Some(a) => library.albums[a as usize].tracks.clone(),
+        None => view.tracks.clone(),
     }
 }
 
@@ -1698,8 +1724,11 @@ fn albums_grid(
                 let resp = ui.interact(
                     cell,
                     egui::Id::new(("album_cell", album_id)),
-                    Sense::click(),
+                    Sense::click_and_drag(),
                 );
+                if resp.drag_started() {
+                    drag_tracks(ui, library, &library.albums[album_id as usize].tracks);
+                }
                 let selected = current == Some(i);
                 if selected {
                     painter.rect_filled(cell, 4.0, palette::selected_bg());
@@ -1894,6 +1923,7 @@ fn tracks_pane(
         sort: &mut sort,
         rows,
         scroll_to: lv.scroll[2].take(),
+        drag: true,
     }
     .show(
         &mut ui,
@@ -1933,8 +1963,13 @@ fn tracks_pane(
     if let Some(row) = resp
         .clicked
         .or(resp.secondary.filter(|r| !lv.selected.contains(r)))
+        .or(resp.drag_started.filter(|r| !lv.selected.contains(r)))
     {
         table::click_select(&mut lv.selected, &mut lv.anchor, row, modifiers);
+    }
+    if resp.drag_started.is_some() {
+        let tracks: Vec<TrackId> = lv.selected.iter().map(|&r| view.tracks[r]).collect();
+        drag_tracks(&ui, library, &tracks);
     }
     let extras: &[MenuChoice] = if lv.selected.is_empty() {
         &[]

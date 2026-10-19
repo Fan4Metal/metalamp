@@ -106,6 +106,36 @@ pub fn modal_size(ctx: &egui::Context, wanted: egui::Vec2, margin: f32) -> egui:
     wanted.min(room).max(egui::vec2(200.0, 160.0))
 }
 
+/// Tracks dragged from the library (egui's drag and drop payload), for
+/// the playlist to take where they are let go.
+pub struct DraggedTracks(pub Vec<std::path::PathBuf>);
+
+/// Tracks of the library being dragged: grabbing, and their count by the
+/// pointer.
+pub fn paint_dragged_tracks(ctx: &egui::Context) {
+    let Some(dragged) = egui::DragAndDrop::payload::<DraggedTracks>(ctx) else {
+        return;
+    };
+    let Some(pos) = ctx.pointer_latest_pos() else {
+        return;
+    };
+    ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+    let text = crate::i18n::count(
+        dragged.0.len() as u64,
+        ["track", "tracks"],
+        ["трек", "трека", "треков"],
+    );
+    egui::Area::new(egui::Id::new("dragged_tracks"))
+        .order(egui::Order::Tooltip)
+        .fixed_pos(pos + egui::vec2(14.0, 10.0))
+        .interactable(false)
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.label(text);
+            });
+        });
+}
+
 /// A cross that closes a dialog; true when clicked.
 pub fn close_cross(ui: &mut Ui) -> bool {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());

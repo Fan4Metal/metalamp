@@ -184,6 +184,14 @@ impl Player {
         }
     }
 
+    /// `paths` put in the playlist at `at` (`next`: right after the
+    /// current entry in the order of play); the index of the first.
+    pub fn insert(&mut self, at: usize, paths: Vec<PathBuf>, next: bool) -> usize {
+        let first = self.queue.insert(at, paths, next);
+        self.refresh_preload();
+        first
+    }
+
     pub fn toggle_pause(&mut self) {
         match self.status {
             Status::Playing => {

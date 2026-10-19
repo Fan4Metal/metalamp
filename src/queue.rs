@@ -112,6 +112,36 @@ impl Queue {
         first
     }
 
+    /// `paths` put in at `at` in the list (its end at most); the index of
+    /// the first. With shuffle on they come into the order of play too:
+    /// `next`, right after the current entry, in their order (Play next);
+    /// else shuffled into what is still to come, as [`Queue::add`].
+    pub fn insert(&mut self, at: usize, paths: Vec<PathBuf>, next: bool) -> usize {
+        let at = at.min(self.entries.len());
+        let mut ids = self.order_ids();
+        let current_id = self.current_entry().map(|e| e.id);
+        let new: Vec<Entry> = paths.into_iter().map(|p| self.new_entry(p)).collect();
+        let new_ids: Vec<u64> = new.iter().map(|e| e.id).collect();
+        self.entries.splice(at..at, new);
+        self.current = current_id.and_then(|id| self.index_of(id));
+        if self.shuffle {
+            let after = current_id
+                .and_then(|c| ids.iter().position(|&i| i == c))
+                .map_or(0, |p| p + 1);
+            if next {
+                ids.splice(after..after, new_ids);
+            } else {
+                let mut rest = ids.split_off(after);
+                rest.extend(new_ids);
+                self.shuffle_slice(&mut rest);
+                ids.extend(rest);
+            }
+        }
+        self.reorder(&ids);
+        self.revision += 1;
+        at
+    }
+
     /// Removes the entries at `indices`; the current one stays current if
     /// it is kept. When it is not, returns the kept entry that came after
     /// it in the order of play (round to the first with repeat all), to go
@@ -309,7 +339,7 @@ impl Queue {
         self.order = self.current.into_iter().chain(rest).collect();
     }
 
-    fn shuffle_slice(&mut self, items: &mut [usize]) {
+    fn shuffle_slice<T>(&mut self, items: &mut [T]) {
         if self.seed == 0 {
             self.seed = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -395,6 +425,33 @@ pub fn m3u_text(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn paths(names: &[&str]) -> Vec<PathBuf> {
+        names.iter().map(PathBuf::from).collect()
+    }
+
+    #[test]
+    fn insert_keeps_the_current_entry_and_the_order_of_play() {
+        let mut q = Queue::default();
+        q.replace(paths(&["a", "b", "c"]));
+        q.set_current(Some(1));
+        let at = q.insert(1, paths(&["x", "y"]), false);
+        assert_eq!(at, 1);
+        let names: Vec<_> = q.entries().iter().map(|e| e.path.clone()).collect();
+        assert_eq!(names, paths(&["a", "x", "y", "b", "c"]));
+        // "b" is still the current entry, now at 3.
+        assert_eq!(q.current(), Some(3));
+        assert_eq!(q.after(Some(3)), Some(4));
+        // Past the end: at the end.
+        assert_eq!(q.insert(99, paths(&["z"]), false), 5);
+        // Shuffled, "next" comes right after the current entry.
+        q.set_shuffle(true);
+        let first = q.insert(0, paths(&["n1", "n2"]), true);
+        let cur = q.current();
+        let n1 = q.after(cur).unwrap();
+        assert_eq!(n1, first);
+        assert_eq!(q.after(Some(n1)), Some(first + 1));
+    }
 
     fn queue(n: usize) -> Queue {
         let mut q = Queue::default();

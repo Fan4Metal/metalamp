@@ -1279,6 +1279,7 @@ impl eframe::App for App {
         if let Some(path) = self.info_request.take() {
             self.file_info.open(&ctx, &path);
         }
+        crate::ui::paint_dragged_tracks(&ctx);
         // The equalizer's window, under the modals.
         let before = (self.settings.dsp.clone(), self.settings.eq_presets.clone());
         self.eq_window.show(

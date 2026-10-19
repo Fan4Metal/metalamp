@@ -316,6 +316,9 @@ pub fn show(
     let mut double_row = None;
     let mut secondary_row = None;
     let mut drop_slot = None;
+    // Tracks dragged from the library: let go over the list, they are put
+    // in at the slot (with a search, before the entry shown there).
+    let from_library = egui::DragAndDrop::has_payload_of_type::<crate::ui::DraggedTracks>(ui.ctx());
     let number_w = format!("{}.", count.max(1)).len() as f32 * 7.5 + 8.0;
     let out = scroll.show_viewport(&mut child, |ui, viewport| {
         let height = (shown.len() as f32 * ROW_HEIGHT).max(viewport.height());
@@ -395,8 +398,8 @@ pub fn show(
         // While dragging over the list: the slot under the pointer, shown
         // as a line (let go elsewhere, nothing moves); near its top or
         // bottom edge the list scrolls.
-        if pv.dragging
-            && let Some(p) = ui.ctx().pointer_interact_pos()
+        if (pv.dragging || from_library)
+            && let Some(p) = ui.ctx().pointer_latest_pos()
             && body.x_range().contains(p.x)
         {
             if body.contains(p) {
@@ -428,6 +431,20 @@ pub fn show(
     // Esc gives the drag up.
     if pv.dragging && ui.input(|i| i.key_pressed(Key::Escape)) {
         pv.dragging = false;
+    }
+    if from_library
+        && ui.input(|i| i.pointer.any_released())
+        && let Some(slot) = drop_slot
+        && let Some(dragged) = egui::DragAndDrop::take_payload::<crate::ui::DraggedTracks>(ui.ctx())
+    {
+        let at = shown.get(slot).copied().unwrap_or(count);
+        let paths = dragged.0.clone();
+        let n = paths.len();
+        let at = player.insert(at, paths, false);
+        pv.revision = player.queue.revision;
+        pv.selected = (at..at + n).collect();
+        pv.anchor = Some(at);
+        pv.focused = true;
     }
     if pv.dragging && ui.input(|i| i.pointer.any_released()) {
         pv.dragging = false;
