@@ -2,9 +2,11 @@
 //! "N. Artist – Title" and the length of each, the entry playing in the
 //! accent, the total at the bottom. Rows are selected as in the tables
 //! (Ctrl, Shift), dragged to another place, removed with Delete; a double
-//! click or Enter plays one; the right button opens a menu. Under the
-//! list, the cover of the track playing (a button in the bar hides it; a
-//! click on it opens the file info).
+//! click or Enter plays one; the right button opens a menu. The playlists'
+//! button lists the saved playlists and those of the library's folders (a
+//! click opens one, the cross deletes or takes it out). Under the list,
+//! the cover of the track playing (a button in the bar hides it; a click
+//! on it opens the file info).
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -25,6 +27,15 @@ const FOOTER: f32 = 24.0;
 const COVER_MAX: f32 = 360.0;
 const COVER_PAD: f32 = 10.0;
 const COVER_MIN_LIST: f32 = 4.0 * ROW_HEIGHT;
+/// The room round the playlists' list in their menu, and the rows it shows
+/// before it scrolls.
+const SAVED_MARGIN: f32 = 4.0;
+const MENU_ROWS: f32 = 12.0;
+/// The playlists' menu's width.
+const MENU_WIDTH: f32 = 320.0;
+/// How long the saved playlists' names are kept before the folder is read
+/// again (they change when saved or deleted here, or by hand).
+const SAVED_FOR: std::time::Duration = std::time::Duration::from_secs(1);
 
 #[derive(Default)]
 pub struct PlaylistView {
@@ -51,6 +62,21 @@ pub struct PlaylistView {
     /// The window shows no library (the player and playlist layout): its
     /// "Go to" items are left out.
     pub no_library: bool,
+    /// The playlists of the section and when they were listed: the saved
+    /// ones, then those in the library's folders; each file's number of
+    /// tracks, with the time of the file it was counted in (read again only
+    /// when the file changed).
+    saved: Vec<Listed>,
+    counts: std::collections::HashMap<std::path::PathBuf, (Option<std::time::SystemTime>, usize)>,
+    saved_at: Option<std::time::Instant>,
+}
+
+/// A playlist of the section: its name, its file, and whether it is saved
+/// here (else one of the library's folders, which is not deleted here).
+struct Listed {
+    name: String,
+    path: std::path::PathBuf,
+    own: bool,
 }
 
 /// The rows' text and what the search leaves, built again only when the
@@ -96,6 +122,12 @@ impl Rows {
 }
 
 impl PlaylistView {
+    /// The section's playlists listed again in the next frame (one saved,
+    /// deleted, taken out or put back).
+    pub fn list_playlists_again(&mut self) {
+        self.saved_at = None;
+    }
+
     /// The playlist is not shown: the keys go back to the library, and a
     /// drag under way is given up.
     pub fn hidden(&mut self) {
@@ -137,6 +169,12 @@ pub enum PlaylistAction {
     /// one; save the list to a file of one's choice.
     SaveAs(String),
     Open(String),
+    /// Open (and play) a playlist of the library's folders, by its file.
+    OpenFile(std::path::PathBuf),
+    /// Take a playlist of the library's folders out of the section (the
+    /// file stays), or put back all those taken out.
+    Hide(std::path::PathBuf),
+    ShowHidden,
     Delete(String),
     Export,
 }
@@ -163,6 +201,7 @@ fn describe(library: &Library, path: &std::path::Path) -> (String, Option<u32>) 
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn show(
     ui: &mut Ui,
     pv: &mut PlaylistView,
@@ -171,8 +210,46 @@ pub fn show(
     keys: bool,
     cover: Option<&TextureHandle>,
     show_cover: &mut bool,
+    hidden: &[std::path::PathBuf],
 ) -> Vec<PlaylistAction> {
     let mut actions = Vec::new();
+    if pv.saved_at.is_none_or(|at| at.elapsed() >= SAVED_FOR) {
+        let own = crate::playlists::list().into_iter().filter_map(|name| {
+            let path = crate::playlists::path(&name)?;
+            Some(Listed {
+                name,
+                path,
+                own: true,
+            })
+        });
+        let found = library
+            .playlists
+            .iter()
+            .filter(|p| !hidden.contains(p))
+            .map(|path| Listed {
+                name: path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                path: path.clone(),
+                own: false,
+            });
+        pv.saved = own.chain(found).collect();
+        pv.saved_at = Some(std::time::Instant::now());
+        let mut counts = std::mem::take(&mut pv.counts);
+        counts.retain(|path, _| pv.saved.iter().any(|l| &l.path == path));
+        for listed in &pv.saved {
+            let modified = crate::playlists::modified(&listed.path);
+            if counts
+                .get(&listed.path)
+                .is_none_or(|(at, _)| *at != modified)
+            {
+                let n = crate::playlists::tracks_in(&listed.path).map_or(0, |p| p.len());
+                counts.insert(listed.path.clone(), (modified, n));
+            }
+        }
+        pv.counts = counts;
+    }
     if pv.revision != player.queue.revision {
         // The list changed elsewhere: indices no longer mean the same rows.
         pv.selected.clear();
@@ -217,7 +294,13 @@ pub fn show(
     {
         *show_cover = !*show_cover;
     }
-    playlists_menu(&mut bar, pv, !player.queue.is_empty(), &mut actions);
+    playlists_menu(
+        &mut bar,
+        pv,
+        !player.queue.is_empty(),
+        hidden.len(),
+        &mut actions,
+    );
     let edit = egui::TextEdit::singleline(&mut pv.query)
         .hint_text(tr!("Search in the playlist", "Поиск в плейлисте"))
         .desired_width(f32::INFINITY);
@@ -746,18 +829,27 @@ fn playlists_menu(
     ui: &mut Ui,
     pv: &mut PlaylistView,
     any: bool,
+    hidden: usize,
     actions: &mut Vec<PlaylistAction>,
 ) {
     let button = crate::ui::icon_button(
         ui,
-        Icon::Folder,
+        Icon::Playlists,
         false,
-        tr!("Playlists: save, open", "Плейлисты: сохранить, открыть"),
+        tr!(
+            "Save the playlist: under a name, or to a file",
+            "Сохранить плейлист: под именем или в файл"
+        ),
     );
+    // `METALAMP_PLAYLISTS_MENU`: open at start (GUI checks).
+    if ui.ctx().cumulative_frame_nr() == 2 && std::env::var_os("METALAMP_PLAYLISTS_MENU").is_some()
+    {
+        egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&button));
+    }
     egui::Popup::menu(&button)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
-            ui.set_min_width(280.0);
+            ui.set_min_width(MENU_WIDTH);
             ui.label(
                 egui::RichText::new(tr!("Save the list as", "Сохранить список как"))
                     .small()
@@ -783,39 +875,16 @@ fn playlists_menu(
                     ui.close();
                 }
             });
-            let saved = crate::playlists::list();
-            if !saved.is_empty() {
+            if !pv.saved.is_empty() {
                 ui.separator();
                 ui.label(
-                    egui::RichText::new(tr!(
-                        "Saved: a click opens",
-                        "Сохранённые: щелчок открывает"
-                    ))
-                    .small()
-                    .color(palette::text_weak()),
+                    egui::RichText::new(tr!("Playlists", "Плейлисты"))
+                        .small()
+                        .color(palette::text_weak()),
                 );
-                egui::ScrollArea::vertical()
-                    .max_height(300.0)
-                    .show(ui, |ui| {
-                        for name in saved {
-                            ui.horizontal(|ui| {
-                                if crate::ui::icon_button(
-                                    ui,
-                                    Icon::Close,
-                                    false,
-                                    tr!("Delete this playlist", "Удалить этот плейлист"),
-                                )
-                                .clicked()
-                                {
-                                    actions.push(PlaylistAction::Delete(name.clone()));
-                                }
-                                if ui.button(&name).clicked() {
-                                    actions.push(PlaylistAction::Open(name.clone()));
-                                    ui.close();
-                                }
-                            });
-                        }
-                    });
+                if playlist_rows(ui, pv, actions) {
+                    ui.close();
+                }
             }
             ui.separator();
             if ui
@@ -828,5 +897,192 @@ fn playlists_menu(
                 actions.push(PlaylistAction::Export);
                 ui.close();
             }
+            // The library's playlists taken out of the section, put back:
+            // here, as the section is gone once all are.
+            if hidden > 0 {
+                ui.separator();
+                let text = tr!(
+                    format!("Put back the playlists taken out ({hidden})"),
+                    format!("Вернуть убранные плейлисты ({hidden})")
+                );
+                if ui.button(text).clicked() {
+                    actions.push(PlaylistAction::ShowHidden);
+                    ui.close();
+                }
+            }
         });
+}
+
+/// The playlists in the playlists' menu: the saved ones, then those of
+/// the library's folders (an M3U/M3U8 badge), each with its number, name,
+/// number of tracks and a cross; a click on one opens it in place of the
+/// list and plays it (`Open`, `OpenFile`; whether one was), the cross
+/// deletes a saved one (`Delete`) or takes one of the library's out of the
+/// list (`Hide`, the file staying).
+fn playlist_rows(ui: &mut Ui, pv: &PlaylistView, actions: &mut Vec<PlaylistAction>) -> bool {
+    let mut opened = false;
+    let height = (pv.saved.len() as f32 * ROW_HEIGHT).min(MENU_ROWS * ROW_HEIGHT);
+    // As wide as the menu's other rows: a popup offers all the window.
+    let width = MENU_WIDTH;
+    let (frame, _) =
+        ui.allocate_exact_size(vec2(width, height + 2.0 * SAVED_MARGIN), Sense::hover());
+    ui.painter().rect_filled(frame, 4.0, palette::list_bg());
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(frame.shrink(SAVED_MARGIN))
+            .id_salt("saved_playlists"),
+    );
+    // Rows of `ROW_HEIGHT` with no gap, as the height counts them.
+    child.spacing_mut().item_spacing.y = 0.0;
+    let number_w = format!("{}.", pv.saved.len()).len() as f32 * 7.5 + 8.0;
+    egui::ScrollArea::vertical()
+        .id_salt("saved_playlists_scroll")
+        .auto_shrink([false, false])
+        .max_height(height)
+        .show_rows(&mut child, ROW_HEIGHT, pv.saved.len(), |ui, range| {
+            for i in range {
+                let listed = &pv.saved[i];
+                let name = &listed.name;
+                let (r, resp) =
+                    ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
+                let cross = Rect::from_center_size(
+                    pos2(r.right() - 12.0, r.center().y),
+                    vec2(20.0, ROW_HEIGHT),
+                );
+                // The cross deletes a saved one; one of the library's
+                // folders, the user's file, is only taken out of the list.
+                let delete =
+                    Some(ui.interact(cross, egui::Id::new(("saved_delete", i)), Sense::click()));
+                let delete_hovered = delete.as_ref().is_some_and(|d| d.hovered());
+                let painter = ui.painter();
+                if resp.hovered() || delete_hovered {
+                    painter.rect_filled(r, 2.0, palette::hover());
+                }
+                let font = FontId::proportional(13.0);
+                let num = painter.layout_no_wrap(
+                    format!("{}.", i + 1),
+                    font.clone(),
+                    palette::text_weak(),
+                );
+                painter.galley(
+                    pos2(
+                        r.left() + number_w - num.size().x,
+                        r.center().y - num.size().y / 2.0,
+                    ),
+                    num,
+                    palette::text_weak(),
+                );
+                // The number of its tracks, right of the name.
+                let tracks = pv.counts.get(&listed.path).map_or(0, |(_, n)| *n);
+                let count = painter.layout_no_wrap(
+                    tracks.to_string(),
+                    FontId::proportional(12.0),
+                    palette::text_weak(),
+                );
+                let mut count_x = cross.left() - 6.0 - count.size().x;
+                painter.galley(
+                    pos2(count_x, r.center().y - count.size().y / 2.0),
+                    count,
+                    palette::text_weak(),
+                );
+                // One of the library's folders: its type in a badge.
+                if !listed.own {
+                    let kind = listed
+                        .path
+                        .extension()
+                        .map(|e| e.to_string_lossy().to_uppercase())
+                        .unwrap_or_default();
+                    let label = painter.layout_no_wrap(
+                        kind,
+                        FontId::proportional(10.5),
+                        palette::text_weak(),
+                    );
+                    let badge = Rect::from_center_size(
+                        pos2(count_x - 8.0 - label.size().x / 2.0 - 4.0, r.center().y),
+                        vec2(label.size().x + 8.0, 15.0),
+                    );
+                    painter.rect_stroke(
+                        badge,
+                        3.0,
+                        egui::Stroke::new(1.0, palette::line()),
+                        egui::StrokeKind::Inside,
+                    );
+                    painter.galley(
+                        badge.center() - label.size() / 2.0,
+                        label,
+                        palette::text_weak(),
+                    );
+                    count_x = badge.left() + 2.0;
+                }
+                let text_left = r.left() + number_w + 6.0;
+                let g = crate::ui::elided(
+                    painter,
+                    name.clone(),
+                    font,
+                    palette::list_text(),
+                    count_x - 8.0 - text_left,
+                );
+                painter.galley(
+                    pos2(text_left, r.center().y - g.size().y / 2.0),
+                    g,
+                    palette::list_text(),
+                );
+                if let Some(delete) = delete {
+                    let colour = if delete.hovered() {
+                        palette::text_bright()
+                    } else {
+                        palette::text_weak()
+                    };
+                    icons::paint(
+                        painter,
+                        Icon::Close,
+                        cross.center(),
+                        10.0,
+                        colour,
+                        palette::list_bg(),
+                    );
+                    let tip = if listed.own {
+                        tr!("Delete this playlist", "Удалить этот плейлист")
+                    } else {
+                        tr!(
+                            "Take out of the list (the file stays)",
+                            "Убрать из списка (файл остаётся на месте)"
+                        )
+                    };
+                    if delete.on_hover_text(tip).clicked() {
+                        actions.push(if listed.own {
+                            PlaylistAction::Delete(name.clone())
+                        } else {
+                            PlaylistAction::Hide(listed.path.clone())
+                        });
+                        continue;
+                    }
+                }
+                let tip = if listed.own {
+                    tr!(
+                        "Open in place of the list and play",
+                        "Открыть вместо списка и воспроизвести"
+                    )
+                    .to_owned()
+                } else {
+                    format!(
+                        "{}\n{}",
+                        listed.path.display(),
+                        tr!(
+                            "Open in place of the list and play",
+                            "Открыть вместо списка и воспроизвести"
+                        )
+                    )
+                };
+                if resp.on_hover_text(tip).clicked() {
+                    actions.push(if listed.own {
+                        PlaylistAction::Open(name.clone())
+                    } else {
+                        PlaylistAction::OpenFile(listed.path.clone())
+                    });
+                    opened = true;
+                }
+            }
+        });
+    opened
 }

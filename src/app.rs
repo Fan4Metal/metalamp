@@ -704,14 +704,36 @@ impl App {
                     if let Err(e) = crate::playlists::save(&name, &self.playlist_m3u8()) {
                         log::warn!("cannot save the playlist {name}: {e}");
                     }
+                    self.playlist_view.list_playlists_again();
                 }
                 crate::ui::playlist::PlaylistAction::Open(name) => {
                     if let Some(paths) = crate::playlists::load(&name) {
                         self.player.play_paths(paths, 0);
                     }
                 }
+                crate::ui::playlist::PlaylistAction::OpenFile(path) => {
+                    // Only what plays, as a playlist opened from Explorer.
+                    if let Some(paths) = crate::playlists::tracks_in(&path) {
+                        let paths = paths
+                            .into_iter()
+                            .filter(|p| crate::filetypes::is_audio(p))
+                            .collect();
+                        self.player.play_paths(paths, 0);
+                    }
+                }
                 crate::ui::playlist::PlaylistAction::Delete(name) => {
                     crate::playlists::delete(&name);
+                    self.playlist_view.list_playlists_again();
+                }
+                crate::ui::playlist::PlaylistAction::Hide(path) => {
+                    self.settings.hidden_playlists.push(path);
+                    self.playlist_view.list_playlists_again();
+                    self.place_changed = Some(Instant::now());
+                }
+                crate::ui::playlist::PlaylistAction::ShowHidden => {
+                    self.settings.hidden_playlists.clear();
+                    self.playlist_view.list_playlists_again();
+                    self.place_changed = Some(Instant::now());
                 }
                 crate::ui::playlist::PlaylistAction::Export => self.export_playlist(frame),
                 crate::ui::playlist::PlaylistAction::EditTags(indices) => {
@@ -1702,6 +1724,7 @@ impl eframe::App for App {
                     !modal,
                     cover.as_ref(),
                     &mut self.settings.playlist_cover,
+                    &self.settings.hidden_playlists,
                 )
             });
             if self.settings.playlist_cover != shown_cover {
@@ -1728,6 +1751,7 @@ impl eframe::App for App {
                         !modal,
                         cover.as_ref(),
                         &mut self.settings.playlist_cover,
+                        &self.settings.hidden_playlists,
                     )
                 });
             if self.settings.playlist_cover != shown_cover {

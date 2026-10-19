@@ -79,6 +79,9 @@ pub struct Settings {
     pub playlist_width: f32,
     /// The cover of the track playing under the playlist.
     pub playlist_cover: bool,
+    /// Playlists of the library's folders taken out of that section (the
+    /// files stay).
+    pub hidden_playlists: Vec<PathBuf>,
     /// The playlist's current entry (`playlist.m3u8` holds the list).
     pub playlist_current: Option<usize>,
     /// Where in it playing was left (ms; 0: at its start), taken up by
@@ -317,6 +320,7 @@ impl Default for Settings {
             playlist_visible: true,
             playlist_width: 340.0,
             playlist_cover: true,
+            hidden_playlists: Vec::new(),
             playlist_current: None,
             playlist_position: 0,
             time_remaining: false,

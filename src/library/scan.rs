@@ -126,9 +126,9 @@ fn run(asked: Asked, cancel: &AtomicBool, tx: &Sender<ScanMsg>, wake: &Wake) {
     let start = Instant::now();
     let mut read_all = read_again;
     let previous = if load_index {
-        let (tracks, stale) = index::load();
-        read_all = stale;
-        let library = Arc::new(Library::new(tracks));
+        let loaded = index::load();
+        read_all = loaded.stale;
+        let library = Arc::new(Library::new(loaded.tracks).with_playlists(loaded.playlists));
         log::debug!(
             "index: {} tracks in {} ms",
             library.tracks.len(),
@@ -141,7 +141,7 @@ fn run(asked: Asked, cancel: &AtomicBool, tx: &Sender<ScanMsg>, wake: &Wake) {
     };
     if folders.is_empty() && !load_index {
         // The last folder removed: an empty library.
-        index::save(&[], number);
+        index::save(&[], &[], number);
         send(ScanMsg::Done(Scanned {
             library: Arc::new(Library::default()),
             read: 0,
@@ -159,7 +159,11 @@ fn run(asked: Asked, cancel: &AtomicBool, tx: &Sender<ScanMsg>, wake: &Wake) {
         return;
     }
     let started = Instant::now();
-    let Walked { found, unreadable } = walk(&folders, cancel);
+    let Walked {
+        found,
+        mut playlists,
+        unreadable,
+    } = walk(&folders, cancel);
     if cancel.load(Relaxed) {
         return;
     }
@@ -189,7 +193,14 @@ fn run(asked: Asked, cancel: &AtomicBool, tx: &Sender<ScanMsg>, wake: &Wake) {
             })
             .cloned()
             .collect();
+        // Its playlists too.
+        for p in &previous.playlists {
+            if !playlists.contains(p) && unreadable.iter().any(|u| p.starts_with(u)) {
+                playlists.push(p.clone());
+            }
+        }
     }
+    let playlists_changed = previous.as_deref().is_none_or(|l| l.playlists != playlists);
     let (mut tracks, read) = read_tracks(
         &found,
         &known,
@@ -200,9 +211,11 @@ fn run(asked: Asked, cancel: &AtomicBool, tx: &Sender<ScanMsg>, wake: &Wake) {
             // program goes on from there next time.
             let mut saved = so_far.to_vec();
             saved.extend(kept.iter().cloned());
-            index::save(&saved, number);
+            index::save(&saved, &playlists, number);
             if !read_all {
-                send(ScanMsg::Loaded(Arc::new(Library::new(saved))));
+                send(ScanMsg::Loaded(Arc::new(
+                    Library::new(saved).with_playlists(playlists.clone()),
+                )));
             }
         },
     );
@@ -212,9 +225,9 @@ fn run(asked: Asked, cancel: &AtomicBool, tx: &Sender<ScanMsg>, wake: &Wake) {
     tracks.extend(kept);
     // Fewer kept than known: files were deleted or their folder dropped.
     let removed = tracks.len() - read < known.len();
-    let library = Arc::new(Library::new(tracks));
-    if read > 0 || removed {
-        index::save(&library.tracks, number);
+    let library = Arc::new(Library::new(tracks).with_playlists(playlists));
+    if read > 0 || removed || playlists_changed {
+        index::save(&library.tracks, &library.playlists, number);
     }
     log::debug!(
         "scan: {} files, {read} read, in {} ms",
@@ -232,6 +245,8 @@ fn run(asked: Asked, cancel: &AtomicBool, tx: &Sender<ScanMsg>, wake: &Wake) {
 pub struct Walked {
     /// The files of supported types.
     pub found: Vec<Found>,
+    /// The M3U and M3U8 playlists, in natural order of their paths.
+    pub playlists: Vec<PathBuf>,
     /// The folders (a library folder itself among them) and files that
     /// could not be read: what the index holds under them is kept.
     pub unreadable: Vec<PathBuf>,
@@ -243,6 +258,7 @@ pub fn walk(folders: &[PathBuf], cancel: &AtomicBool) -> Walked {
     let mut seen = std::collections::HashSet::new();
     let mut walked = Walked {
         found: Vec::new(),
+        playlists: Vec::new(),
         unreadable: Vec::new(),
     };
     for folder in folders {
@@ -259,7 +275,16 @@ pub fn walk(folders: &[PathBuf], cancel: &AtomicBool) -> Walked {
                     continue;
                 }
             };
-            if !entry.file_type().is_file() || !crate::filetypes::is_audio(entry.path()) {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            if crate::filetypes::is_playlist(entry.path()) {
+                if seen.insert(entry.path().to_path_buf()) {
+                    walked.playlists.push(entry.into_path());
+                }
+                continue;
+            }
+            if !crate::filetypes::is_audio(entry.path()) {
                 continue;
             }
             if !seen.insert(entry.path().to_path_buf()) {
@@ -281,6 +306,9 @@ pub fn walk(folders: &[PathBuf], cancel: &AtomicBool) -> Walked {
             });
         }
     }
+    walked
+        .playlists
+        .sort_by(|a, b| crate::format::natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
     walked
 }
 
@@ -372,4 +400,40 @@ pub fn read_tracks(
         }
     }
     (tracks, read_count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_walk_finds_the_playlists_too() {
+        let dir = std::env::temp_dir().join(format!("metalamp_walk_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        for f in ["a.mp3", "B.M3U8", "sub/c.m3u", "notes.txt"] {
+            std::fs::write(dir.join(f), b"").unwrap();
+        }
+        let walked = walk(std::slice::from_ref(&dir), &AtomicBool::new(false));
+        let names = |paths: Vec<&Path>| -> Vec<String> {
+            paths
+                .iter()
+                .map(|p| {
+                    p.strip_prefix(&dir)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('\\', "/")
+                })
+                .collect()
+        };
+        assert_eq!(
+            names(walked.found.iter().map(|f| f.path.as_path()).collect()),
+            ["a.mp3"]
+        );
+        assert_eq!(
+            names(walked.playlists.iter().map(PathBuf::as_path).collect()),
+            ["B.M3U8", "sub/c.m3u"]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

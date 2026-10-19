@@ -149,6 +149,9 @@ pub struct Library {
     pub search: Vec<String>,
     /// Each track by its path.
     pub by_path: HashMap<PathBuf, TrackId>,
+    /// The M3U and M3U8 playlists in the library's folders, by path (the
+    /// playlist's saved playlists section lists them after its own).
+    pub playlists: Vec<PathBuf>,
 }
 
 /// The name shown for an empty artist or album.
@@ -273,7 +276,14 @@ impl Library {
             album_of,
             search,
             by_path,
+            playlists: Vec::new(),
         }
+    }
+
+    /// The library with `playlists`, found in its folders.
+    pub fn with_playlists(mut self, playlists: Vec<PathBuf>) -> Library {
+        self.playlists = playlists;
+        self
     }
 
     /// Whether every word of `query` (already in lower case, split on

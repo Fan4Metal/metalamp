@@ -889,7 +889,7 @@ fn view_row(
     egui::Popup::menu(&resp)
         .align(egui::RectAlign::TOP_START)
         .show(|ui| {
-            ui.set_min_width(240.0);
+            ui.set_min_width(VIEW_MENU_WIDTH);
             let current = settings.current_view().map(|v| v.name.as_str());
             let items = std::iter::once((None, Icon::Library)).chain(
                 settings
@@ -962,9 +962,13 @@ pub fn view_icon(icon: ViewIcon) -> Icon {
 }
 
 /// A line of the views' menu: the icon, the name, the shortcut on the
+/// The views' menu's width.
+const VIEW_MENU_WIDTH: f32 = 280.0;
+
 /// right; the one in use on the selection's ground. True when clicked.
 fn view_item(ui: &mut Ui, icon: Icon, name: &str, on: bool, shortcut: Option<String>) -> bool {
-    let width = ui.available_width();
+    // The menu's width: a popup offers all the window.
+    let width = ui.available_width().min(VIEW_MENU_WIDTH);
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 24.0), Sense::click());
     let painter = ui.painter();
     let ground = if on {

@@ -128,6 +128,13 @@ pub fn is_audio(path: &Path) -> bool {
         .is_some_and(|e| AUDIO_EXTENSIONS.iter().any(|a| a.eq_ignore_ascii_case(e)))
 }
 
+/// Whether `path` is an M3U or M3U8 playlist, in any case.
+pub fn is_playlist(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("m3u") || e.eq_ignore_ascii_case("m3u8"))
+}
+
 /// Resource ID of the icon of `FILE_TYPES[i]` in the executable (the app
 /// icon is 1).
 pub const fn icon_id(i: usize) -> u16 {

@@ -69,13 +69,28 @@ pub fn save(name: &str, text: &str) -> std::io::Result<()> {
     std::fs::rename(&tmp, &path)
 }
 
+/// The file of the playlist `name`.
+pub fn path(name: &str) -> Option<PathBuf> {
+    folder().map(|dir| dir.join(file_name(name)))
+}
+
 /// The tracks of the playlist `name`.
 pub fn load(name: &str) -> Option<Vec<PathBuf>> {
-    let dir = folder()?;
-    let path = dir.join(file_name(name));
-    let bytes = std::fs::read(&path).ok()?;
+    tracks_in(&path(name)?)
+}
+
+/// The tracks of the M3U or M3U8 file at `path` (a saved playlist or one
+/// in the library's folders), relative paths from its folder.
+pub fn tracks_in(path: &std::path::Path) -> Option<Vec<PathBuf>> {
+    let bytes = std::fs::read(path).ok()?;
     let text = crate::queue::m3u_text(&bytes);
-    Some(crate::queue::m3u_paths(&text, &dir))
+    let dir = path.parent()?;
+    Some(crate::queue::m3u_paths(&text, dir))
+}
+
+/// When the file at `path` was last written.
+pub fn modified(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 pub fn delete(name: &str) {

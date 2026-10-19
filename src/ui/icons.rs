@@ -148,6 +148,8 @@ pub enum Icon {
     /// A screen with a small one in its bottom right corner: the mini
     /// player (metalmpv's).
     Mini,
+    /// A play triangle with lines of a list: the playlists (save, open).
+    Playlists,
 }
 
 impl Icon {
@@ -222,6 +224,7 @@ impl Icon {
         Icon::Globe,
         Icon::Pin,
         Icon::Mini,
+        Icon::Playlists,
     ];
 }
 
@@ -432,6 +435,14 @@ pub fn paint(painter: &Painter, icon: Icon, c: Pos2, size: f32, color: Color32, 
                 rounded(&flap, &[0.0, 1.5, 1.5, 1.5, 0.0].map(|r| r * k)),
                 line,
             );
+        }
+        Icon::Playlists => {
+            // A playlist: a play triangle at the top left, two short lines
+            // beside it, two long ones under them.
+            painter.add(solid(&[(-6.5, -5.5), (-1.5, -3.0), (-6.5, -0.5)], color));
+            for (x0, y) in [(1.0, -4.5), (1.0, -1.5), (-6.5, 1.5), (-6.5, 4.5)] {
+                round_line(painter, vec![p(x0, y), p(6.5, y)], pen(1.6));
+            }
         }
         Icon::Folder => {
             painter.add(closed(&[
