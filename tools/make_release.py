@@ -160,11 +160,34 @@ def exe_locked(exe: Path) -> bool:
         return True
 
 
+def post_close(pid: int) -> None:
+    """WM_CLOSE posted to the visible top-level windows of `pid`, as the window's close button
+    does, so that it saves its settings. taskkill without /F skips a minimized window (one in the
+    tray), which then could only be killed."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    found = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def each(hwnd, _):
+        owner = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if owner.value == pid and user32.IsWindowVisible(hwnd):
+            found.append(hwnd)
+        return True
+
+    user32.EnumWindows(each, 0)
+    for hwnd in found:
+        user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+
+
 def close_running_exe(exe: Path) -> None:
     """A running exe is locked by Windows, and cargo or the installer could not overwrite it.
 
-    The copy started from `exe` is closed as build.py does it: WM_CLOSE first (taskkill without /F),
-    so that it saves its settings, then by force after 3 seconds."""
+    The copy started from `exe` is closed as build.py does it: WM_CLOSE first (`post_close`), so
+    that it saves its settings, then by force after 3 seconds."""
     if not exe_locked(exe):
         return
     # A ' in the path is written twice inside PowerShell's single quotes.
@@ -174,7 +197,7 @@ def close_running_exe(exe: Path) -> None:
     pids = out.stdout.split()
     for pid in pids:
         print(f"  closing {exe.name} (PID {pid})")
-        subprocess.run(["taskkill", "/PID", pid], capture_output=True)
+        post_close(int(pid))
     deadline = time.monotonic() + 3
     while exe_locked(exe) and time.monotonic() < deadline:
         time.sleep(0.2)

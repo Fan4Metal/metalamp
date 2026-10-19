@@ -595,6 +595,17 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
                     });
             },
         );
+        divider(ui);
+        row(
+            ui,
+            tr!("Minimize to the tray", "Сворачивать в трей"),
+            Some(tr!(
+                "An icon in the notification area: minimized, the window leaves the taskbar for it; a click on it brings the window back, its menu controls playing.",
+                "Значок в области уведомлений: свёрнутое окно уходит с панели задач в него; щелчок по значку возвращает окно, его меню управляет воспроизведением."
+            )),
+            50.0,
+            |ui| switch(ui, &mut settings.tray),
+        );
     });
 }
 

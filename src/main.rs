@@ -31,6 +31,7 @@ mod settings;
 mod smtc;
 mod stats;
 mod taskbar;
+mod tray;
 mod ui;
 mod update;
 mod win;

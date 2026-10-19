@@ -90,6 +90,10 @@ pub struct App {
     listening: crate::stats::Listening,
     /// The tag editor.
     tag_editor: crate::ui::tag_editor::TagEditor,
+    /// The tray icon while the setting is on, and whether the window's
+    /// taskbar button is taken away (minimized to it).
+    tray: Option<crate::tray::Tray>,
+    off_taskbar: bool,
     /// The equalizer's window (the player bar's button).
     eq_window: crate::ui::eq_window::EqWindow,
     /// `METALAMP_VIEW_EDITOR` is set: open the editor once the library is
@@ -208,6 +212,8 @@ impl App {
             listening: crate::stats::Listening::default(),
             eq_window: crate::ui::eq_window::EqWindow::from_env(),
             tag_editor: crate::ui::tag_editor::TagEditor::default(),
+            tray: None,
+            off_taskbar: false,
             env_view_editor: std::env::var_os("METALAMP_VIEW_EDITOR").is_some(),
         }
     }
@@ -876,6 +882,17 @@ impl App {
         self.place_changed.get_or_insert_with(Instant::now);
     }
 
+    /// Closed while minimized or hidden: eframe acts on a close only in a
+    /// frame it paints, so what `on_exit` does is done here and the
+    /// process ends.
+    fn close_now(&mut self) {
+        log::info!("closed while minimized: saved, and the process ends");
+        crate::instance::closing();
+        self.save_now();
+        self.tray = None;
+        std::process::exit(0);
+    }
+
     fn save_now(&mut self) {
         self.remember_playlist(true);
         self.remember_place();
@@ -889,10 +906,38 @@ impl App {
         for hooked in win::take_hooked() {
             match hooked {
                 win::Hooked::EndSession | win::Hooked::Suspend => self.save_now(),
+                // The Restart Manager (an installer): minimized, the window
+                // gets no frame that would act on a close.
+                win::Hooked::Close if self.hwnd.is_some_and(win::is_minimized) => {
+                    self.close_now();
+                }
                 win::Hooked::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
                 win::Hooked::TaskbarButton => {
                     if let Some(taskbar) = &mut self.taskbar {
                         taskbar.button_created();
+                    }
+                    // Taken away again if the window is in the tray.
+                    self.off_taskbar = false;
+                }
+                win::Hooked::CloseNow => self.close_now(),
+                win::Hooked::TrayCreated => {
+                    if let Some(tray) = &mut self.tray {
+                        tray.add();
+                    }
+                }
+                win::Hooked::Tray(cmd) => {
+                    use crate::tray::TrayCmd;
+                    match cmd {
+                        TrayCmd::Show => {
+                            if let Some(hwnd) = self.hwnd {
+                                win::bring_back(hwnd);
+                            }
+                        }
+                        TrayCmd::PlayPause => self.player.toggle_pause(),
+                        TrayCmd::Stop => self.player.stop(),
+                        TrayCmd::Previous => self.player.previous(),
+                        TrayCmd::Next => self.player.next(),
+                        TrayCmd::Exit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
                     }
                 }
                 win::Hooked::Thumb(id) => match id {
@@ -962,6 +1007,32 @@ impl App {
 
     /// Take the media keys as the setting says: Windows' media controls
     /// made or let go, the window's own keys on or off.
+    /// The tray icon made or dropped as the setting says, its tooltip what
+    /// plays; minimized with it, the window leaves the taskbar.
+    fn follow_tray(&mut self) {
+        let Some(hwnd) = self.hwnd else { return };
+        if self.settings.tray {
+            if self.tray.is_none() {
+                self.tray = crate::tray::Tray::new(hwnd);
+            }
+        } else {
+            self.tray = None;
+        }
+        let off = self.tray.is_some() && win::is_minimized(hwnd);
+        if off != self.off_taskbar {
+            if let Some(taskbar) = &self.taskbar {
+                taskbar.set_tab(!off);
+            }
+            self.off_taskbar = off;
+        }
+        if self.tray.is_some() {
+            let tip = self.window_title();
+            if let Some(tray) = &mut self.tray {
+                tray.set_tip(&tip);
+            }
+        }
+    }
+
     fn follow_media_keys(&mut self) {
         use crate::settings::MediaKeys;
         let wanted = self.settings.media_keys;
@@ -1074,6 +1145,12 @@ impl eframe::App for App {
         self.poll_scan();
         self.follow_folders(ctx);
         self.library_view.covers.poll(ctx);
+        // Minimized, eframe runs a frame only when one is due, not when the
+        // window's messages wake it (the tray, the media keys, a close):
+        // one is kept due.
+        if self.hwnd.is_some_and(win::is_minimized) {
+            ctx.request_repaint_after(Duration::from_millis(250));
+        }
         self.take_hooked(ctx);
         self.take_handed_over();
         self.remember_playlist(false);
@@ -1100,6 +1177,7 @@ impl eframe::App for App {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
         self.follow_media_keys();
+        self.follow_tray();
         self.show_on_taskbar();
         self.show_in_media_controls();
         self.remember_place();

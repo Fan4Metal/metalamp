@@ -35,13 +35,35 @@ def is_ours(proc: psutil.Process) -> bool:
     return exe.name.lower() == EXE_NAME and TARGET in exe.resolve().parents
 
 
+def post_close(pid: int) -> None:
+    """WM_CLOSE posted to the visible top-level windows of `pid`, as the window's close button
+    does, so that it saves its settings. taskkill without /F skips a minimized window (one in the
+    tray), which then could only be killed."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    found = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def each(hwnd, _):
+        owner = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if owner.value == pid and user32.IsWindowVisible(hwnd):
+            found.append(hwnd)
+        return True
+
+    user32.EnumWindows(each, 0)
+    for hwnd in found:
+        user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+
+
 def close_running() -> None:
     for proc in psutil.process_iter():
         if not is_ours(proc):
             continue
         print(f"Closing {EXE_NAME} (PID {proc.pid})", flush=True)
-        # taskkill without /F sends WM_CLOSE, as the window's close button does.
-        subprocess.run(["taskkill", "/PID", str(proc.pid)], capture_output=True)
+        post_close(proc.pid)
         try:
             proc.wait(timeout=3)
         except psutil.TimeoutExpired:

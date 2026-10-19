@@ -48,8 +48,8 @@ struct Vtbl {
     add_ref: usize,
     release: unsafe extern "system" fn(*mut c_void) -> u32,
     hr_init: unsafe extern "system" fn(*mut c_void) -> i32,
-    add_tab: usize,
-    delete_tab: usize,
+    add_tab: unsafe extern "system" fn(*mut c_void, isize) -> i32,
+    delete_tab: unsafe extern "system" fn(*mut c_void, isize) -> i32,
     activate_tab: usize,
     set_active_alt: usize,
     mark_fullscreen_window: usize,
@@ -132,6 +132,20 @@ impl Taskbar {
 
     fn vtbl(&self) -> &Vtbl {
         unsafe { &**(self.list as *const *const Vtbl) }
+    }
+
+    /// The window's taskbar button shown or taken away (the window
+    /// minimized to the tray).
+    pub fn set_tab(&self, shown: bool) {
+        let vtbl = self.vtbl();
+        // SAFETY: the list and the app's own window.
+        unsafe {
+            if shown {
+                (vtbl.add_tab)(self.list, self.hwnd);
+            } else {
+                (vtbl.delete_tab)(self.list, self.hwnd);
+            }
+        }
     }
 
     /// The taskbar button now exists (again, after Explorer restarted):

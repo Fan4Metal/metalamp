@@ -394,10 +394,22 @@ pub enum Hooked {
     /// The computer is going to sleep (`WM_POWERBROADCAST` with
     /// `PBT_APMSUSPEND`): saved now too, as it may not wake.
     Suspend,
+    /// The tray icon clicked, or its menu's choice (`tray.rs`).
+    Tray(crate::tray::TrayCmd),
+    /// `WM_CLOSE` while the window is minimized or hidden (`taskkill`,
+    /// `build.py`, the installer): eframe acts on a close only in a frame
+    /// it paints, which such a window never gets, so the app saves and
+    /// ends itself.
+    CloseNow,
+    /// Explorer started (again): the tray icon is to be added anew
+    /// (`TaskbarCreated`).
+    TrayCreated,
 }
 
 /// `TaskbarButtonCreated`, registered by [`hook_window`].
 static TASKBAR_CREATED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// `TaskbarCreated` (Explorer started), registered by [`hook_window`].
+static EXPLORER_STARTED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// The window takes the media keys ([`set_media_keys`]).
 static MEDIA_KEYS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
@@ -417,6 +429,9 @@ pub fn hook_window(hwnd: isize, wake: impl Fn() + Send + Sync + 'static) {
         let name = wide("TaskbarButtonCreated");
         let message = unsafe { RegisterWindowMessageW(name.as_ptr()) };
         TASKBAR_CREATED.store(message, std::sync::atomic::Ordering::Relaxed);
+        let started = wide("TaskbarCreated");
+        let started = unsafe { RegisterWindowMessageW(started.as_ptr()) };
+        EXPLORER_STARTED.store(started, std::sync::atomic::Ordering::Relaxed);
         let _ = WAKE.set(Box::new(wake));
         // A copy running elevated still hears Explorer (UIPI): the taskbar
         // button made and the thumbnail buttons' clicks.
@@ -435,7 +450,9 @@ pub fn hook_window(hwnd: isize, wake: impl Fn() + Send + Sync + 'static) {
         if is_elevated() {
             for message in [
                 message,
+                started,
                 windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND,
+                crate::tray::WM_TRAY,
             ] {
                 unsafe {
                     ChangeWindowMessageFilterEx(
@@ -514,13 +531,38 @@ unsafe extern "system" fn window_proc(
 ) -> windows_sys::Win32::Foundation::LRESULT {
     use windows_sys::Win32::UI::Shell::DefSubclassProc;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        DefWindowProcW, ENDSESSION_CLOSEAPP, PBT_APMSUSPEND, WM_APPCOMMAND, WM_COMMAND, WM_KEYDOWN,
-        WM_KEYUP, WM_POWERBROADCAST, WM_QUERYENDSESSION,
+        DefWindowProcW, ENDSESSION_CLOSEAPP, PBT_APMSUSPEND, WM_APPCOMMAND, WM_CLOSE, WM_COMMAND,
+        WM_KEYDOWN, WM_KEYUP, WM_POWERBROADCAST, WM_QUERYENDSESSION,
     };
     // THBN_CLICKED in WM_COMMAND's high word.
     const THBN_CLICKED: usize = 0x1800;
     if msg != 0 && msg == TASKBAR_CREATED.load(std::sync::atomic::Ordering::Relaxed) {
         hook(Hooked::TaskbarButton);
+    }
+    if msg != 0 && msg == EXPLORER_STARTED.load(std::sync::atomic::Ordering::Relaxed) {
+        hook(Hooked::TrayCreated);
+    }
+    // The tray icon's events (`NOTIFYICON_VERSION_4`: the event in the low
+    // word of `lparam`, the pointer in `wparam`).
+    if msg == crate::tray::WM_TRAY {
+        const NIN_SELECT: u32 = 0x400;
+        const NIN_KEYSELECT: u32 = 0x401;
+        const WM_CONTEXTMENU: u32 = 0x007B;
+        match lparam as u32 & 0xFFFF {
+            // At once, without waiting for a frame of the minimized window.
+            NIN_SELECT | NIN_KEYSELECT => bring_back(hwnd as isize),
+            WM_CONTEXTMENU => {
+                let x = (wparam & 0xFFFF) as u16 as i16 as i32;
+                let y = ((wparam >> 16) & 0xFFFF) as u16 as i16 as i32;
+                match crate::tray::menu(hwnd as isize, x, y) {
+                    Some(crate::tray::TrayCmd::Show) => bring_back(hwnd as isize),
+                    Some(cmd) => hook(Hooked::Tray(cmd)),
+                    None => {}
+                }
+            }
+            _ => {}
+        }
+        return 0;
     }
     let media = MEDIA_KEYS.load(std::sync::atomic::Ordering::Relaxed);
     // While the window lets the keys go, a media key goes to
@@ -530,6 +572,15 @@ unsafe extern "system" fn window_proc(
         return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
     }
     match msg {
+        WM_CLOSE
+            if is_minimized(hwnd as isize)
+                || unsafe {
+                    windows_sys::Win32::UI::WindowsAndMessaging::IsWindowVisible(hwnd)
+                } == 0 =>
+        {
+            hook(Hooked::CloseNow);
+            return 0;
+        }
         WM_COMMAND if (wparam >> 16) & 0xFFFF == THBN_CLICKED => {
             hook(Hooked::Thumb((wparam & 0xFFFF) as u16));
             return 0;
@@ -560,6 +611,26 @@ unsafe extern "system" fn window_proc(
         _ => {}
     }
     unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+}
+
+/// The window is minimized.
+pub fn is_minimized(hwnd: isize) -> bool {
+    // SAFETY: a question about the app's own window.
+    unsafe { windows_sys::Win32::UI::WindowsAndMessaging::IsIconic(hwnd as _) != 0 }
+}
+
+/// The window back from minimized (or as it was) and in front.
+pub fn bring_back(hwnd: isize) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SW_RESTORE, SetForegroundWindow, ShowWindow,
+    };
+    // SAFETY: the app's own window.
+    unsafe {
+        if is_minimized(hwnd) {
+            ShowWindow(hwnd as _, SW_RESTORE);
+        }
+        SetForegroundWindow(hwnd as _);
+    }
 }
 
 /// Open the folder of `file` in Explorer with the file selected

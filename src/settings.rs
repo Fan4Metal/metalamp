@@ -93,6 +93,9 @@ pub struct Settings {
     pub crossfade_in_albums: bool,
     /// When the media keys are the player's.
     pub media_keys: MediaKeys,
+    /// An icon in the notification area; minimized, the window leaves the
+    /// taskbar for it.
+    pub tray: bool,
     /// The look: the base theme and the controls' colour.
     pub theme: crate::palette::Theme,
     pub accent: crate::palette::Accent,
@@ -266,6 +269,7 @@ impl Default for Settings {
             crossfade: 0,
             crossfade_in_albums: false,
             media_keys: MediaKeys::default(),
+            tray: false,
             theme: Default::default(),
             accent: Default::default(),
             selection: Default::default(),
