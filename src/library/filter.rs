@@ -447,9 +447,10 @@ impl CompiledRule {
                     return false;
                 }
                 let folder = t.path.parent().map(folder_of).unwrap_or_default();
+                // A drive's root keeps its `\` (`d:\`): all below it.
                 folder == *prefix
                     || (folder.starts_with(prefix.as_str())
-                        && folder[prefix.len()..].starts_with('\\'))
+                        && (prefix.ends_with('\\') || folder[prefix.len()..].starts_with('\\')))
             }
             Test::Flag => t.has_cover,
         }
@@ -629,6 +630,8 @@ mod tests {
             r"D:\Music\Soundtracks\Dune",
             r"d:\music\soundtracks\",
             r"D:/Music",
+            r"D:\",
+            "D:",
         ] {
             assert!(
                 filter(vec![rule(Field::Folder, Op::Is, folder)]).matches(&t, &Stat::default()),
