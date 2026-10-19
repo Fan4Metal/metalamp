@@ -90,6 +90,17 @@ pub struct App {
     listening: crate::stats::Listening,
     /// The tag editor.
     tag_editor: crate::ui::tag_editor::TagEditor,
+    /// Over the others and the mini player as last applied to the window
+    /// (`None`: not yet).
+    applied_modes: Option<(bool, bool)>,
+    /// The mini player's cover, read large, and the app icon for a track
+    /// without one.
+    mini_cover: crate::ui::mini::Cover,
+    mini_icon: Option<egui::TextureHandle>,
+    /// Back from the mini player, the window not grown yet: the whole
+    /// window's panels wait, else the playlist and the library's panes
+    /// took the mini player's size as their own (at most 1 s).
+    growing: Option<Instant>,
     /// The tray icon while the setting is on, and whether the window's
     /// taskbar button is taken away (minimized to it).
     tray: Option<crate::tray::Tray>,
@@ -132,7 +143,10 @@ impl App {
             // seen.
             crate::caption::set_dark(hwnd, settings.theme.is_dark());
             win::round_corners(hwnd);
-            let maximized = settings.window.is_some_and(|w| w.maximized);
+            // The mini player at start: the whole window is placed hidden
+            // and not maximized, and the mini player put over it before
+            // it shows (`apply_modes`).
+            let maximized = settings.window.is_some_and(|w| w.maximized) && !settings.mini;
             if maximized {
                 win::cloak(hwnd, true);
                 cloak = Some((Instant::now() + UNCLOAK_TIMEOUT, ctx.cumulative_frame_nr()));
@@ -214,6 +228,10 @@ impl App {
             tag_editor: crate::ui::tag_editor::TagEditor::default(),
             tray: None,
             off_taskbar: false,
+            applied_modes: None,
+            mini_cover: Default::default(),
+            mini_icon: None,
+            growing: None,
             env_view_editor: std::env::var_os("METALAMP_VIEW_EDITOR").is_some(),
         }
     }
@@ -483,32 +501,35 @@ impl App {
         self.library_view.covers.get(ctx, &self.library, album)
     }
 
-    fn player_bar(&mut self, ui: &mut egui::Ui) {
-        use crate::ui::player_bar::{self, BarCmd, NowPlaying};
+    /// The mini player in the whole window.
+    fn mini_player(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let (title, artist, track) = self.now_playing();
-        let cover = self.playing_cover(&ctx);
+        let path = self.playing_or_current_path();
+        let cover = self.mini_cover.of(&ctx, path.as_deref());
+        let icon = crate::ui::app_icon(&ctx, 128.0, &mut self.mini_icon);
+        let now = self.now_shown(&title, &artist, track, cover);
+        let cmds = crate::ui::mini::show(ui, &now, &icon);
+        self.bar_commands(cmds);
+    }
+
+    /// What the player bar and the mini player show.
+    fn now_shown<'a>(
+        &self,
+        title: &'a str,
+        artist: &'a str,
+        track: Option<crate::library::TrackId>,
+        cover: Option<egui::TextureHandle>,
+    ) -> crate::ui::player_bar::NowPlaying<'a> {
         let (bitrate, sample_rate, channels) = track
             .and_then(|t| self.library.tracks.get(t as usize))
             .map_or((0, 0, 0), |t| (t.bitrate, t.sample_rate, t.channels));
-        // The visualization: the samples heard now, for its display's size.
-        let size = player_bar::visual_size(self.settings.bar_layout, ui.max_rect());
-        let mut heard = std::mem::take(&mut self.heard);
-        let at = self
-            .player
-            .heard_samples(crate::ui::visual::FETCH, &mut heard);
-        self.visual.feed(
-            self.settings.visualization,
-            at.map(|h| (heard.as_slice(), h)),
-            size,
-        );
-        self.heard = heard;
-        let now = NowPlaying {
+        crate::ui::player_bar::NowPlaying {
             layout: self.settings.bar_layout,
             visual: self.settings.visualization,
             status: self.player.status,
-            title: &title,
-            artist: &artist,
+            title,
+            artist,
             bitrate,
             sample_rate,
             channels,
@@ -522,9 +543,40 @@ impl App {
             eq: self.settings.dsp.eq,
             stop_after: self.player.stop_after,
             cover,
-        };
-        for cmd in player_bar::show(ui, &now, &mut self.visual) {
+        }
+    }
+
+    fn player_bar(&mut self, ui: &mut egui::Ui) {
+        use crate::ui::player_bar;
+        let ctx = ui.ctx().clone();
+        let (title, artist, track) = self.now_playing();
+        let cover = self.playing_cover(&ctx);
+        // The visualization: the samples heard now, for its display's size.
+        let size = player_bar::visual_size(self.settings.bar_layout, ui.max_rect());
+        let mut heard = std::mem::take(&mut self.heard);
+        let at = self
+            .player
+            .heard_samples(crate::ui::visual::FETCH, &mut heard);
+        self.visual.feed(
+            self.settings.visualization,
+            at.map(|h| (heard.as_slice(), h)),
+            size,
+        );
+        self.heard = heard;
+        let now = self.now_shown(&title, &artist, track, cover);
+        let cmds = player_bar::show(ui, &now, &mut self.visual);
+        self.bar_commands(cmds);
+    }
+
+    /// What a click in the player bar or the mini player asks for.
+    fn bar_commands(&mut self, cmds: Vec<crate::ui::player_bar::BarCmd>) {
+        use crate::ui::player_bar::BarCmd;
+        for cmd in cmds {
             match cmd {
+                BarCmd::Whole => {
+                    self.settings.mini = false;
+                    self.place_changed = Some(Instant::now());
+                }
                 BarCmd::Previous => self.player.previous(),
                 BarCmd::PlayPause => self.player.toggle_pause(),
                 BarCmd::Stop => self.player.stop(),
@@ -743,7 +795,19 @@ impl App {
     fn remember_place(&mut self) {
         let Some(hwnd) = self.hwnd else { return };
         // Not while it is being shown maximized: the placement is not final.
+        let mini = self.applied_modes.map(|m| m.1);
+        if mini == Some(true)
+            && self.settings.mini
+            && !win::is_minimized(hwnd)
+            && let Some(rect) = win::window_rect(hwnd)
+            && self.settings.mini_rect != Some(rect)
+        {
+            self.settings.mini_rect = Some(rect);
+            self.place_changed = Some(Instant::now());
+        }
         if self.cloak.is_none()
+            && !self.settings.mini
+            && mini == Some(false)
             && let Some((normal, maximized)) = win::placement(hwnd)
         {
             let place = WindowPlace { normal, maximized };
@@ -1007,6 +1071,89 @@ impl App {
 
     /// Take the media keys as the setting says: Windows' media controls
     /// made or let go, the window's own keys on or off.
+    /// "Over the others" and the mini player applied to the window when
+    /// they changed. The mini player is a square at its place of the last
+    /// time (else in the work area's bottom right corner), always over the
+    /// others, its least size and shape kept by `win::set_mini`, not to be
+    /// maximized; back, the whole window at its place, maximized if it
+    /// was.
+    fn apply_modes(&mut self, ctx: &egui::Context) {
+        use crate::ui::mini;
+        use egui::{ViewportCommand, WindowLevel};
+        let Some(hwnd) = self.hwnd else { return };
+        let wanted = (
+            self.settings.on_top || self.settings.mini,
+            self.settings.mini,
+        );
+        let applied = self.applied_modes;
+        if applied == Some(wanted) {
+            return;
+        }
+        if applied.map(|a| a.0) != Some(wanted.0) {
+            ctx.send_viewport_cmd(ViewportCommand::WindowLevel(if wanted.0 {
+                WindowLevel::AlwaysOnTop
+            } else {
+                WindowLevel::Normal
+            }));
+        }
+        let was_mini = applied.is_some_and(|a| a.1);
+        if wanted.1 && !was_mini {
+            // The whole window's place as it is now, for the way back.
+            if applied.is_some()
+                && let Some((normal, maximized)) = win::placement(hwnd)
+            {
+                self.settings.window = Some(WindowPlace { normal, maximized });
+            }
+            let ppp = ctx.pixels_per_point();
+            let least = (mini::LEAST * ppp).round() as i32;
+            win::set_mini(Some(least));
+            ctx.send_viewport_cmd(ViewportCommand::EnableButtons {
+                close: true,
+                minimized: true,
+                maximize: false,
+            });
+            let saved = self
+                .settings
+                .mini_rect
+                .filter(|r| win::on_a_monitor(*r) && r[2] - r[0] >= least && r[3] - r[1] >= least);
+            let rect = saved.or_else(|| {
+                let side = (mini::SIDE * ppp).round() as i32;
+                let margin = (mini::MARGIN * ppp).round() as i32;
+                let work = win::work_area_at(win::window_rect(hwnd)?)?;
+                let (right, bottom) = (work[2] - margin, work[3] - margin);
+                Some([right - side, bottom - side, right, bottom])
+            });
+            if let Some(rect) = rect {
+                win::set_rect(hwnd, rect);
+            }
+        } else if !wanted.1 && was_mini {
+            if !win::is_minimized(hwnd) {
+                self.settings.mini_rect = win::window_rect(hwnd);
+            }
+            win::set_mini(None);
+            self.mini_cover.clear();
+            self.growing = Some(Instant::now());
+            ctx.send_viewport_cmd(ViewportCommand::EnableButtons {
+                close: true,
+                minimized: true,
+                maximize: true,
+            });
+            match self.settings.window {
+                Some(w) => win::show_placed(hwnd, w.normal, w.maximized),
+                None => {
+                    let ppp = ctx.pixels_per_point();
+                    let size = egui::Vec2::from(crate::DEFAULT_SIZE) * ppp;
+                    if let Some(work) = win::window_rect(hwnd).and_then(win::work_area_at) {
+                        let x = (work[0] + work[2] - size.x as i32) / 2;
+                        let y = (work[1] + work[3] - size.y as i32) / 2;
+                        win::set_rect(hwnd, [x, y, x + size.x as i32, y + size.y as i32]);
+                    }
+                }
+            }
+        }
+        self.applied_modes = Some(wanted);
+    }
+
     /// The tray icon made or dropped as the setting says, its tooltip what
     /// plays; minimized with it, the window leaves the taskbar.
     fn follow_tray(&mut self) {
@@ -1089,7 +1236,18 @@ impl App {
         let update = self.updates.newer().map(str::to_owned);
         let maximized = frameless::is_maximized(&ctx);
         let title = self.window_title();
-        match title::row(ui, &title, maximized, &icon, update.as_deref()) {
+        let modes = title::Modes {
+            on_top: self.settings.on_top,
+        };
+        match title::row(ui, &title, maximized, &icon, update.as_deref(), modes) {
+            Some(TitleCmd::OnTop) => {
+                self.settings.on_top = !self.settings.on_top;
+                self.place_changed = Some(Instant::now());
+            }
+            Some(TitleCmd::Mini) => {
+                self.settings.mini = !self.settings.mini;
+                self.place_changed = Some(Instant::now());
+            }
             Some(TitleCmd::Close) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Some(TitleCmd::Minimize) => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true))
@@ -1165,6 +1323,7 @@ impl eframe::App for App {
         // bar and the taskbar's progress move.
         let shown = self.settings.bar_layout == crate::settings::BarLayout::Full
             && self.settings.visualization != crate::settings::Visual::Off
+            && !self.settings.mini
             && ctx.input(|i| i.viewport().minimized) != Some(true);
         let moving = match self.player.status {
             crate::player::Status::Playing => true,
@@ -1178,6 +1337,7 @@ impl eframe::App for App {
         }
         self.follow_media_keys();
         self.follow_tray();
+        self.apply_modes(ctx);
         self.show_on_taskbar();
         self.show_in_media_controls();
         self.remember_place();
@@ -1251,12 +1411,28 @@ impl eframe::App for App {
             }
             if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::F)) {
                 self.library_view.focus_search = true;
+                self.settings.mini = false;
             }
             if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::O)) {
                 self.open_files(frame);
             }
             if ctx.input_mut(|i| i.consume_key(Modifiers::ALT, Key::E)) {
-                self.settings.playlist_visible = !self.settings.playlist_visible;
+                // From the mini player: the whole window with the playlist.
+                self.settings.playlist_visible =
+                    self.settings.mini || !self.settings.playlist_visible;
+                self.settings.mini = false;
+                self.place_changed = Some(Instant::now());
+            }
+            // Ctrl+T: over the other windows; Ctrl+M: the mini player.
+            if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::T)) {
+                self.settings.on_top = !self.settings.on_top;
+                self.place_changed = Some(Instant::now());
+            }
+            if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::M))
+                || (self.settings.mini
+                    && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)))
+            {
+                self.settings.mini = !self.settings.mini;
                 self.place_changed = Some(Instant::now());
             }
             // Ctrl+E: the tag editor for the selection of the playlist when
@@ -1301,25 +1477,58 @@ impl eframe::App for App {
         if !frameless::is_maximized(&ctx) {
             frameless::resize_edges(root_ui);
         }
-        let title_rect = egui::Panel::top("title")
-            .exact_size(title::HEIGHT)
-            .frame(egui::Frame::NONE)
-            .show(root_ui, |ui| self.title_row(ui))
-            .response
-            .rect;
-        let bar_rect = egui::Panel::top("player")
-            .exact_size(crate::ui::player_bar::height(self.settings.bar_layout))
-            .frame(egui::Frame::NONE)
-            .show(root_ui, |ui| self.player_bar(ui))
-            .response
-            .rect;
-        self.player_area = title_rect.union(bar_rect);
-        // The wheel anywhere over the title row and the player bar steps
-        // the volume by 5.
+        // A window or a modal wants the whole window: the mini player
+        // ends (it shows in the next frame).
+        if self.settings.mini
+            && (modal
+                || self.info_request.is_some()
+                || self.eq_window.open
+                || self.about.open
+                || self.settings_dialog.open)
+        {
+            self.settings.mini = false;
+            self.place_changed = Some(Instant::now());
+        }
+        // The mini player: the cover and its controls alone, as long as
+        // the window has been made it (`apply_modes`, in this frame's
+        // logic).
+        let mini = self.settings.mini && self.applied_modes.is_some_and(|m| m.1);
+        if let Some(at) = self.growing {
+            let grown = ctx.content_rect().width() >= crate::MIN_SIZE[0] - 1.0
+                && ctx.content_rect().height() >= crate::MIN_SIZE[1] - 1.0;
+            if grown || self.settings.mini || at.elapsed() >= Duration::from_secs(1) {
+                self.growing = None;
+            } else {
+                root_ui
+                    .painter()
+                    .rect_filled(ctx.content_rect(), 0.0, palette::bar_bg());
+                ctx.request_repaint();
+                return;
+            }
+        }
+        self.player_area = if mini {
+            ctx.content_rect()
+        } else {
+            let title_rect = egui::Panel::top("title")
+                .exact_size(title::HEIGHT)
+                .frame(egui::Frame::NONE)
+                .show(root_ui, |ui| self.title_row(ui))
+                .response
+                .rect;
+            let bar_rect = egui::Panel::top("player")
+                .exact_size(crate::ui::player_bar::height(self.settings.bar_layout))
+                .frame(egui::Frame::NONE)
+                .show(root_ui, |ui| self.player_bar(ui))
+                .response
+                .rect;
+            title_rect.union(bar_rect)
+        };
+        // The wheel anywhere over the title row and the player bar (the
+        // mini player) steps the volume by 5.
         if !modal
             && ctx
                 .pointer_hover_pos()
-                .is_some_and(|p| title_rect.union(bar_rect).contains(p))
+                .is_some_and(|p| self.player_area.contains(p))
         {
             let notches = crate::ui::wheel_notches(root_ui);
             if notches != 0 {
@@ -1330,7 +1539,7 @@ impl eframe::App for App {
         }
         // Also beside the start screen: files opened from Explorer, Ctrl+O
         // or dropped play without a library.
-        if self.settings.playlist_visible {
+        if self.settings.playlist_visible && !mini {
             let cover = self.playing_cover(&ctx);
             let shown_cover = self.settings.playlist_cover;
             let panel = egui::Panel::right("playlist")
@@ -1420,11 +1629,17 @@ impl eframe::App for App {
         } else {
             self.playlist_view.hidden();
         }
-        egui::Panel::bottom("status")
-            .exact_size(crate::ui::status::HEIGHT)
-            .frame(egui::Frame::NONE.fill(palette::title_bg()))
-            .show(root_ui, |ui| crate::ui::status::show(ui, self));
+        if !mini {
+            egui::Panel::bottom("status")
+                .exact_size(crate::ui::status::HEIGHT)
+                .frame(egui::Frame::NONE.fill(palette::title_bg()))
+                .show(root_ui, |ui| crate::ui::status::show(ui, self));
+        }
         egui::CentralPanel::no_frame().show(root_ui, |ui| {
+            if mini {
+                self.mini_player(ui);
+                return;
+            }
             if !self.settings.library_folders.is_empty() {
                 let scanning = self.scanning();
                 let playing = self.playing_track();

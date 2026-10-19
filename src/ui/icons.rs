@@ -143,6 +143,11 @@ pub enum Icon {
     Headphones,
     /// A globe with a meridian and parallels.
     Globe,
+    /// A pushpin: the window kept over the others.
+    Pin,
+    /// A screen with a small one in its bottom right corner: the mini
+    /// player (metalmpv's).
+    Mini,
 }
 
 impl Icon {
@@ -215,6 +220,8 @@ impl Icon {
         Icon::Mic,
         Icon::Headphones,
         Icon::Globe,
+        Icon::Pin,
+        Icon::Mini,
     ];
 }
 
@@ -797,6 +804,28 @@ pub fn paint(painter: &Painter, icon: Icon, c: Pos2, size: f32, color: Color32, 
                 let half = (6.2f32 * 6.2 - y * y).sqrt() - 0.4;
                 painter.line_segment([p(-half, y), p(half, y)], pen(1.0));
             }
+        }
+        Icon::Pin => {
+            // A pushpin seen from the side, leaning 40° to the right: the
+            // head, its collar and the needle.
+            let (sn, co) = (40f32.to_radians().sin(), 40f32.to_radians().cos());
+            let at =
+                |x: f32, y: f32| p(0.6 + x * co - (y - 0.6) * sn, 0.6 + x * sn + (y - 0.6) * co);
+            painter.add(Shape::closed_line(
+                vec![at(-2.4, -6.6), at(2.4, -6.6), at(1.9, -2.2), at(-1.9, -2.2)],
+                line,
+            ));
+            round_line(painter, vec![at(-4.6, -2.2), at(4.6, -2.2)], line);
+            round_line(painter, vec![at(0.0, -2.2), at(0.0, 6.4)], line);
+        }
+        Icon::Mini => {
+            painter.rect_stroke(
+                rect(-6.0, -4.5, 12.0, 9.0),
+                0.9 * k,
+                line,
+                egui::StrokeKind::Inside,
+            );
+            painter.rect_filled(rect(0.3, 0.3, 3.9, 2.4), 0.6 * k, color);
         }
         Icon::Plus => {
             painter.line_segment([p(-5.0, 0.0), p(5.0, 0.0)], pen(1.5));

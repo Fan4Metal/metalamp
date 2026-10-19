@@ -96,6 +96,14 @@ pub struct Settings {
     /// An icon in the notification area; minimized, the window leaves the
     /// taskbar for it.
     pub tray: bool,
+    /// The window over the others (Ctrl+T), and the mini player: the
+    /// cover and the least of the controls, always over the others
+    /// (Ctrl+M; `window` keeps the whole window's place meanwhile).
+    pub on_top: bool,
+    pub mini: bool,
+    /// The mini player's window where it was left (pixels, screen
+    /// coordinates); none: the work area's bottom right corner.
+    pub mini_rect: Option<[i32; 4]>,
     /// The look: the base theme and the controls' colour.
     pub theme: crate::palette::Theme,
     pub accent: crate::palette::Accent,
@@ -270,6 +278,9 @@ impl Default for Settings {
             crossfade_in_albums: false,
             media_keys: MediaKeys::default(),
             tray: false,
+            on_top: false,
+            mini: false,
+            mini_rect: None,
             theme: Default::default(),
             accent: Default::default(),
             selection: Default::default(),

@@ -9,6 +9,7 @@ pub mod icons;
 pub mod info;
 pub mod library;
 pub mod licenses;
+pub mod mini;
 pub mod player_bar;
 pub mod playlist;
 pub mod settings;

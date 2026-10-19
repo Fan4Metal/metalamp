@@ -314,6 +314,24 @@ fn cover(job: &Job, dir: Option<&Path>) -> Option<egui::ColorImage> {
     Some(color_image(&thumb))
 }
 
+/// The cover of the track at `path` no larger than `side` pixels, as the
+/// thumbnails find it: its folder's picture, else its tag's (the mini
+/// player, which shows it larger than a thumbnail).
+pub fn large(path: &Path, side: u32) -> Option<egui::ColorImage> {
+    let picture = path
+        .parent()
+        .and_then(in_folder)
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|bytes| decode(&bytes))
+        .or_else(|| decode(&embedded(path)?))?;
+    let picture = if picture.width().max(picture.height()) > side {
+        picture.resize(side, side, image::imageops::FilterType::Triangle)
+    } else {
+        picture
+    };
+    Some(color_image(&picture))
+}
+
 pub(crate) fn color_image(picture: &image::DynamicImage) -> egui::ColorImage {
     let rgba = picture.to_rgba8();
     egui::ColorImage::from_rgba_unmultiplied(

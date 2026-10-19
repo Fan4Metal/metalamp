@@ -57,6 +57,8 @@ pub enum BarCmd {
     /// The equalizer's button clicked (its rect: the window opens under
     /// it).
     Equalizer(Rect),
+    /// The mini player's way back to the whole window.
+    Whole,
 }
 
 /// What the bar shows.
@@ -87,7 +89,7 @@ pub struct NowPlaying<'a> {
 }
 
 impl NowPlaying<'_> {
-    fn has_track(&self) -> bool {
+    pub(super) fn has_track(&self) -> bool {
         self.status != Status::Stopped || !self.title.is_empty()
     }
 }
@@ -508,6 +510,20 @@ fn volume_and_toggles(
     right = slider.left() - 6.0;
     let speaker = Rect::from_center_size(pos2(right - 14.0, cy), vec2(28.0, 28.0));
     right = speaker.left() - 12.0;
+    mute_button(ui, painter, speaker, now, cmds);
+    volume_slider(ui, painter, slider, now, cmds);
+    toggles(ui, painter, right, cy, now, cmds)
+}
+
+/// The speaker in `speaker`: its waves by the volume, crossed out when
+/// muted; a click mutes.
+pub(super) fn mute_button(
+    ui: &mut Ui,
+    painter: &egui::Painter,
+    speaker: Rect,
+    now: &NowPlaying<'_>,
+    cmds: &mut Vec<BarCmd>,
+) {
     let vol_icon = if now.mute || now.volume == 0 {
         Icon::Mute
     } else {
@@ -535,8 +551,17 @@ fn volume_and_toggles(
     {
         cmds.push(BarCmd::Mute);
     }
-    // The volume slider: a click or a drag sets it (the wheel steps it
-    // anywhere over the title row and this bar: `App::ui`).
+}
+
+/// The volume slider in `slider`: a click or a drag sets it (the wheel
+/// steps it anywhere over the title row and the bar: `App::ui`).
+pub(super) fn volume_slider(
+    ui: &mut Ui,
+    painter: &egui::Painter,
+    slider: Rect,
+    now: &NowPlaying<'_>,
+    cmds: &mut Vec<BarCmd>,
+) {
     let resp = ui.interact(
         slider.expand2(vec2(4.0, 6.0)),
         ui.id().with("volume"),
@@ -563,7 +588,18 @@ fn volume_and_toggles(
         cmds.push(BarCmd::Volume(v));
     }
     resp.on_hover_text(format!("{} %", now.volume));
+}
 
+/// The equalizer, repeat and shuffle toggles, laid right to left from
+/// `right` at height `cy`; where they end.
+fn toggles(
+    ui: &mut Ui,
+    painter: &egui::Painter,
+    mut right: f32,
+    cy: f32,
+    now: &NowPlaying<'_>,
+    cmds: &mut Vec<BarCmd>,
+) -> f32 {
     // A toggle button from the right; its rect when clicked.
     let mut toggle = |ui: &mut Ui, icon: Icon, on: bool, tip: &str| {
         let r = Rect::from_center_size(pos2(right - 16.0, cy), vec2(30.0, 28.0));
@@ -617,7 +653,7 @@ fn volume_and_toggles(
 
 /// The seek bar in `bar`: seeks when let go, the time under the pointer
 /// as a tip; the position it shows (the one dragged to while dragging).
-fn seek_bar(
+pub(super) fn seek_bar(
     ui: &mut Ui,
     painter: &egui::Painter,
     bar: Rect,

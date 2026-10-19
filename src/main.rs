@@ -52,7 +52,7 @@ pub const VERSION: &str = env!("APP_VERSION");
 /// The window's size in points on the first run (and the restored size of
 /// a window first shown maximized).
 pub const DEFAULT_SIZE: [f32; 2] = [1280.0, 800.0];
-const MIN_SIZE: [f32; 2] = [900.0, 560.0];
+pub const MIN_SIZE: [f32; 2] = [900.0, 560.0];
 
 fn main() -> eframe::Result {
     env_logger::init();

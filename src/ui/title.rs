@@ -21,6 +21,17 @@ pub enum TitleCmd {
     ToggleMaximize,
     Close,
     About,
+    /// Over the other windows, or not (Ctrl+T).
+    OnTop,
+    /// The mini player: the cover and the least of the controls, over
+    /// the other windows (Ctrl+M).
+    Mini,
+}
+
+/// The modes the title row's own buttons show lit.
+#[derive(Clone, Copy, Default)]
+pub struct Modes {
+    pub on_top: bool,
 }
 
 /// `update` is the tag of a newer release, shown as a button left of
@@ -31,6 +42,7 @@ pub fn row(
     maximized: bool,
     icon: &TextureHandle,
     update: Option<&str>,
+    modes: Modes,
 ) -> Option<TitleCmd> {
     let rect = ui.max_rect();
     ui.painter().rect_filled(rect, 0.0, palette::title_bg());
@@ -112,6 +124,59 @@ pub fn row(
             icon,
             r.center(),
             12.0,
+            color,
+            palette::title_bg(),
+        );
+        if response.on_hover_text(tip).clicked() {
+            cmd = Some(kind);
+        }
+    }
+
+    // The mini player and "over the others", left of the window's own:
+    // narrower, lit in the accent while on.
+    let toggles = [
+        (
+            TitleCmd::Mini,
+            Icon::Mini,
+            false,
+            tr!("Mini player (Ctrl+M)", "Мини-плеер (Ctrl+M)"),
+        ),
+        (
+            TitleCmd::OnTop,
+            Icon::Pin,
+            modes.on_top,
+            if modes.on_top {
+                tr!(
+                    "Over the other windows: on (Ctrl+T)",
+                    "Поверх всех окон: вкл. (Ctrl+T)"
+                )
+            } else {
+                tr!(
+                    "Over the other windows (Ctrl+T)",
+                    "Поверх всех окон (Ctrl+T)"
+                )
+            },
+        ),
+    ];
+    for (kind, icon, on, tip) in toggles {
+        let r = Rect::from_min_max(pos2(right - 36.0, rect.top()), pos2(right, rect.bottom()));
+        right = r.left();
+        let response = ui.interact(r, ui.id().with(("title_toggle", icon)), Sense::CLICK);
+        if response.hovered() {
+            ui.painter().rect_filled(r, 0.0, palette::hover());
+        }
+        let color = if on {
+            palette::accent()
+        } else if response.hovered() {
+            palette::text_bright()
+        } else {
+            palette::text_weak()
+        };
+        icons::paint(
+            ui.painter(),
+            icon,
+            r.center(),
+            13.0,
             color,
             palette::title_bg(),
         );

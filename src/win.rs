@@ -335,6 +335,232 @@ pub fn place(hwnd: isize, normal: Option<[i32; 4]>, default: [f32; 2], maximized
     unsafe { SetWindowPlacement(hwnd as _, &placement) };
 }
 
+/// The window shown at its restored rectangle `normal` (pixels, work-area
+/// coordinates), maximized or not: back from the mini player.
+pub fn show_placed(hwnd: isize, normal: [i32; 4], maximized: bool) {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowPlacement, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, SetWindowPlacement, WINDOWPLACEMENT,
+    };
+    let mut placement: WINDOWPLACEMENT = unsafe { std::mem::zeroed() };
+    placement.length = size_of::<WINDOWPLACEMENT>() as u32;
+    unsafe { GetWindowPlacement(hwnd as _, &mut placement) };
+    let [left, top, right, bottom] = normal;
+    placement.rcNormalPosition = RECT {
+        left,
+        top,
+        right,
+        bottom,
+    };
+    placement.showCmd = if maximized {
+        SW_SHOWMAXIMIZED
+    } else {
+        SW_SHOWNORMAL
+    } as u32;
+    placement.flags = 0;
+    unsafe { SetWindowPlacement(hwnd as _, &placement) };
+}
+
+/// The window's rectangle on the screen, in pixels.
+pub fn window_rect(hwnd: isize) -> Option<[i32; 4]> {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect;
+    let mut r: RECT = unsafe { std::mem::zeroed() };
+    (unsafe { GetWindowRect(hwnd as _, &mut r) } != 0).then_some([r.left, r.top, r.right, r.bottom])
+}
+
+/// The window, restored if maximized, moved and sized to `rect` (pixels,
+/// screen coordinates), shown as it was.
+pub fn set_rect(hwnd: isize, rect: [i32; 4]) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        IsZoomed, SW_RESTORE, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER, SetWindowPos,
+        ShowWindow,
+    };
+    unsafe {
+        if IsZoomed(hwnd as _) != 0 {
+            ShowWindow(hwnd as _, SW_RESTORE);
+        }
+        SetWindowPos(
+            hwnd as _,
+            std::ptr::null_mut(),
+            rect[0],
+            rect[1],
+            rect[2] - rect[0],
+            rect[3] - rect[1],
+            SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
+        );
+    }
+}
+
+/// The work area (the screen without the taskbar, pixels) of the monitor
+/// `rect` is mostly on, else of the nearest one.
+pub fn work_area_at(rect: [i32; 4]) -> Option<[i32; 4]> {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect,
+    };
+    let r = RECT {
+        left: rect[0],
+        top: rect[1],
+        right: rect[2],
+        bottom: rect[3],
+    };
+    let monitor = unsafe { MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST) };
+    let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
+    info.cbSize = size_of::<MONITORINFO>() as u32;
+    if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
+        return None;
+    }
+    let w = info.rcWork;
+    Some([w.left, w.top, w.right, w.bottom])
+}
+
+/// Whether `rect` (pixels) is at least partly on a monitor.
+pub fn on_a_monitor(rect: [i32; 4]) -> bool {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONULL, MonitorFromRect};
+    let r = RECT {
+        left: rect[0],
+        top: rect[1],
+        right: rect[2],
+        bottom: rect[3],
+    };
+    !unsafe { MonitorFromRect(&r, MONITOR_DEFAULTTONULL) }.is_null()
+}
+
+/// The mini player's least side in pixels while the window is it (0: it
+/// is not): its least size and its square shape are kept here
+/// (`WM_GETMINMAXINFO`, `WM_SIZING`), since winit's least size is the whole
+/// window's and its viewport command would come a frame late (metalmpv's
+/// `set_mini`).
+static MINI_LEAST: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+pub fn set_mini(least: Option<i32>) {
+    MINI_LEAST.store(least.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// How near an edge of the work area the mini player is drawn to it while
+/// it moves, in pixels at 96 dpi (metalmpv's).
+const EDGE_REACH: i32 = 16;
+
+/// Where the window and the pointer were when a move began
+/// (`WM_ENTERSIZEMOVE`).
+static MOVE_START: std::sync::Mutex<Option<([i32; 4], [i32; 2])>> = std::sync::Mutex::new(None);
+
+fn move_started(hwnd: isize) {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    let mut cursor: POINT = unsafe { std::mem::zeroed() };
+    let start = window_rect(hwnd)
+        .filter(|_| unsafe { GetCursorPos(&mut cursor) } != 0)
+        .map(|rect| (rect, [cursor.x, cursor.y]));
+    if let Ok(mut s) = MOVE_START.lock() {
+        *s = start;
+    }
+}
+
+/// `WM_MOVING` of the mini player: the rectangle at `lparam` put against
+/// the edges of the work area it comes within [`EDGE_REACH`] of
+/// (metalmpv's `snap`). The rectangle snapped is where the pointer alone
+/// puts the window (the start plus the pointer's way): Windows works the
+/// next rectangle out from the one given back, so a snapped one would keep
+/// the window at the edge for as long as each step stays within the reach.
+fn snap(hwnd: isize, lparam: windows_sys::Win32::Foundation::LPARAM) {
+    use windows_sys::Win32::Foundation::{POINT, RECT};
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetDpiForWindow(hwnd: isize) -> u32;
+    }
+    let rect = unsafe { &mut *(lparam as *mut RECT) };
+    let (w, h) = (rect.right - rect.left, rect.bottom - rect.top);
+    let mut cursor: POINT = unsafe { std::mem::zeroed() };
+    if unsafe { GetCursorPos(&mut cursor) } != 0
+        && let Some((r, c)) = MOVE_START.lock().ok().and_then(|s| *s)
+        && (r[2] - r[0], r[3] - r[1]) == (w, h)
+    {
+        let (dx, dy) = (cursor.x - c[0], cursor.y - c[1]);
+        *rect = RECT {
+            left: r[0] + dx,
+            top: r[1] + dy,
+            right: r[0] + dx + w,
+            bottom: r[1] + dy + h,
+        };
+    }
+    let moved = [rect.left, rect.top, rect.right, rect.bottom];
+    let Some(work) = work_area_at(moved) else {
+        return;
+    };
+    let dpi = match unsafe { GetDpiForWindow(hwnd) } {
+        0 => 96,
+        dpi => dpi as i32,
+    };
+    let [left, top, right, bottom] = snapped_to_edges(moved, work, EDGE_REACH * dpi / 96);
+    *rect = RECT {
+        left,
+        top,
+        right,
+        bottom,
+    };
+}
+
+/// `rect` (a window being moved) put against each edge of `work` it comes
+/// within `reach` pixels of: the mini player's magnet (metalmpv's).
+pub fn snapped_to_edges(rect: [i32; 4], work: [i32; 4], reach: i32) -> [i32; 4] {
+    let shift = |a: i32, b: i32, lo: i32, hi: i32| {
+        if (lo - a).abs() <= reach {
+            lo - a
+        } else if (hi - b).abs() <= reach {
+            hi - b
+        } else {
+            0
+        }
+    };
+    let dx = shift(rect[0], rect[2], work[0], work[2]);
+    let dy = shift(rect[1], rect[3], work[1], work[3]);
+    [rect[0] + dx, rect[1] + dy, rect[2] + dx, rect[3] + dy]
+}
+
+/// The size of the window's frame around its client area, in pixels.
+fn border(hwnd: isize) -> [i32; 2] {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetClientRect, GetWindowRect};
+    let mut window: RECT = unsafe { std::mem::zeroed() };
+    let mut client: RECT = unsafe { std::mem::zeroed() };
+    if unsafe { GetWindowRect(hwnd as _, &mut window) } == 0
+        || unsafe { GetClientRect(hwnd as _, &mut client) } == 0
+    {
+        return [0, 0];
+    }
+    [
+        (window.right - window.left) - (client.right - client.left),
+        (window.bottom - window.top) - (client.bottom - client.top),
+    ]
+}
+
+/// `rect` (a window being sized by its `edge`, `WMSZ_*`) with a square
+/// client area (`border` pixels less across and down): by a side edge or
+/// a corner the width counts, by the top or the bottom edge the height;
+/// the edges across from the one dragged stay (metalmpv's `kept_aspect`).
+pub fn squared(rect: [i32; 4], edge: usize, border: [i32; 2]) -> [i32; 4] {
+    // WMSZ_LEFT 1, RIGHT 2, TOP 3, TOPLEFT 4, TOPRIGHT 5, BOTTOM 6,
+    // BOTTOMLEFT 7, BOTTOMRIGHT 8.
+    let [left, mut top, mut right, mut bottom] = rect;
+    match edge {
+        1 | 2 | 4 | 5 | 7 | 8 => {
+            let side = right - left - border[0];
+            if matches!(edge, 4 | 5) {
+                top = bottom - side - border[1];
+            } else {
+                bottom = top + side + border[1];
+            }
+        }
+        3 | 6 => right = left + (bottom - top - border[1]) + border[0],
+        _ => {}
+    }
+    [left, top, right, bottom]
+}
+
 /// The double-click time of Windows in seconds (egui assumes 0.3).
 pub fn double_click_time() -> f64 {
     #[link(name = "user32")]
@@ -531,8 +757,9 @@ unsafe extern "system" fn window_proc(
 ) -> windows_sys::Win32::Foundation::LRESULT {
     use windows_sys::Win32::UI::Shell::DefSubclassProc;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        DefWindowProcW, ENDSESSION_CLOSEAPP, PBT_APMSUSPEND, WM_APPCOMMAND, WM_CLOSE, WM_COMMAND,
-        WM_KEYDOWN, WM_KEYUP, WM_POWERBROADCAST, WM_QUERYENDSESSION,
+        DefWindowProcW, ENDSESSION_CLOSEAPP, MINMAXINFO, PBT_APMSUSPEND, WM_APPCOMMAND, WM_CLOSE,
+        WM_COMMAND, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_KEYDOWN, WM_KEYUP,
+        WM_MOVING, WM_POWERBROADCAST, WM_QUERYENDSESSION, WM_SIZING,
     };
     // THBN_CLICKED in WM_COMMAND's high word.
     const THBN_CLICKED: usize = 0x1800;
@@ -580,6 +807,45 @@ unsafe extern "system" fn window_proc(
         {
             hook(Hooked::CloseNow);
             return 0;
+        }
+        // The mini player's least size after winit's (the whole window's).
+        WM_GETMINMAXINFO if lparam != 0 => {
+            let least = MINI_LEAST.load(std::sync::atomic::Ordering::Relaxed);
+            if least > 0 {
+                let result = unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
+                let [bx, by] = border(hwnd as isize);
+                let info = unsafe { &mut *(lparam as *mut MINMAXINFO) };
+                info.ptMinTrackSize.x = least + bx;
+                info.ptMinTrackSize.y = least + by;
+                return result;
+            }
+        }
+        // The mini player is drawn to the work area's edges as it moves.
+        WM_ENTERSIZEMOVE => move_started(hwnd as isize),
+        WM_EXITSIZEMOVE => {
+            if let Ok(mut start) = MOVE_START.lock() {
+                *start = None;
+            }
+        }
+        WM_MOVING if lparam != 0 && MINI_LEAST.load(std::sync::atomic::Ordering::Relaxed) > 0 => {
+            snap(hwnd as isize, lparam);
+            return 1;
+        }
+        // The mini player stays square while its edges are dragged.
+        WM_SIZING if lparam != 0 && MINI_LEAST.load(std::sync::atomic::Ordering::Relaxed) > 0 => {
+            let r = unsafe { &mut *(lparam as *mut windows_sys::Win32::Foundation::RECT) };
+            let [left, top, right, bottom] = squared(
+                [r.left, r.top, r.right, r.bottom],
+                wparam,
+                border(hwnd as isize),
+            );
+            *r = windows_sys::Win32::Foundation::RECT {
+                left,
+                top,
+                right,
+                bottom,
+            };
+            return 1;
         }
         WM_COMMAND if (wparam >> 16) & 0xFFFF == THBN_CLICKED => {
             hook(Hooked::Thumb((wparam & 0xFFFF) as u16));
@@ -717,6 +983,40 @@ pub fn local_date(unix_secs: u64) -> (u16, u16, u16) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_mini_player_is_drawn_to_the_edges() {
+        use super::snapped_to_edges;
+        let work = [0, 0, 1920, 1040];
+        // Near the right and bottom edges: against them.
+        assert_eq!(
+            snapped_to_edges([1500, 620, 1910, 1030], work, 16),
+            [1510, 630, 1920, 1040]
+        );
+        // Near the left edge only.
+        assert_eq!(
+            snapped_to_edges([12, 300, 312, 600], work, 16),
+            [0, 300, 300, 600]
+        );
+        // Away from them: as it is.
+        let free = [400, 300, 700, 600];
+        assert_eq!(snapped_to_edges(free, work, 16), free);
+    }
+
+    #[test]
+    fn the_mini_player_stays_square() {
+        use super::squared;
+        // By the right edge: the width counts, the bottom follows.
+        assert_eq!(
+            squared([100, 100, 400, 350], 2, [0, 0]),
+            [100, 100, 400, 400]
+        );
+        // By the top left corner: the bottom stays, the top moves.
+        assert_eq!(squared([90, 120, 400, 400], 4, [0, 0]), [90, 90, 400, 400]);
+        // By the bottom edge: the height counts, the right edge follows;
+        // with a frame around the client area.
+        assert_eq!(squared([0, 0, 300, 316], 6, [16, 8]), [0, 0, 324, 316]);
+    }
+
     #[test]
     fn media_keys() {
         use super::{MediaKey, media_command, media_vk};
