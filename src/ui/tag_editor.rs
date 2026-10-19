@@ -51,7 +51,9 @@ struct Field {
     value: String,
     /// The files differ in it; left alone unless typed in.
     mixed: bool,
-    /// Typed in: written.
+    /// The value shown at first (empty when mixed).
+    shown: String,
+    /// Typed in and not as it was shown: written.
     touched: bool,
 }
 
@@ -107,8 +109,10 @@ impl TagEditor {
                         .map(|i| {
                             let first = ok.first().map(|v| v[i].clone()).unwrap_or_default();
                             let mixed = ok.iter().any(|v| v[i] != first);
+                            let value = if mixed { String::new() } else { first };
                             Field {
-                                value: if mixed { String::new() } else { first },
+                                shown: value.clone(),
+                                value,
                                 mixed,
                                 touched: false,
                             }
@@ -298,8 +302,10 @@ impl TagEditor {
                             .hint_text(hint)
                             .desired_width(ui.available_width().max(200.0)),
                     );
+                    // Typed back to what it was (a mixed field emptied
+                    // again): left alone, not written empty to every file.
                     if resp.changed() {
-                        field.touched = true;
+                        field.touched = field.value != field.shown;
                     }
                     if focus_first && i == 0 {
                         resp.request_focus();
