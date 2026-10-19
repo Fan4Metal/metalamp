@@ -480,7 +480,9 @@ impl Player<'_> {
     /// Start `open` from `from_ms`, dropping what was written.
     fn begin(&mut self, mut open: Open, from_ms: u64) {
         let format = (open.decoder.rate, open.decoder.channels);
-        if from_ms > 0
+        // A decoder already under way (the track heard begun again, a
+        // seek to its start among them) is sought even to 0.
+        if (from_ms > 0 || open.decoded > 0)
             && let Err(e) = open.decoder.seek(from_ms as i64 * SECOND / 1000)
         {
             log::warn!("cannot seek: {}", mf::describe(&e));
