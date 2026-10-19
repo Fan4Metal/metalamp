@@ -115,8 +115,12 @@ impl AboutDialog {
                     None => place
                         .on_hover_text(tr!("Settings are not saved", "Настройки не сохраняются")),
                 };
-                ui.add_space(8.0);
-                ui.weak(tr!("Settings: F5", "Настройки: F5"));
+                // The key the settings' Keys page gives them, if any.
+                let key = crate::keymap::shortcut(crate::keymap::Cmd::Settings);
+                if !key.is_empty() {
+                    ui.add_space(8.0);
+                    ui.weak(tr!(format!("Settings: {key}"), format!("Настройки: {key}")));
+                }
                 ui.add_space(4.0);
             });
             closed
