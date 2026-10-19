@@ -167,11 +167,10 @@ fn run(asked: Asked, cancel: &AtomicBool, tx: &Sender<ScanMsg>, wake: &Wake) {
     if cancel.load(Relaxed) {
         return;
     }
-    // An index of an older version is shown while every file is read
-    // again, not replaced by the part read so far.
+    // What was known of each file: its tracks when unchanged, and the day
+    // it came into the library, also when every file is read again.
     let known: HashMap<&Path, &Track> = previous
         .as_deref()
-        .filter(|_| !read_all)
         .map(|l| l.tracks.iter().map(|t| (t.path.as_path(), t)).collect())
         .unwrap_or_default();
     // A folder that could not be read (a disk not plugged in, a network
@@ -204,19 +203,24 @@ fn run(asked: Asked, cancel: &AtomicBool, tx: &Sender<ScanMsg>, wake: &Wake) {
     let (mut tracks, read) = read_tracks(
         &found,
         &known,
+        read_all,
         cancel,
         &|done, total| send(ScanMsg::Progress { done, total }),
         &|so_far| {
+            // Every file read again (an index of an older version, or
+            // asked for): the library and the index stay as they were
+            // until the end, not replaced by the part read so far.
+            if read_all {
+                return;
+            }
             // A long scan saves as it goes: one stopped by the end of the
             // program goes on from there next time.
             let mut saved = so_far.to_vec();
             saved.extend(kept.iter().cloned());
             index::save(&saved, &playlists, number);
-            if !read_all {
-                send(ScanMsg::Loaded(Arc::new(
-                    Library::new(saved).with_playlists(playlists.clone()),
-                )));
-            }
+            send(ScanMsg::Loaded(Arc::new(
+                Library::new(saved).with_playlists(playlists.clone()),
+            )));
         },
     );
     if cancel.load(Relaxed) {
@@ -313,7 +317,8 @@ pub fn walk(folders: &[PathBuf], cancel: &AtomicBool) -> Walked {
 }
 
 /// The tracks of `found`: those `known` with the same size and time as
-/// they are, the others read anew (on up to eight threads: more only queue
+/// they are (unless `read_all`; a track read again keeps the day it came
+/// into the library), the others read anew (on up to eight threads: more only queue
 /// on the disk). Also how many were read. `progress` hears of the reads at
 /// most ten times a second; when there are more than [`CHUNK`] to read,
 /// `partial` gets the tracks so far after each chunk. A file that cannot be
@@ -323,6 +328,7 @@ pub fn walk(folders: &[PathBuf], cancel: &AtomicBool) -> Walked {
 pub fn read_tracks(
     found: &[Found],
     known: &HashMap<&Path, &Track>,
+    read_all: bool,
     cancel: &AtomicBool,
     progress: &(dyn Fn(usize, usize) + Sync),
     partial: &dyn Fn(&[Track]),
@@ -331,7 +337,9 @@ pub fn read_tracks(
     let mut to_read = Vec::new();
     for f in found {
         match known.get(f.path.as_path()) {
-            Some(t) if t.size == f.size && t.mtime == f.mtime => tracks.push((*t).clone()),
+            Some(t) if !read_all && t.size == f.size && t.mtime == f.mtime => {
+                tracks.push((*t).clone());
+            }
             _ => to_read.push(f),
         }
     }

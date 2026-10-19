@@ -51,7 +51,8 @@ fn bench_scan(folders: &[PathBuf], out: &mut impl Write) {
     let found = scan::walk(folders, &cancel).found;
     let walk = t.elapsed();
     let t = Instant::now();
-    let (tracks, read) = scan::read_tracks(&found, &HashMap::new(), &cancel, &|_, _| {}, &|_| {});
+    let (tracks, read) =
+        scan::read_tracks(&found, &HashMap::new(), false, &cancel, &|_, _| {}, &|_| {});
     let tags = t.elapsed();
     let t = Instant::now();
     let library = Library::new(tracks);
