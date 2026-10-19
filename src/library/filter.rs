@@ -230,8 +230,10 @@ impl Filter {
     pub fn is_complete(&self) -> bool {
         !self.name.trim().is_empty()
             && self.rules.iter().all(|r| match r.field.kind() {
-                Kind::Number => parse_number(&r.value).is_some()
-                    && (r.op != Op::Between || parse_number(&r.to).is_some()),
+                Kind::Number => {
+                    parse_number(&r.value).is_some()
+                        && (r.op != Op::Between || parse_number(&r.to).is_some())
+                }
                 Kind::Text | Kind::Folder => r.op.values() == 0 || !r.value.trim().is_empty(),
                 Kind::Flag => true,
             })

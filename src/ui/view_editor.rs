@@ -82,11 +82,12 @@ impl Suggestions {
         let folder_names = folders
             .iter()
             .map(|f| f.to_string_lossy().into_owned())
-            .chain(library.albums.iter().filter_map(|a| {
-                a.folder
-                    .parent()
-                    .map(|p| p.to_string_lossy().into_owned())
-            }));
+            .chain(
+                library
+                    .albums
+                    .iter()
+                    .filter_map(|a| a.folder.parent().map(|p| p.to_string_lossy().into_owned())),
+            );
         let folders: Vec<String> = folder_names.collect();
         Suggestions {
             genres: distinct(tracks.iter().map(|t| t.genre.as_str())),
@@ -312,9 +313,21 @@ impl ViewEditor {
                     RichText::new(tr!(
                         format!(
                             "Leaves {} · {} · {}",
-                            crate::i18n::count(counts.artists as u64, ["artist", "artists"], ["", "", ""]),
-                            crate::i18n::count(counts.albums as u64, ["album", "albums"], ["", "", ""]),
-                            crate::i18n::count(counts.tracks as u64, ["track", "tracks"], ["", "", ""]),
+                            crate::i18n::count(
+                                counts.artists as u64,
+                                ["artist", "artists"],
+                                ["", "", ""]
+                            ),
+                            crate::i18n::count(
+                                counts.albums as u64,
+                                ["album", "albums"],
+                                ["", "", ""]
+                            ),
+                            crate::i18n::count(
+                                counts.tracks as u64,
+                                ["track", "tracks"],
+                                ["", "", ""]
+                            ),
                         ),
                         format!(
                             "Остаётся {} · {} · {}",
@@ -355,7 +368,10 @@ impl ViewEditor {
                             .add_enabled(valid, egui::Button::new("OK").min_size(vec2(80.0, 0.0)))
                             .clicked();
                         close |= ui
-                            .add(egui::Button::new(tr!("Cancel", "Отмена")).min_size(vec2(80.0, 0.0)))
+                            .add(
+                                egui::Button::new(tr!("Cancel", "Отмена"))
+                                    .min_size(vec2(80.0, 0.0)),
+                            )
                             .clicked();
                     });
                 });
@@ -476,7 +492,13 @@ fn rule_row(
                     suggestion_menu(ui, i, &mut rule.value, list);
                 }
                 if browse
-                    && tool(ui, tr!("Choose a folder…", "Выбрать папку…"), true, Icon::Folder).clicked()
+                    && tool(
+                        ui,
+                        tr!("Choose a folder…", "Выбрать папку…"),
+                        true,
+                        Icon::Folder,
+                    )
+                    .clicked()
                     && let Some(folder) = rfd::FileDialog::new()
                         .set_title(tr!("Folder of the view", "Папка представления"))
                         .set_parent(frame)

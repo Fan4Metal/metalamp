@@ -304,6 +304,11 @@ impl App {
                     self.info_request = Some(t.path.clone());
                 }
             }
+            LibraryAction::GoTo {
+                album,
+                track,
+                to_album,
+            } => self.go_to(album, track, to_album),
             LibraryAction::NewView => self
                 .view_editor
                 .open_new(&self.library, &self.settings.library_folders),
@@ -686,6 +691,23 @@ impl App {
 
     /// Copy what lives elsewhere (the update check, the player) into the
     /// settings.
+    /// "Go to album" or "Go to artist" in the library; the keys go back to
+    /// its panes.
+    fn go_to(
+        &mut self,
+        album: crate::library::AlbumId,
+        track: Option<crate::library::TrackId>,
+        to_album: bool,
+    ) {
+        if self
+            .library_view
+            .go_to(&self.library, &mut self.settings, album, track, to_album)
+        {
+            self.place_changed = Some(Instant::now());
+        }
+        self.playlist_view.focused = false;
+    }
+
     /// The name of the library view in use, if one narrows the library.
     pub(crate) fn view_name(&self) -> Option<&str> {
         self.settings.current_view().map(|v| v.name.as_str())
@@ -1141,6 +1163,18 @@ impl eframe::App for App {
                     }
                     crate::ui::playlist::PlaylistAction::InfoPlaying => {
                         self.info_request = self.playing_or_current_path();
+                    }
+                    crate::ui::playlist::PlaylistAction::GoTo(i, to_album) => {
+                        let track = self
+                            .player
+                            .queue
+                            .entries()
+                            .get(i)
+                            .and_then(|e| self.library.by_path.get(&e.path).copied());
+                        if let Some(t) = track {
+                            let album = self.library.album_of[t as usize];
+                            self.go_to(album, Some(t), to_album);
+                        }
                     }
                 }
             }

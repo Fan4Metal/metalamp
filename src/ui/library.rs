@@ -68,6 +68,13 @@ pub enum LibraryAction {
     NewView,
     /// Open the view editor for the view of this name.
     EditView(String),
+    /// "Go to album" (`to_album`) or "Go to artist": `album`'s, from
+    /// `track` if a track's menu asked (it is selected there then).
+    GoTo {
+        album: AlbumId,
+        track: Option<TrackId>,
+        to_album: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -146,6 +153,9 @@ pub struct LibraryView {
     /// app before its own keys, which then leave the letters alone).
     pub letters: bool,
     typed: TypeAhead,
+    /// A "Go to" to finish once the view is built for it: the rows to
+    /// scroll into sight, the track to select.
+    going: Option<Option<TrackId>>,
 }
 
 /// The letters typed in a row, as in Windows' lists: each within
@@ -230,6 +240,67 @@ impl LibraryView {
             artists_rect: None,
             letters: false,
             typed: TypeAhead::default(),
+            going: None,
+        }
+    }
+
+    /// "Go to album" (`to_album`) or "Go to artist" for `album`: its
+    /// artist chosen, and the album too for the album; once the view is
+    /// built, both scrolled into sight and `track` selected. A search or a
+    /// view of the library that hides them is given up (the search
+    /// cleared, the whole library shown). True when the settings changed.
+    pub fn go_to(
+        &mut self,
+        library: &Library,
+        settings: &mut Settings,
+        album: AlbumId,
+        track: Option<TrackId>,
+        to_album: bool,
+    ) -> bool {
+        let Some(target) = go_to_target(library, settings, &self.query, album, track, to_album)
+        else {
+            return false;
+        };
+        if target.clear_query {
+            self.query.clear();
+        }
+        let changed = target.clear_view;
+        if changed {
+            settings.view.clear();
+        }
+        self.artist = Some(target.artist);
+        self.album = target.album;
+        self.focus = if to_album {
+            Pane::Albums
+        } else {
+            Pane::Artists
+        };
+        self.going = Some(track);
+        changed
+    }
+
+    /// The rows of a "Go to" scrolled into sight and its track selected,
+    /// in the first frame its view is built.
+    fn finish_going(&mut self, settings: &Settings) {
+        let Some(track) = self.going.take() else {
+            return;
+        };
+        let Some(view) = &self.view else { return };
+        if let Some(r) = view.artist_row {
+            self.scroll[0] = Some(r + 1);
+        }
+        if let Some(r) = view.album_row {
+            // The table has "All" first, the grid not.
+            self.scroll[1] = Some(match settings.album_view {
+                AlbumView::Grid => r,
+                AlbumView::Table => r + 1,
+            });
+        }
+        if let Some(row) = track.and_then(|t| view.tracks.iter().position(|&x| x == t)) {
+            self.selected = BTreeSet::from([row]);
+            self.anchor = Some(row);
+            self.scroll[2] = Some(row);
+            self.reset_tracks = false;
         }
     }
 
@@ -336,15 +407,69 @@ impl LibraryView {
     }
 }
 
+/// Where a "Go to" goes: the artist and album to choose (lower-case name,
+/// `Album::key`) and whether the search and the library's view must be
+/// given up for them to be shown.
+#[derive(Debug, PartialEq)]
+struct GoToTarget {
+    artist: String,
+    album: Option<String>,
+    clear_query: bool,
+    clear_view: bool,
+}
+
+fn go_to_target(
+    library: &Library,
+    settings: &Settings,
+    query: &str,
+    album: AlbumId,
+    track: Option<TrackId>,
+    to_album: bool,
+) -> Option<GoToTarget> {
+    let a = library.albums.get(album as usize)?;
+    let artist = library
+        .artists
+        .iter()
+        .find(|ar| ar.albums.contains(&album))?;
+    // What has to stay in sight: the track, else the album or the artist.
+    let wanted: Vec<TrackId> = match track {
+        Some(t) => vec![t],
+        None if to_album => a.tracks.clone(),
+        None => artist
+            .albums
+            .iter()
+            .flat_map(|&al| library.albums[al as usize].tracks.iter().copied())
+            .collect(),
+    };
+    let clear_view = settings.current_view().is_some_and(|f| {
+        let f = f.compile(unix_now());
+        !wanted
+            .iter()
+            .any(|&t| f.matches(&library.tracks[t as usize]))
+    });
+    let words = crate::library::query_words(query);
+    let clear_query = !words.is_empty() && !wanted.iter().any(|&t| library.matches(t, &words));
+    Some(GoToTarget {
+        artist: artist.name.to_lowercase(),
+        album: to_album.then(|| a.key.clone()),
+        clear_query,
+        clear_view,
+    })
+}
+
+/// Unix seconds now, for the days since a file was added.
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 /// Builds the view: the tracks the view's filter and the search leave,
 /// the artists and albums that have any of them, each sorted.
 fn build(library: &Library, key: &ViewKey) -> View {
     let start = Instant::now();
     let words = crate::library::query_words(&key.query);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    let filter = key.filter.as_ref().map(|f| f.compile(now));
+    let filter = key.filter.as_ref().map(|f| f.compile(unix_now()));
     let shown: Vec<bool> = library
         .tracks
         .iter()
@@ -519,6 +644,7 @@ pub fn show(
     let mut actions = Vec::new();
     let mut changed = false;
     lv.refresh(library, settings);
+    lv.finish_going(settings);
     if std::mem::take(&mut lv.play_shown)
         && let Some(view) = &lv.view
         && !view.tracks.is_empty()
@@ -1077,12 +1203,7 @@ fn artists_pane(
         lv.focus = Pane::Artists;
     }
     let mut choose = resp.clicked.or(resp.double_clicked).or(resp.secondary);
-    match context_menu(
-        resp.area.as_ref(),
-        resp.secondary.is_some(),
-        "artists",
-        false,
-    ) {
+    match context_menu(resp.area.as_ref(), resp.secondary.is_some(), "artists", &[]) {
         Some(MenuChoice::Play) => lv.play_shown = true,
         Some(MenuChoice::Enqueue) => actions.push(LibraryAction::Enqueue(view.tracks.clone())),
         Some(MenuChoice::ShowInFolder) => {
@@ -1202,7 +1323,7 @@ fn albums_table(
             resp.area.as_ref(),
             resp.secondary.is_some(),
             "albums",
-            false,
+            album_extras(menu_album),
         ),
         actions,
     );
@@ -1260,7 +1381,25 @@ fn album_menu(
                 show_folder_of(library, t);
             }
         }
+        Some(MenuChoice::GoToArtist) => {
+            if let Some(album) = album {
+                actions.push(LibraryAction::GoTo {
+                    album,
+                    track: None,
+                    to_album: false,
+                });
+            }
+        }
         _ => {}
+    }
+}
+
+/// An album's menu goes to its artist; the menu of every album shown, not.
+fn album_extras(album: Option<AlbumId>) -> &'static [MenuChoice] {
+    if album.is_some() {
+        &[MenuChoice::GoToArtist]
+    } else {
+        &[]
     }
 }
 
@@ -1574,7 +1713,12 @@ fn albums_grid(
         library,
         view,
         menu_album,
-        context_menu(Some(&out.inner), secondary, "albums_grid", false),
+        context_menu(
+            Some(&out.inner),
+            secondary,
+            "albums_grid",
+            album_extras(menu_album),
+        ),
         actions,
     );
     if focused {
@@ -1670,7 +1814,21 @@ fn tracks_pane(
     {
         table::click_select(&mut lv.selected, &mut lv.anchor, row, modifiers);
     }
-    match context_menu(resp.area.as_ref(), resp.secondary.is_some(), "tracks", true) {
+    let extras: &[MenuChoice] = if lv.selected.is_empty() {
+        &[]
+    } else {
+        &[
+            MenuChoice::GoToAlbum,
+            MenuChoice::GoToArtist,
+            MenuChoice::Info,
+        ]
+    };
+    match context_menu(
+        resp.area.as_ref(),
+        resp.secondary.is_some(),
+        "tracks",
+        extras,
+    ) {
         Some(MenuChoice::Play) if !lv.selected.is_empty() => {
             actions.push(play_selection(view, &lv.selected));
         }
@@ -1686,6 +1844,15 @@ fn tracks_pane(
         Some(MenuChoice::Info) => {
             if let Some(t) = lv.selected_track() {
                 actions.push(LibraryAction::Info(t));
+            }
+        }
+        Some(choice @ (MenuChoice::GoToAlbum | MenuChoice::GoToArtist)) => {
+            if let Some(t) = lv.selected_track() {
+                actions.push(LibraryAction::GoTo {
+                    album: library.album_of[t as usize],
+                    track: Some(t),
+                    to_album: choice == MenuChoice::GoToAlbum,
+                });
             }
         }
         _ => {}
@@ -1752,18 +1919,21 @@ enum MenuChoice {
     Enqueue,
     ShowInFolder,
     Info,
+    GoToAlbum,
+    GoToArtist,
 }
 
 /// A pane's context menu, opened where the right button was let go on a
 /// row (`open`) or on the pane's free space (`area`); any click elsewhere
 /// closes it. The right button counts as clicked even if the mouse moved
-/// while it was held (`App::raw_input_hook`). `info`: with the file info
-/// item (a track's menu).
+/// while it was held (`App::raw_input_hook`). Play, Add to the playlist
+/// and Show in folder always; of `extras`, "Go to album" and "Go to
+/// artist" between them, the file info last (a track's menu).
 fn context_menu(
     area: Option<&egui::Response>,
     open: bool,
     id: &str,
-    info: bool,
+    extras: &[MenuChoice],
 ) -> Option<MenuChoice> {
     let area = area?;
     let open = (open || area.secondary_clicked()).then_some(egui::SetOpenCommand::Bool(true));
@@ -1773,35 +1943,55 @@ fn context_menu(
         .open_memory(open)
         .show(|ui| {
             ui.set_min_width(200.0);
-            for (item, label) in [
-                (MenuChoice::Play, tr!("Play", "Воспроизвести")),
-                (
-                    MenuChoice::Enqueue,
-                    tr!("Add to the playlist", "Добавить в плейлист"),
-                ),
-                (
-                    MenuChoice::ShowInFolder,
-                    tr!("Show in folder", "Показать в папке"),
-                ),
-            ] {
-                if item == MenuChoice::ShowInFolder {
-                    ui.separator();
-                }
+            let mut item = |ui: &mut Ui, item: MenuChoice, label: &str| {
                 if ui.button(label).clicked() {
                     choice = Some(item);
                     ui.close();
                 }
+            };
+            item(ui, MenuChoice::Play, tr!("Play", "Воспроизвести"));
+            item(
+                ui,
+                MenuChoice::Enqueue,
+                tr!("Add to the playlist", "Добавить в плейлист"),
+            );
+            let go = [
+                (MenuChoice::GoToAlbum, go_to_album_label()),
+                (MenuChoice::GoToArtist, go_to_artist_label()),
+            ];
+            if go.iter().any(|(c, _)| extras.contains(c)) {
+                ui.separator();
             }
-            if info
-                && ui
-                    .button(tr!("File info… (I)", "Сведения о файле… (I)"))
-                    .clicked()
-            {
-                choice = Some(MenuChoice::Info);
-                ui.close();
+            for (c, label) in go {
+                if extras.contains(&c) {
+                    item(ui, c, label);
+                }
+            }
+            ui.separator();
+            item(
+                ui,
+                MenuChoice::ShowInFolder,
+                tr!("Show in folder", "Показать в папке"),
+            );
+            if extras.contains(&MenuChoice::Info) {
+                item(
+                    ui,
+                    MenuChoice::Info,
+                    tr!("File info… (I)", "Сведения о файле… (I)"),
+                );
             }
         });
     choice
+}
+
+/// The menus' "Go to album", shared with the playlist's.
+pub fn go_to_album_label() -> &'static str {
+    tr!("Go to album", "Перейти к альбому")
+}
+
+/// The menus' "Go to artist", shared with the playlist's.
+pub fn go_to_artist_label() -> &'static str {
+    tr!("Go to artist", "Перейти к исполнителю")
 }
 
 /// Enter on the tracks: one selected plays the table from it, several
@@ -1824,6 +2014,7 @@ fn play_selection(view: &View, selected: &BTreeSet<usize>) -> LibraryAction {
 mod tests {
     use super::*;
     use crate::library::Track;
+    use std::path::PathBuf;
 
     #[test]
     fn typed_letters_go_to_the_first_name_and_then_on() {
@@ -1876,6 +2067,59 @@ mod tests {
             album: album.map(Into::into),
             sorts: [None; 3],
         }
+    }
+
+    #[test]
+    fn go_to_chooses_and_gives_up_what_hides() {
+        let lib = lib();
+        let mut settings = Settings::default();
+        // "Химера" (album of a/2.mp3), found by its track.
+        let t = lib.by_path[&PathBuf::from("a/2.mp3")];
+        let album = lib.album_of[t as usize];
+        let target = go_to_target(&lib, &settings, "", album, Some(t), true).unwrap();
+        assert_eq!(target.artist, "ария");
+        assert_eq!(
+            target.album.as_deref(),
+            Some(lib.albums[album as usize].key.as_str())
+        );
+        assert!(!target.clear_query && !target.clear_view);
+        let v = build(
+            &lib,
+            &key("", Some(&target.artist), target.album.as_deref()),
+        );
+        assert!(v.artist_row.is_some() && v.album_row.is_some());
+        assert!(v.tracks.contains(&t));
+        // The artist alone.
+        let target = go_to_target(&lib, &settings, "", album, Some(t), false).unwrap();
+        assert_eq!(target.album, None);
+        // A search that hides the track is cleared; one that shows it not.
+        assert!(
+            go_to_target(&lib, &settings, "abba", album, Some(t), true)
+                .unwrap()
+                .clear_query
+        );
+        assert!(
+            !go_to_target(&lib, &settings, "химера", album, Some(t), true)
+                .unwrap()
+                .clear_query
+        );
+        // So is a view that hides it.
+        settings.views.push(crate::library::filter::Filter {
+            name: "ABBA".into(),
+            any: false,
+            rules: vec![crate::library::filter::Rule {
+                field: crate::library::filter::Field::Artist,
+                op: crate::library::filter::Op::Is,
+                value: "abba".into(),
+                to: String::new(),
+            }],
+        });
+        settings.view = "ABBA".into();
+        assert!(
+            go_to_target(&lib, &settings, "", album, Some(t), false)
+                .unwrap()
+                .clear_view
+        );
     }
 
     #[test]

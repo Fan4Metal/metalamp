@@ -111,6 +111,9 @@ pub enum PlaylistAction {
     Info(usize),
     /// The cover clicked: the file info window for the track playing.
     InfoPlaying,
+    /// "Go to album" (`true`) or "Go to artist" in the library for an
+    /// entry.
+    GoTo(usize, bool),
 }
 
 /// The line of an entry: "Artist – Title" from the library, else the
@@ -494,6 +497,23 @@ pub fn show(
             {
                 actions.push(PlaylistAction::Info(i));
                 ui.close();
+            }
+            // To the library, for an entry it holds.
+            let entry = pv.selected_entry();
+            let known = entry
+                .and_then(|i| player.queue.entries().get(i))
+                .is_some_and(|e| library.by_path.contains_key(&e.path));
+            ui.separator();
+            for (to_album, label) in [
+                (true, super::library::go_to_album_label()),
+                (false, super::library::go_to_artist_label()),
+            ] {
+                if ui.add_enabled(known, egui::Button::new(label)).clicked()
+                    && let Some(i) = entry
+                {
+                    actions.push(PlaylistAction::GoTo(i, to_album));
+                    ui.close();
+                }
             }
             ui.separator();
             if ui
