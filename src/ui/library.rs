@@ -5,18 +5,20 @@
 //! as it is typed (every word must be in the track's artist, album, title,
 //! genre or year).
 //!
-//! What is shown is a [`View`], built only when the library, the search,
-//! the choice or a sort changed (a few milliseconds for 5000 tracks): the
-//! panes then only paint the rows in sight.
+//! What is shown is a [`View`], built only when the library, the view's
+//! filter (`library::filter`, chosen in the row under the artists), the
+//! search, the choice or a sort changed (a few milliseconds for 5000
+//! tracks): the panes then only paint the rows in sight.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use egui::{Align2, FontId, Key, Modifiers, Rect, Sense, Ui, pos2, vec2};
+use egui::{Align2, FontId, Key, Modifiers, Rect, Sense, Shape, Stroke, Ui, pos2, vec2};
 
 use crate::covers::Covers;
 use crate::format::{self, natural_cmp};
+use crate::library::filter::Filter;
 use crate::library::{AlbumId, ArtistId, Library, TrackId, unknown_artist};
 use crate::palette;
 use crate::settings::{AlbumView, Settings};
@@ -24,6 +26,8 @@ use crate::ui::icons::{self, Icon};
 use crate::ui::table::{self, Column, Sort, Table};
 
 const TOP_BAR: f32 = 36.0;
+/// The row under the artists naming the view in use.
+const VIEW_ROW: f32 = 26.0;
 const SPLITTER: f32 = 5.0;
 /// An album's cell in the grid, and its cover's side.
 /// The side of a cover in the grid: `settings.cover_size` within these;
@@ -60,6 +64,10 @@ pub enum LibraryAction {
     Info(TrackId),
     /// Open the settings window.
     Settings,
+    /// Open the view editor for a new view.
+    NewView,
+    /// Open the view editor for the view of this name.
+    EditView(String),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -98,6 +106,8 @@ pub struct View {
 #[derive(Clone, PartialEq)]
 struct ViewKey {
     library: usize,
+    /// The view's filter, if one is in use.
+    filter: Option<Filter>,
     query: String,
     artist: Option<String>,
     album: Option<String>,
@@ -259,6 +269,7 @@ impl LibraryView {
     fn refresh(&mut self, library: &Arc<Library>, settings: &Settings) {
         let key = ViewKey {
             library: Arc::as_ptr(library) as usize,
+            filter: settings.current_view().cloned(),
             query: self.query.clone(),
             artist: self.artist.clone(),
             album: self.album.clone(),
@@ -273,6 +284,7 @@ impl LibraryView {
         }
         let same_tracks = self.key.as_ref().is_some_and(|k| {
             k.library == key.library
+                && k.filter == key.filter
                 && k.query == key.query
                 && k.artist == key.artist
                 && k.album == key.album
@@ -324,18 +336,24 @@ impl LibraryView {
     }
 }
 
-/// Builds the view: the tracks the search leaves, the artists and albums
-/// that have any of them, each sorted.
+/// Builds the view: the tracks the view's filter and the search leave,
+/// the artists and albums that have any of them, each sorted.
 fn build(library: &Library, key: &ViewKey) -> View {
     let start = Instant::now();
     let words = crate::library::query_words(&key.query);
-    let shown: Vec<bool> = if words.is_empty() {
-        vec![true; library.tracks.len()]
-    } else {
-        (0..library.tracks.len())
-            .map(|t| library.matches(t as TrackId, &words))
-            .collect()
-    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let filter = key.filter.as_ref().map(|f| f.compile(now));
+    let shown: Vec<bool> = library
+        .tracks
+        .iter()
+        .enumerate()
+        .map(|(t, track)| {
+            filter.as_ref().is_none_or(|f| f.matches(track))
+                && (words.is_empty() || library.matches(t as TrackId, &words))
+        })
+        .collect();
     let in_album: Vec<u32> = library
         .albums
         .iter()
@@ -545,6 +563,9 @@ pub fn show(
         .artists_width
         .clamp(160.0, (rest.width() * 0.5).max(160.0));
     let left = Rect::from_min_size(rest.min, vec2(width, rest.height()));
+    // The view's row under the artists.
+    let views = Rect::from_min_max(pos2(left.left(), left.bottom() - VIEW_ROW), left.max);
+    let left = Rect::from_min_max(left.min, pos2(left.right(), views.top()));
     let split_v = Rect::from_min_size(
         pos2(left.right(), rest.top()),
         vec2(SPLITTER, rest.height()),
@@ -583,6 +604,7 @@ pub fn show(
         &mut actions,
         &mut changed,
     );
+    view_row(ui, views, settings, &mut actions, &mut changed);
     match settings.album_view {
         AlbumView::Grid => albums_grid(
             ui,
@@ -618,6 +640,136 @@ pub fn show(
     );
     ui.advance_cursor_after_rect(full);
     (actions, changed)
+}
+
+/// The row under the artists: the view in use (the whole library, or one
+/// of `settings.views`) with a funnel, lit in the accent while a view
+/// narrows the library; a click opens the menu of the views, "New view…"
+/// and "Edit…" for the one in use.
+fn view_row(
+    ui: &mut Ui,
+    rect: Rect,
+    settings: &mut Settings,
+    actions: &mut Vec<LibraryAction>,
+    changed: &mut bool,
+) {
+    let painter = ui.painter().clone();
+    let resp = ui.interact(rect, ui.id().with("view_row"), Sense::click());
+    let ground = if resp.hovered() {
+        palette::hover()
+    } else {
+        palette::header_bg()
+    };
+    painter.rect_filled(rect, 0.0, ground);
+    painter.hline(
+        rect.x_range(),
+        rect.top() + 0.5,
+        Stroke::new(1.0, palette::line()),
+    );
+    let whole = tr!("Whole library", "Вся библиотека");
+    let (name, icon_colour) = match settings.current_view() {
+        Some(v) => (v.name.clone(), palette::accent()),
+        None => (whole.to_owned(), palette::text_weak()),
+    };
+    let cy = rect.center().y;
+    icons::paint(
+        &painter,
+        Icon::Filter,
+        pos2(rect.left() + 16.0, cy),
+        icons::SIZE,
+        icon_colour,
+        ground,
+    );
+    // A small triangle at the right end: the row opens a menu.
+    let cx = rect.right() - 13.0;
+    painter.add(Shape::convex_polygon(
+        vec![
+            pos2(cx - 4.0, cy - 2.0),
+            pos2(cx + 4.0, cy - 2.0),
+            pos2(cx, cy + 2.5),
+        ],
+        palette::text_weak(),
+        Stroke::NONE,
+    ));
+    let text_left = rect.left() + 30.0;
+    let galley = crate::ui::elided(
+        &painter,
+        name,
+        FontId::proportional(13.0),
+        palette::text(),
+        cx - 10.0 - text_left,
+    );
+    painter.galley(
+        pos2(text_left, cy - galley.size().y / 2.0),
+        galley,
+        palette::text(),
+    );
+
+    let mut pick: Option<String> = None;
+    egui::Popup::menu(&resp)
+        .align(egui::RectAlign::TOP_START)
+        .show(|ui| {
+            ui.set_min_width(240.0);
+            let current = settings.current_view().map(|v| v.name.as_str());
+            let names =
+                std::iter::once(None).chain(settings.views.iter().map(|v| Some(v.name.as_str())));
+            for (i, name) in names.enumerate() {
+                let mut button = egui::Button::selectable(name == current, name.unwrap_or(whole));
+                if i < 9 {
+                    button = button.shortcut_text(format!("Ctrl+{}", i + 1));
+                }
+                if ui.add(button).clicked() {
+                    pick = Some(name.unwrap_or("").to_owned());
+                    ui.close();
+                }
+            }
+            ui.separator();
+            if ui
+                .button(tr!("New view…", "Новое представление…"))
+                .clicked()
+            {
+                actions.push(LibraryAction::NewView);
+                ui.close();
+            }
+            if let Some(name) = current
+                && ui
+                    .button(tr!(
+                        format!("Edit “{name}”…"),
+                        format!("Изменить «{name}»…")
+                    ))
+                    .clicked()
+            {
+                actions.push(LibraryAction::EditView(name.to_owned()));
+                ui.close();
+            }
+        });
+    if let Some(name) = pick
+        && settings.view != name
+    {
+        settings.view = name;
+        *changed = true;
+    }
+    resp.on_hover_text(tr!(
+        "The library's views (Ctrl+1…9)",
+        "Представления библиотеки (Ctrl+1…9)"
+    ));
+}
+
+/// Ctrl+1…9: the whole library (1) or a view by its place in the menu
+/// (2…). True when the view changed.
+pub fn choose_view(settings: &mut Settings, n: usize) -> bool {
+    let name = match n {
+        0 => String::new(),
+        i => match settings.views.get(i - 1) {
+            Some(v) => v.name.clone(),
+            None => return false,
+        },
+    };
+    if settings.view == name {
+        return false;
+    }
+    settings.view = name;
+    true
 }
 
 /// A strip between two panes; how far it was dragged this frame.
@@ -1718,6 +1870,7 @@ mod tests {
     fn key(query: &str, artist: Option<&str>, album: Option<&str>) -> ViewKey {
         ViewKey {
             library: 0,
+            filter: None,
             query: query.into(),
             artist: artist.map(Into::into),
             album: album.map(Into::into),

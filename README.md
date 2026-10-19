@@ -23,7 +23,7 @@ MetalAMP is an audio player for Windows built around a media library: the music 
 
 ## Features
 
-- **A media library**: artists with their numbers of albums and tracks, a grid of album covers (or a table), the tracks; choosing an artist narrows the albums, an album the tracks (see [The library](#the-library)).
+- **A media library**: artists with their numbers of albums and tracks, a grid of album covers (or a table), the tracks; choosing an artist narrows the albums, an album the tracks; views narrow the library by rules, a genre or a folder, as Winamp's smart views (see [The library](#the-library)).
 - **Fast**: a library of 4942 tracks is shown from its index in about 12 ms at start-up, and a check of its folders that finds nothing changed takes about 26 ms; a search narrows every pane in under a millisecond.
 - **Gapless playback**: the next track is opened before the current one ends, and MP3 files are cut to their music by their LAME tags (see [Playback](#playback)).
 - **Formats of Windows**: MP3, AAC (M4A), FLAC, WMA and WAV, decoded by Media Foundation; M3U and M3U8 playlists.
@@ -60,6 +60,8 @@ The panes:
 - **Tracks**: number, title, length, album, year, artist, genre and bit rate; the track playing is shown in the colour of the controls (by default).
 
 A click on a column's header sorts by that column, a second click reverses the order, a third returns to the library's order; a column's right edge is dragged to change its width (a double click on it fits the column to its longest text, as in Windows' lists), and the borders between the panes move. Columns that do not fit in a pane scroll sideways (the scroll bar, or `Shift` with the mouse wheel). The search field (`Ctrl+F`) narrows all three panes as it is typed: every word must be found in the track's artist, album artist, album, title, genre or year; `Esc` clears it. The status line shows the number, the total length and the size of the tracks shown, and how long the search took.
+
+**Views** narrow the library to the tracks that meet a set of rules, as Winamp's smart views did: the row under the artists names the view in use (**Whole library** at first) and opens the menu of the views, with **New view…** and **Edit…** for the one in use. A view has a name and rules, all of which must hold (or any one of them): a field (genre, artist, album artist, album, title, year, folder, bit rate, length in minutes, days since the file was added, a cover in the tag), an operation (contains, is, starts with, is empty, less than, between, inside a folder…) and a value. Texts are compared without regard to case, and a text field's value has a menu of the values the library holds, so a genre is picked as the tags spell it. While the editor is open it says how many artists, albums and tracks the rules leave. A view "Soundtracks" with the rule *genre contains soundtrack* and a view "Everything else" with *genre does not contain soundtrack* split the library in two; an artist with albums of both kinds is in both views, with the counts of each. The search, the panes and the status line work within the view; `Ctrl+1` shows the whole library, `Ctrl+2`…`Ctrl+9` the views in the order of the menu. The views are kept in the settings.
 
 A double click or `Enter` plays: an artist plays its tracks, an album its tracks, a track the whole table from it on. The right button opens a menu with **Play**, **Add to the playlist** and **Show in folder**, on a track also **File info…**.
 
@@ -98,6 +100,7 @@ The playlist on the right (`Alt+E` shows or hides it) lists "Artist – Title" w
 | `R` | Repeat: off, the playlist, the track |
 | `S` | Shuffle |
 | `Ctrl+F` | Search the library |
+| `Ctrl+1` … `Ctrl+9` | The whole library (`1`) or one of its views, in the order of the views' menu |
 | `Ctrl+O` | Open files |
 | `Ctrl+Shift+O` | Add a music folder |
 | `Ctrl+R` | Read the library's folders again |

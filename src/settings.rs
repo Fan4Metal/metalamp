@@ -42,6 +42,10 @@ pub struct Settings {
     pub window: Option<WindowPlace>,
     /// The folders of the media library.
     pub library_folders: Vec<PathBuf>,
+    /// The views of the library (filters over its tracks, `library::filter`),
+    /// and the name of the one in use (empty: the whole library).
+    pub views: Vec<crate::library::filter::Filter>,
+    pub view: String,
     /// Albums as a grid of covers or as a table.
     pub album_view: AlbumView,
     /// The side of a cover in the grid, in points (`library::MIN_COVER`
@@ -91,6 +95,14 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// The view in use, if `view` names one of `views`.
+    pub fn current_view(&self) -> Option<&crate::library::filter::Filter> {
+        if self.view.is_empty() {
+            return None;
+        }
+        self.views.iter().find(|v| v.name == self.view)
+    }
+
     /// What the palette is made of.
     pub fn look(&self) -> crate::palette::Look {
         crate::palette::Look {
@@ -220,6 +232,8 @@ impl Default for Settings {
             last_update_check: 0,
             window: None,
             library_folders: Vec::new(),
+            views: Vec::new(),
+            view: String::new(),
             album_view: AlbumView::Grid,
             cover_size: 152.0,
             artists_width: 260.0,

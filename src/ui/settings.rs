@@ -307,7 +307,7 @@ impl SettingsDialog {
 }
 
 /// Rounder buttons, lists and fields in the window.
-fn round_widgets(ui: &mut Ui) {
+pub(crate) fn round_widgets(ui: &mut Ui) {
     let w = &mut ui.style_mut().visuals.widgets;
     for v in [
         &mut w.noninteractive,
@@ -742,13 +742,13 @@ fn amount(ui: &mut Ui, title: &str, hint: &str, value: &mut u8) {
 }
 
 /// The width of a small icon button (`tool`).
-const TOOL: f32 = 26.0;
+pub(crate) const TOOL: f32 = 26.0;
 /// The most presets of the user's kept; saving one more drops the oldest.
 const MAX_OWN_PRESETS: usize = 20;
 
 /// A small icon button, as metalmpv's: `icon` in `TOOL` points, lit
 /// under the pointer, greyed and inert while not `enabled`.
-fn tool(ui: &mut Ui, tip: &str, enabled: bool, icon: Icon) -> Response {
+pub(crate) fn tool(ui: &mut Ui, tip: &str, enabled: bool, icon: Icon) -> Response {
     let enabled = enabled && ui.is_enabled();
     let sense = if enabled {
         Sense::click()

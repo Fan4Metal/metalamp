@@ -120,6 +120,8 @@ pub enum Icon {
     /// Books on a shelf, filled, the last one leaning on its neighbour:
     /// the media library (its folders).
     Library,
+    /// A funnel: a filter, the library's views.
+    Filter,
 }
 
 impl Icon {
@@ -181,6 +183,7 @@ impl Icon {
         Icon::Refresh,
         Icon::Image,
         Icon::Library,
+        Icon::Filter,
     ];
 }
 
@@ -629,6 +632,17 @@ pub fn paint(painter: &Painter, icon: Icon, c: Pos2, size: f32, color: Color32, 
             }
             painter.circle_filled(c, 4.4 * k, color);
             painter.circle_filled(c, 2.0 * k, fill);
+        }
+        Icon::Filter => {
+            // A funnel: a wide mouth narrowing to a spout.
+            painter.add(closed(&[
+                (-6.3, -5.6),
+                (6.3, -5.6),
+                (1.6, 0.6),
+                (1.6, 5.6),
+                (-1.6, 5.6),
+                (-1.6, 0.6),
+            ]));
         }
         Icon::Plus => {
             painter.line_segment([p(-5.0, 0.0), p(5.0, 0.0)], pen(1.5));

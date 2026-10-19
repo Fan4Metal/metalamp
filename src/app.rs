@@ -79,6 +79,11 @@ pub struct App {
     /// end of the frame.
     file_info: crate::ui::info::InfoView,
     info_request: Option<PathBuf>,
+    /// The editor of the library's views.
+    view_editor: crate::ui::view_editor::ViewEditor,
+    /// `METALAMP_VIEW_EDITOR` is set: open the editor once the library is
+    /// loaded, for looking at it without a hand on the window (GUI checks).
+    env_view_editor: bool,
 }
 
 impl App {
@@ -177,6 +182,8 @@ impl App {
             saved_playlist,
             file_info: crate::ui::info::InfoView::default(),
             info_request: None,
+            view_editor: crate::ui::view_editor::ViewEditor::default(),
+            env_view_editor: std::env::var_os("METALAMP_VIEW_EDITOR").is_some(),
         }
     }
 
@@ -295,6 +302,18 @@ impl App {
             LibraryAction::Info(track) => {
                 if let Some(t) = self.library.tracks.get(track as usize) {
                     self.info_request = Some(t.path.clone());
+                }
+            }
+            LibraryAction::NewView => self
+                .view_editor
+                .open_new(&self.library, &self.settings.library_folders),
+            LibraryAction::EditView(name) => {
+                if let Some(view) = self.settings.views.iter().find(|v| v.name == name) {
+                    self.view_editor.open_edit(
+                        &self.library,
+                        &self.settings.library_folders,
+                        view.clone(),
+                    );
                 }
             }
         }
@@ -667,6 +686,11 @@ impl App {
 
     /// Copy what lives elsewhere (the update check, the player) into the
     /// settings.
+    /// The name of the library view in use, if one narrows the library.
+    pub(crate) fn view_name(&self) -> Option<&str> {
+        self.settings.current_view().map(|v| v.name.as_str())
+    }
+
     fn sync_settings(&mut self) {
         self.settings.check_updates = self.updates.enabled;
         self.settings.last_update_check = self.updates.last_check;
@@ -947,8 +971,16 @@ impl eframe::App for App {
     fn ui(&mut self, root_ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = root_ui.ctx().clone();
         self.uncloak(&ctx);
+        if self.env_view_editor && self.loaded {
+            self.env_view_editor = false;
+            self.view_editor
+                .open_new(&self.library, &self.settings.library_folders);
+        }
         // A modal takes the keys while it is open.
-        let modal = self.about.open || self.file_info.open || self.settings_dialog.open;
+        let modal = self.about.open
+            || self.file_info.open
+            || self.settings_dialog.open
+            || self.view_editor.open;
         // Outside the modals only the search fields keep the focus: a
         // button that Tab focused took every key of the player until a
         // click elsewhere (the keys wait while anything has the focus).
@@ -1000,6 +1032,26 @@ impl eframe::App for App {
             if ctx.input_mut(|i| i.consume_key(Modifiers::ALT, Key::E)) {
                 self.settings.playlist_visible = !self.settings.playlist_visible;
                 self.place_changed = Some(Instant::now());
+            }
+            // Ctrl+1…9: the library's views, as the row under the artists
+            // lists them.
+            const DIGITS: [Key; 9] = [
+                Key::Num1,
+                Key::Num2,
+                Key::Num3,
+                Key::Num4,
+                Key::Num5,
+                Key::Num6,
+                Key::Num7,
+                Key::Num8,
+                Key::Num9,
+            ];
+            for (n, key) in DIGITS.into_iter().enumerate() {
+                if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, key))
+                    && crate::ui::library::choose_view(&mut self.settings, n)
+                {
+                    self.place_changed = Some(Instant::now());
+                }
             }
         }
         self.take_dropped(&ctx);
@@ -1131,6 +1183,12 @@ impl eframe::App for App {
         }
         self.file_info.show(&ctx);
         self.about.show(&ctx);
+        if self
+            .view_editor
+            .show(&ctx, &mut self.settings, &self.library, frame)
+        {
+            self.place_changed = Some(Instant::now());
+        }
         let changed = self
             .settings_dialog
             .show(&ctx, &mut self.settings, &mut self.updates);

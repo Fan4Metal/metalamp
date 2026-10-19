@@ -32,6 +32,10 @@ pub fn show(ui: &mut Ui, app: &App) {
                 format::long_duration(length),
                 format::size(bytes),
             );
+            // The view in use, when one narrows the library.
+            if let Some(name) = app.view_name() {
+                text = format!("{name}: {text}");
+            }
             if let Some(took) = took {
                 let ms = format::millis_in(crate::i18n::lang(), took.as_secs_f64());
                 text += &tr!(format!(" in {ms}"), format!(" за {ms}"));
