@@ -25,6 +25,7 @@ mod library;
 mod loudness;
 mod palette;
 mod player;
+mod playlists;
 mod queue;
 mod settings;
 mod smtc;

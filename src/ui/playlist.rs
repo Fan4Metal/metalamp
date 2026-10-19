@@ -43,6 +43,8 @@ pub struct PlaylistView {
     revision: u64,
     /// The rows as last built.
     rows: Option<Arc<Rows>>,
+    /// The name typed in the playlists' menu to save the list under.
+    save_name: String,
 }
 
 /// The rows' text and what the search leaves, built again only when the
@@ -121,6 +123,12 @@ pub enum PlaylistAction {
     GoTo(usize, bool),
     /// The tag editor for entries.
     EditTags(Vec<usize>),
+    /// Save the list under a name; open (and play) a saved one; delete
+    /// one; save the list to a file of one's choice.
+    SaveAs(String),
+    Open(String),
+    Delete(String),
+    Export,
 }
 
 /// The line of an entry: "Artist – Title" from the library, else the
@@ -197,6 +205,7 @@ pub fn show(
     {
         *show_cover = !*show_cover;
     }
+    playlists_menu(&mut bar, pv, !player.queue.is_empty(), &mut actions);
     let edit = egui::TextEdit::singleline(&mut pv.query)
         .hint_text(tr!("Search in the playlist", "Поиск в плейлисте"))
         .desired_width(f32::INFINITY);
@@ -682,4 +691,96 @@ fn remove_selected(pv: &mut PlaylistView, player: &mut Player) {
     } else {
         pv.anchor = None;
     }
+}
+
+/// The playlists' button and its menu: the list saved under a name typed
+/// in, the saved playlists (a click opens one, the cross deletes it), the
+/// list saved to a file of one's choice.
+fn playlists_menu(
+    ui: &mut Ui,
+    pv: &mut PlaylistView,
+    any: bool,
+    actions: &mut Vec<PlaylistAction>,
+) {
+    let button = crate::ui::icon_button(
+        ui,
+        Icon::Folder,
+        false,
+        tr!("Playlists: save, open", "Плейлисты: сохранить, открыть"),
+    );
+    egui::Popup::menu(&button)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            ui.set_min_width(280.0);
+            ui.label(
+                egui::RichText::new(tr!("Save the list as", "Сохранить список как"))
+                    .small()
+                    .color(palette::text_weak()),
+            );
+            ui.horizontal(|ui| {
+                let field = ui.add(
+                    egui::TextEdit::singleline(&mut pv.save_name)
+                        .char_limit(crate::playlists::MAX_NAME)
+                        .hint_text(tr!("Name", "Название"))
+                        .desired_width(200.0),
+                );
+                let enter = super::take_leaving_key(ui, &field);
+                let name = pv.save_name.trim().to_owned();
+                let ok = any && !name.is_empty();
+                if ui
+                    .add_enabled(ok, egui::Button::new(tr!("Save", "Сохранить")))
+                    .clicked()
+                    || (enter && ok)
+                {
+                    actions.push(PlaylistAction::SaveAs(name));
+                    pv.save_name.clear();
+                    ui.close();
+                }
+            });
+            let saved = crate::playlists::list();
+            if !saved.is_empty() {
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(tr!(
+                        "Saved: a click opens",
+                        "Сохранённые: щелчок открывает"
+                    ))
+                    .small()
+                    .color(palette::text_weak()),
+                );
+                egui::ScrollArea::vertical()
+                    .max_height(300.0)
+                    .show(ui, |ui| {
+                        for name in saved {
+                            ui.horizontal(|ui| {
+                                if crate::ui::icon_button(
+                                    ui,
+                                    Icon::Close,
+                                    false,
+                                    tr!("Delete this playlist", "Удалить этот плейлист"),
+                                )
+                                .clicked()
+                                {
+                                    actions.push(PlaylistAction::Delete(name.clone()));
+                                }
+                                if ui.button(&name).clicked() {
+                                    actions.push(PlaylistAction::Open(name.clone()));
+                                    ui.close();
+                                }
+                            });
+                        }
+                    });
+            }
+            ui.separator();
+            if ui
+                .add_enabled(
+                    any,
+                    egui::Button::new(tr!("Save to a file…", "Сохранить в файл…")),
+                )
+                .clicked()
+            {
+                actions.push(PlaylistAction::Export);
+                ui.close();
+            }
+        });
 }

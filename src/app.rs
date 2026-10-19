@@ -802,6 +802,35 @@ impl App {
     }
 
     /// Write the playlist when it or its current entry changed.
+    /// The playlist as M3U8 text, each entry with its length and
+    /// "Artist - Title" from the library.
+    fn playlist_m3u8(&self) -> String {
+        self.player.queue.m3u8(&|path| {
+            let &id = self.library.by_path.get(path)?;
+            let t = &self.library.tracks[id as usize];
+            let title = if t.artist.is_empty() {
+                t.title.clone()
+            } else {
+                format!("{} - {}", t.artist, t.title)
+            };
+            Some((u64::from(t.duration_ms) / 1000, title))
+        })
+    }
+
+    /// The playlist saved to a file chosen in Windows' dialog.
+    fn export_playlist(&self, frame: &eframe::Frame) {
+        let dialog = rfd::FileDialog::new()
+            .set_title(tr!("Save the playlist", "Сохранить плейлист"))
+            .add_filter("M3U8", &["m3u8"])
+            .set_file_name(tr!("Playlist.m3u8", "Плейлист.m3u8"))
+            .set_parent(frame);
+        if let Some(path) = dialog.save_file()
+            && let Err(e) = std::fs::write(&path, self.playlist_m3u8())
+        {
+            log::warn!("cannot write {}: {e}", path.display());
+        }
+    }
+
     fn remember_playlist(&mut self, now: bool) {
         let state = (self.player.queue.revision, self.player.queue.current());
         if state == self.saved_playlist {
@@ -810,16 +839,7 @@ impl App {
         let revision_changed = state.0 != self.saved_playlist.0;
         self.saved_playlist = state;
         if revision_changed {
-            let text = self.player.queue.m3u8(&|path| {
-                let &id = self.library.by_path.get(path)?;
-                let t = &self.library.tracks[id as usize];
-                let title = if t.artist.is_empty() {
-                    t.title.clone()
-                } else {
-                    format!("{} - {}", t.artist, t.title)
-                };
-                Some((u64::from(t.duration_ms) / 1000, title))
-            });
+            let text = self.playlist_m3u8();
             if let Some(path) = playlist_file() {
                 static FILE: crate::kept::Kept = crate::kept::Kept::new();
                 let number = FILE.ask();
@@ -1264,6 +1284,20 @@ impl eframe::App for App {
                     crate::ui::playlist::PlaylistAction::InfoPlaying => {
                         self.info_request = self.playing_or_current_path();
                     }
+                    crate::ui::playlist::PlaylistAction::SaveAs(name) => {
+                        if let Err(e) = crate::playlists::save(&name, &self.playlist_m3u8()) {
+                            log::warn!("cannot save the playlist {name}: {e}");
+                        }
+                    }
+                    crate::ui::playlist::PlaylistAction::Open(name) => {
+                        if let Some(paths) = crate::playlists::load(&name) {
+                            self.player.play_paths(paths, 0);
+                        }
+                    }
+                    crate::ui::playlist::PlaylistAction::Delete(name) => {
+                        crate::playlists::delete(&name);
+                    }
+                    crate::ui::playlist::PlaylistAction::Export => self.export_playlist(frame),
                     crate::ui::playlist::PlaylistAction::EditTags(indices) => {
                         let paths = self.playlist_paths(&indices);
                         self.tag_editor.open(&ctx, paths);
