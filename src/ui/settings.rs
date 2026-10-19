@@ -54,8 +54,8 @@ impl Page {
                 "Язык, тема и цвет, вид панели плеера и медиаклавиши."
             ),
             Page::Sound => tr!(
-                "The device the sound goes to; one loudness for every track, the equalizer and the enhancer.",
-                "Устройство, на которое выводится звук; одна громкость у всех треков, эквалайзер и улучшение звука."
+                "The device the sound goes to; one loudness for every track, the limiter, the equalizer and the enhancer.",
+                "Устройство, на которое выводится звук; одна громкость у всех треков, лимитер, эквалайзер и улучшение звука."
             ),
             Page::Updates => tr!(
                 "Asking GitHub whether a newer version is out.",
@@ -673,6 +673,17 @@ fn processing(
             50.0,
             |ui| switch(ui, &mut dsp.normalize),
         );
+        divider(ui);
+        row(
+            ui,
+            tr!("Limiter", "Лимитер"),
+            Some(tr!(
+                "Holds the peaks at -1 dBFS after the processing, so raised bands, preamp or enhancer never clip; a raised preamp then makes a loud track denser rather than louder. Turned off, a raise is heard in full, and what passes full scale is clipped by Windows.",
+                "Держит пики на -1 dBFS после обработки, чтобы поднятые полосы, предусиление или улучшение звука не клиповали; поднятое предусиление тогда делает громкий трек плотнее, а не громче. Если его выключить, подъём слышен целиком, а то, что выходит за полную шкалу, обрезает Windows."
+            )),
+            50.0,
+            |ui| switch(ui, &mut dsp.limiter),
+        );
     });
     section(ui, tr!("Equalizer", "Эквалайзер"), |ui| {
         ui.add_space(8.0);
@@ -728,18 +739,6 @@ fn processing(
                 "Мягкое скругление пиков, как у плёнки."
             ),
             &mut dsp.warmth,
-        );
-    });
-    section(ui, tr!("Limiter", "Лимитер"), |ui| {
-        row(
-            ui,
-            tr!("Limiter", "Лимитер"),
-            Some(tr!(
-                "Holds the peaks at -1 dBFS after the processing, so raised bands, preamp or enhancer never clip; a raised preamp then makes a loud track denser rather than louder. Turned off, a raise is heard in full, and what passes full scale is clipped by Windows.",
-                "Держит пики на -1 dBFS после обработки, чтобы поднятые полосы, предусиление или улучшение звука не клиповали; поднятое предусиление тогда делает громкий трек плотнее, а не громче. Если его выключить, подъём слышен целиком, а то, что выходит за полную шкалу, обрезает Windows."
-            )),
-            50.0,
-            |ui| switch(ui, &mut dsp.limiter),
         );
     });
 }
