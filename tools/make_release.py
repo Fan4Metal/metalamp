@@ -161,25 +161,29 @@ def exe_locked(exe: Path) -> bool:
 
 
 def post_close(pid: int) -> None:
-    """WM_CLOSE posted to the visible top-level windows of `pid`, as the window's close button
-    does, so that it saves its settings. taskkill without /F skips a minimized window (one in the
-    tray), which then could only be killed."""
+    """WM_CLOSE posted to the top-level windows of `pid`, as the window's close button does, so that
+    it saves its settings: those with a title but the system's (the input method's, the OpenGL
+    driver's, winit's message target); the visible ones, else (a window hidden in the tray) the
+    hidden ones. taskkill without /F skipped a minimized window, which then could only be killed."""
     import ctypes
     from ctypes import wintypes
 
+    service = ("IME", "MSCTFIME UI", "NVOpenGLPbuffer", "Winit Thread Event Target")
     user32 = ctypes.windll.user32
-    found = []
+    visible, hidden = [], []
 
     @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     def each(hwnd, _):
         owner = wintypes.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
-        if owner.value == pid and user32.IsWindowVisible(hwnd):
-            found.append(hwnd)
+        name = ctypes.create_unicode_buffer(64)
+        user32.GetClassNameW(hwnd, name, 64)
+        if owner.value == pid and user32.GetWindowTextLengthW(hwnd) > 0 and name.value not in service:
+            (visible if user32.IsWindowVisible(hwnd) else hidden).append(hwnd)
         return True
 
     user32.EnumWindows(each, 0)
-    for hwnd in found:
+    for hwnd in visible or hidden:
         user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
 
 
