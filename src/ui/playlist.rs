@@ -333,6 +333,14 @@ pub fn show(
     let count = lines.len();
     // Rows are dragged only in the whole list.
     let whole = rows.key.2.trim().is_empty();
+    // With a search, only the entries shown stay selected: Delete, the
+    // menu and Ctrl+E act on the selection.
+    if !whole {
+        pv.selected.retain(|i| shown.binary_search(i).is_ok());
+        if pv.anchor.is_some_and(|a| shown.binary_search(&a).is_err()) {
+            pv.anchor = None;
+        }
+    }
     let current = player.queue.current();
     let playing = player
         .playing
@@ -576,7 +584,17 @@ pub fn show(
     }
 
     if let Some(i) = clicked_row.or(secondary_row.filter(|i| !pv.selected.contains(i))) {
-        table::click_select(&mut pv.selected, &mut pv.anchor, i, modifiers);
+        let place = |e: usize| shown.binary_search(&e).ok();
+        match pv.anchor.and_then(place).zip(place(i)) {
+            // Shift with a search: the range among the entries shown.
+            Some((a, b)) if !whole && modifiers.shift => {
+                if !modifiers.command {
+                    pv.selected.clear();
+                }
+                pv.selected.extend(&shown[a.min(b)..=a.max(b)]);
+            }
+            _ => table::click_select(&mut pv.selected, &mut pv.anchor, i, modifiers),
+        }
     }
     if let Some(i) = double_row {
         actions.push(PlaylistAction::Play(i));
