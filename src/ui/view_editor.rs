@@ -55,17 +55,15 @@ struct Suggestions {
 /// open.
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Shape {
-    at: usize,
+    generation: u64,
     tracks: usize,
-    albums: usize,
 }
 
 impl Shape {
     fn of(library: &Library) -> Shape {
         Shape {
-            at: std::ptr::from_ref(library) as usize,
+            generation: library.generation,
             tracks: library.tracks.len(),
-            albums: library.albums.len(),
         }
     }
 }

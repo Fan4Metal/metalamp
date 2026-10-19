@@ -153,6 +153,10 @@ pub struct Library {
     /// The M3U and M3U8 playlists in the library's folders, by path (the
     /// playlist's saved playlists section lists them after its own).
     pub playlists: Vec<PathBuf>,
+    /// This library among those of the run (each scan makes new ones;
+    /// 0: an empty one): what was built for one is not of another. Not
+    /// its address, which a later one may take once it is dropped.
+    pub generation: u64,
 }
 
 /// A path in lower case, for lookups that ignore its case as Windows does.
@@ -284,6 +288,10 @@ impl Library {
             by_folded: by_path.iter().map(|(p, &id)| (folded(p), id)).collect(),
             by_path,
             playlists: Vec::new(),
+            generation: {
+                static MADE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
+            },
         }
     }
 

@@ -135,7 +135,8 @@ impl View {
 
 #[derive(Clone, PartialEq)]
 struct ViewKey {
-    library: usize,
+    /// `Library::generation`.
+    library: u64,
     /// The view's filter, if one is in use.
     filter: Option<Filter>,
     /// `Stats::revision`: the plays and ratings the view was built on.
@@ -371,7 +372,7 @@ impl LibraryView {
     pub fn selected_track_of(&self, library: &Arc<Library>) -> Option<TrackId> {
         self.key
             .as_ref()
-            .filter(|k| k.library == Arc::as_ptr(library) as usize)?;
+            .filter(|k| k.library == library.generation)?;
         self.selected_track()
     }
 
@@ -381,7 +382,7 @@ impl LibraryView {
         let (Some(key), Some(view)) = (&self.key, &self.view) else {
             return Vec::new();
         };
-        if key.library != Arc::as_ptr(library) as usize {
+        if key.library != library.generation {
             return Vec::new();
         }
         self.selected
@@ -403,7 +404,7 @@ impl LibraryView {
     /// now; built again only when one of them changed.
     fn refresh(&mut self, library: &Arc<Library>, settings: &Settings, stats: &Stats) {
         let key = ViewKey {
-            library: Arc::as_ptr(library) as usize,
+            library: library.generation,
             filter: settings.current_view().cloned(),
             stats: stats.revision,
             query: self.query.clone(),

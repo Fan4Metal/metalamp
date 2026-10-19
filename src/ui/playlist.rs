@@ -84,8 +84,8 @@ struct Listed {
 /// frame, it was a lookup and a string or two (a long list at 50 frames
 /// a second while playing).
 struct Rows {
-    /// The playlist's revision, the library's address and the search.
-    key: (u64, usize, String),
+    /// The playlist's revision, the library's generation and the search.
+    key: (u64, u64, String),
     /// Each entry's "Artist – Title" and length.
     lines: Vec<(String, Option<u32>)>,
     /// The entries the search leaves.
@@ -95,7 +95,7 @@ struct Rows {
 }
 
 impl Rows {
-    fn of(key: (u64, usize, String), player: &Player, library: &Library) -> Rows {
+    fn of(key: (u64, u64, String), player: &Player, library: &Library) -> Rows {
         let words = crate::library::query_words(&key.2);
         let lines: Vec<(String, Option<u32>)> = player
             .queue
@@ -318,11 +318,7 @@ pub fn show(
     }
 
     // The rows the search leaves, as indices into the playlist.
-    let key = (
-        player.queue.revision,
-        std::ptr::from_ref(library) as usize,
-        pv.query.clone(),
-    );
+    let key = (player.queue.revision, library.generation, pv.query.clone());
     if pv.rows.as_ref().is_none_or(|r| r.key != key) {
         pv.rows = Some(Arc::new(Rows::of(key, player, library)));
     }
