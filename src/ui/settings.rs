@@ -185,6 +185,12 @@ impl SettingsDialog {
             close |= self.window(ctx, owner, settings, updates, fresh || moved_out);
         } else {
             self.window.reset();
+            // Esc or Enter close it unless a list, a field or a key being
+            // chosen takes them (as of the frame before: a field let go
+            // by Enter or Esc leaves the key in the input).
+            let free = !egui::Popup::is_any_open(ctx)
+                && !ctx.text_edit_focused()
+                && self.capture.is_none();
             let modal = egui::Modal::new(egui::Id::new("settings"))
                 .frame(
                     egui::Frame::popup(&ctx.style_of(egui::Theme::Dark))
@@ -196,8 +202,12 @@ impl SettingsDialog {
                     close |= self.surface(ui, settings, updates, false);
                 });
             close |= !fresh
-                && (ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
-                    || modal.should_close());
+                && (modal.backdrop_response.clicked()
+                    || free
+                        && ctx.input_mut(|i| {
+                            i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+                                || i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                        }));
         }
         if close {
             self.open = false;
