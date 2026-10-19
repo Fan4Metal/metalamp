@@ -47,6 +47,73 @@ pub fn app_icon(
     cache.clone().expect("set above")
 }
 
+/// A window of the program's own (an immediate viewport: the settings,
+/// the file info) shown without a white flash: Windows shows a new window
+/// white until its first frame is presented. It is made hidden
+/// (`with_visible(false)`), found by its title, cloaked (`win::cloak`),
+/// owned by the program's window (`win::adopt`), shown, and uncloaked
+/// once it has painted a few frames.
+#[derive(Default)]
+pub struct OwnWindow {
+    /// Found (none: not yet; `Some(None)`: given up looking, shown as it
+    /// is), and the frames painted since it was shown.
+    hwnd: Option<Option<isize>>,
+    painted: u32,
+    looked: u32,
+}
+
+impl OwnWindow {
+    /// Frames painted before the window is uncloaked.
+    const PAINTED: u32 = 3;
+
+    /// Opened anew: found and shown again.
+    pub fn reset(&mut self) {
+        *self = OwnWindow::default();
+    }
+
+    /// The builder of a window made hidden.
+    pub fn builder(builder: egui::ViewportBuilder) -> egui::ViewportBuilder {
+        builder.with_visible(false)
+    }
+
+    /// Each frame inside the viewport's closure (`ctx` is the viewport's):
+    /// finds, adopts and shows the window, then uncloaks it.
+    pub fn follow(&mut self, ctx: &egui::Context, title: &str, owner: Option<isize>, dark: bool) {
+        let more = || {
+            ctx.request_repaint();
+            ctx.request_repaint_of(egui::ViewportId::ROOT);
+        };
+        match self.hwnd {
+            None => {
+                self.looked += 1;
+                let found = owner.and_then(|main| Some((main, crate::win::thread_window(title)?)));
+                if let Some((main, hwnd)) = found {
+                    crate::win::cloak(hwnd, true);
+                    crate::win::adopt(hwnd, main);
+                    crate::caption::set_dark(hwnd, dark);
+                    self.hwnd = Some(Some(hwnd));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                } else if self.looked > 10 {
+                    // Not found (no owner): shown as it is.
+                    self.hwnd = Some(None);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                }
+                more();
+            }
+            Some(hwnd) if self.painted < Self::PAINTED => {
+                self.painted += 1;
+                if self.painted == Self::PAINTED
+                    && let Some(hwnd) = hwnd
+                {
+                    crate::win::cloak(hwnd, false);
+                }
+                more();
+            }
+            Some(_) => {}
+        }
+    }
+}
+
 /// A toolbar button with `icon` (`icons::SIZE` points) in the button's
 /// text colour; `selected` gives it the look of a toggle that is on.
 pub fn icon_button(ui: &mut Ui, icon: Icon, selected: bool, tip: &str) -> Response {

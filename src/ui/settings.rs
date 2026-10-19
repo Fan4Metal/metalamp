@@ -118,7 +118,7 @@ pub struct SettingsDialog {
     /// Open in a window of its own (decided as it opens), and that
     /// window's handle once found.
     windowed: bool,
-    window_hwnd: Option<isize>,
+    window: super::OwnWindow,
 }
 
 impl SettingsDialog {
@@ -184,7 +184,7 @@ impl SettingsDialog {
         if self.windowed {
             close |= self.window(ctx, owner, settings, updates, fresh || moved_out);
         } else {
-            self.window_hwnd = None;
+            self.window.reset();
             let modal = egui::Modal::new(egui::Id::new("settings"))
                 .frame(
                     egui::Frame::popup(&ctx.style_of(egui::Theme::Dark))
@@ -201,7 +201,7 @@ impl SettingsDialog {
         }
         if close {
             self.open = false;
-            self.window_hwnd = None;
+            self.window.reset();
         }
         changed.device = settings.output_device != before.output_device;
         changed.dsp = settings.dsp != before.dsp;
@@ -365,13 +365,13 @@ impl SettingsDialog {
         fresh: bool,
     ) -> bool {
         if fresh {
-            self.window_hwnd = None;
+            self.window.reset();
         }
         let centre = ctx
             .input(|i| i.viewport().outer_rect)
             .unwrap_or(ctx.content_rect())
             .center();
-        let builder = egui::ViewportBuilder::default()
+        let builder = super::OwnWindow::builder(egui::ViewportBuilder::default())
             .with_title(tr!("Settings", "Настройки"))
             .with_decorations(false)
             .with_resizable(false)
@@ -383,8 +383,11 @@ impl SettingsDialog {
             .with_icon(crate::window_icon());
         let id = egui::ViewportId::from_hash_of("settings_window");
         let mut close = false;
+        let dark = settings.theme.is_dark();
         ctx.show_viewport_immediate(id, builder, |ui, _class| {
             let ctx = ui.ctx().clone();
+            self.window
+                .follow(&ctx, tr!("Settings", "Настройки"), owner, dark);
             close |= ctx.input(|i| i.viewport().close_requested());
             // Esc or Enter as the modal's, unless a list, a field or a
             // key being chosen takes them (as of the frame before).
@@ -406,16 +409,6 @@ impl SettingsDialog {
                 close |= self.surface(ui, settings, updates, true);
             });
         });
-        // eframe gives no handle for the window: the visible one of this
-        // thread that is not the program's, found once it shows.
-        if self.window_hwnd.is_none()
-            && let Some(main) = owner
-            && let Some(hwnd) = crate::win::thread_window(tr!("Settings", "Настройки"))
-        {
-            self.window_hwnd = Some(hwnd);
-            crate::win::adopt(hwnd, main);
-            crate::caption::set_dark(hwnd, settings.theme.is_dark());
-        }
         close
     }
 

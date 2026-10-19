@@ -922,18 +922,17 @@ unsafe extern "system" fn window_proc(
     unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
 }
 
-/// The visible windows of this thread (the program's and its viewports').
+/// The top-level windows of this thread, hidden ones too (the program's
+/// and its viewports', made hidden: `ui::OwnWindow`).
 pub fn thread_windows() -> Vec<isize> {
     use windows_sys::Win32::Foundation::{HWND, LPARAM};
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{EnumThreadWindows, IsWindowVisible};
+    use windows_sys::Win32::UI::WindowsAndMessaging::EnumThreadWindows;
     unsafe extern "system" fn collect(hwnd: HWND, lparam: LPARAM) -> i32 {
         // SAFETY: `lparam` is the pointer to `out` passed below, and the
         // callback runs only during the call.
         let out = unsafe { &mut *(lparam as *mut Vec<isize>) };
-        if unsafe { IsWindowVisible(hwnd) } != 0 {
-            out.push(hwnd as isize);
-        }
+        out.push(hwnd as isize);
         1
     }
     let mut out: Vec<isize> = Vec::new();
@@ -947,8 +946,8 @@ pub fn thread_windows() -> Vec<isize> {
     out
 }
 
-/// The visible window of this thread titled `title` (a viewport of the
-/// program's: eframe gives no handle for it).
+/// The window of this thread titled `title` (a viewport of the program's:
+/// eframe gives no handle for it), hidden or not.
 pub fn thread_window(title: &str) -> Option<isize> {
     use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowTextW;
     thread_windows().into_iter().find(|&h| {

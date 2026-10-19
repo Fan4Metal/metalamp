@@ -67,7 +67,7 @@ pub struct InfoView {
     /// In a window of its own (decided as it opens), and its handle once
     /// found.
     windowed: bool,
-    window_hwnd: Option<isize>,
+    window: super::OwnWindow,
 }
 
 /// The window of its own: its title (by which it is found) and height.
@@ -152,7 +152,7 @@ impl InfoView {
         if fresh {
             let room = ctx.content_rect().size();
             self.windowed = room.x < WIDTH + 64.0 || room.y < 420.0;
-            self.window_hwnd = None;
+            self.window.reset();
         }
         if self.windowed {
             close |= self.window(ctx, owner, shown, &wanted, cover.as_ref(), fresh);
@@ -197,7 +197,7 @@ impl InfoView {
             .input(|i| i.viewport().outer_rect)
             .unwrap_or(ctx.content_rect())
             .center();
-        let builder = egui::ViewportBuilder::default()
+        let builder = super::OwnWindow::builder(egui::ViewportBuilder::default())
             .with_title(window_title())
             .with_decorations(false)
             .with_resizable(true)
@@ -210,8 +210,10 @@ impl InfoView {
             .with_icon(crate::window_icon());
         let id = egui::ViewportId::from_hash_of("file_info_window");
         let mut close = false;
+        let dark = palette::current().dark;
         ctx.show_viewport_immediate(id, builder, |ui, _class| {
             let ctx = ui.ctx().clone();
+            self.window.follow(&ctx, window_title(), owner, dark);
             close |= ctx.input(|i| i.viewport().close_requested());
             close |=
                 !fresh && ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Enter));
@@ -238,13 +240,6 @@ impl InfoView {
                     close |= content(ui, shown, wanted, cover, None);
                 });
         });
-        if self.window_hwnd.is_none()
-            && let Some(main) = owner
-            && let Some(hwnd) = crate::win::thread_window(window_title())
-        {
-            self.window_hwnd = Some(hwnd);
-            crate::win::adopt(hwnd, main);
-        }
         close
     }
 }

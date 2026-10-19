@@ -19,6 +19,8 @@ use crate::{frameless, palette, win};
 
 /// How long the window stays cloaked at most while it is being maximized.
 const UNCLOAK_TIMEOUT: Duration = Duration::from_secs(1);
+/// Frames the window paints, cloaked, before it is shown.
+const PAINTED_TO_SHOW: u64 = 3;
 /// How long the window must rest after a move or resize before its place
 /// is saved: not at every frame of a drag, and not only at exit, which a
 /// crash or a logoff may skip.
@@ -46,9 +48,10 @@ pub struct App {
     smtc_failed: bool,
     /// The last media key: one press may come more than one way.
     last_media: Option<(win::MediaKey, win::Via, Instant)>,
-    /// The window is cloaked until its first maximized frame (the time it
-    /// is shown anyway and the frame it was cloaked in).
-    cloak: Option<(Instant, u64)>,
+    /// The window is cloaked until it has painted a few frames (else it
+    /// flashed white as it showed), and been maximized when it is to be:
+    /// the time it is shown anyway, the frame it was cloaked in, maximized.
+    cloak: Option<(Instant, u64, bool)>,
     /// When the window last moved or changed size, or a setting changed,
     /// until the settings are saved.
     place_changed: Option<Instant>,
@@ -150,10 +153,12 @@ impl App {
             // and not maximized, and the mini player put over it before
             // it shows (`apply_modes`).
             let maximized = settings.place().is_some_and(|w| w.maximized) && !settings.mini;
-            if maximized {
-                win::cloak(hwnd, true);
-                cloak = Some((Instant::now() + UNCLOAK_TIMEOUT, ctx.cumulative_frame_nr()));
-            }
+            win::cloak(hwnd, true);
+            cloak = Some((
+                Instant::now() + UNCLOAK_TIMEOUT,
+                ctx.cumulative_frame_nr(),
+                maximized,
+            ));
             if let Some(place) = settings.place() {
                 win::place(hwnd, Some(place.normal), settings.default_size(), maximized);
             }
@@ -929,10 +934,13 @@ impl App {
 
     /// Show the window once it is maximized (see `win::place`).
     fn uncloak(&mut self, ctx: &egui::Context) {
-        let Some((until, frame)) = self.cloak else {
+        let Some((until, frame, maximized)) = self.cloak else {
             return;
         };
-        let ready = ctx.cumulative_frame_nr() > frame && frameless::is_maximized(ctx);
+        // A few frames painted (Windows showed the window white until its
+        // first one was), and maximized when it is to be.
+        let ready = ctx.cumulative_frame_nr() >= frame + PAINTED_TO_SHOW
+            && (!maximized || frameless::is_maximized(ctx));
         if ready || Instant::now() >= until {
             if let Some(hwnd) = self.hwnd {
                 win::cloak(hwnd, false);
