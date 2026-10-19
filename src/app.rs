@@ -513,6 +513,7 @@ impl App {
             shuffle: self.player.queue.shuffle(),
             repeat: self.player.queue.repeat,
             eq: self.settings.dsp.eq,
+            stop_after: self.player.stop_after,
             cover,
         };
         for cmd in player_bar::show(ui, &now, &mut self.visual) {
@@ -572,6 +573,10 @@ impl App {
         }
         if pressed(Modifiers::NONE, Key::X) {
             self.player.play();
+        }
+        // Shift+V before V: egui matches a key without Shift also with it.
+        if pressed(Modifiers::SHIFT, Key::V) {
+            self.player.toggle_stop_after();
         }
         if pressed(Modifiers::NONE, Key::V) {
             self.player.stop();
@@ -1294,6 +1299,9 @@ impl eframe::App for App {
                     }
                     crate::ui::playlist::PlaylistAction::InfoPlaying => {
                         self.info_request = self.playing_or_current_path();
+                    }
+                    crate::ui::playlist::PlaylistAction::StopAfter => {
+                        self.player.toggle_stop_after();
                     }
                     crate::ui::playlist::PlaylistAction::PlayNext(indices) => {
                         self.player.move_next(&indices);

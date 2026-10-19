@@ -41,6 +41,9 @@ pub struct Player {
     failed_in_row: usize,
     /// The last failure, for the status line.
     pub error: Option<String>,
+    /// Stop when the track heard ends (Shift+V): nothing is preloaded;
+    /// off again once it has stopped.
+    pub stop_after: bool,
     /// Where to take up the entry (its id) the last run left off at (ms),
     /// when it is played next; any other play forgets it.
     pub resume: Option<(u64, u64)>,
@@ -86,6 +89,7 @@ impl Player {
             failed_in_row: 0,
             error: None,
             resume: None,
+            stop_after: false,
             loudness,
             dsp,
         }
@@ -221,6 +225,12 @@ impl Player {
         let at = self.queue.move_next(indices);
         self.refresh_preload();
         at
+    }
+
+    /// Stop after the track heard, or not (Shift+V).
+    pub fn toggle_stop_after(&mut self) {
+        self.stop_after = !self.stop_after;
+        self.refresh_preload();
     }
 
     pub fn toggle_pause(&mut self) {
@@ -365,6 +375,13 @@ impl Player {
         if self.status == Status::Stopped {
             return;
         }
+        // To stop after this one: nothing to go on to.
+        if self.stop_after {
+            if self.preloaded.take().is_some() {
+                self.engine.send(Cmd::Preload(None));
+            }
+            return;
+        }
         let next = self.queue.after(self.queue.current());
         let entry = next.map(|i| self.queue.entries()[i].clone());
         // Already preloaded. With repeat one the entry preloaded is the
@@ -431,6 +448,8 @@ impl Player {
                     self.refresh_preload();
                 }
                 Event::Ended => {
+                    // Stopped as asked: the next play goes on as usual.
+                    self.stop_after = false;
                     self.status = Status::Stopped;
                     self.playing = None;
                     self.preloaded = None;

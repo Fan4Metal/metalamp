@@ -81,6 +81,8 @@ pub struct NowPlaying<'a> {
     pub repeat: Repeat,
     /// The equalizer is on.
     pub eq: bool,
+    /// Playing stops after the track heard (Shift+V): Stop is lit.
+    pub stop_after: bool,
     pub cover: Option<egui::TextureHandle>,
 }
 
@@ -427,8 +429,11 @@ fn transport(
         let d = if round { 36.0 } else { 30.0 };
         let r = Rect::from_center_size(pos2(x + d / 2.0, cy), vec2(d, d));
         x += d + 4.0;
-        let resp = ui.interact(r, ui.id().with(("bar", tip)), Sense::click());
-        let (fill, color) = if round {
+        let resp = ui.interact(r, ui.id().with(("bar", icon)), Sense::click());
+        let lit = icon == Icon::Stop && now.stop_after;
+        let (fill, color) = if lit {
+            (Some(palette::selected_bg()), palette::accent())
+        } else if round {
             let fill = if resp.hovered() {
                 palette::accent_hover()
             } else {
@@ -469,14 +474,15 @@ fn transport(
         (Icon::Play, tr!("Play (Space)", "Воспроизвести (Пробел)"))
     };
     button(ui, icon, 17.0, BarCmd::PlayPause, tip, true);
-    button(
-        ui,
-        Icon::Stop,
-        14.0,
-        BarCmd::Stop,
-        tr!("Stop (V)", "Стоп (V)"),
-        false,
-    );
+    let stop_tip = if now.stop_after {
+        tr!(
+            "Stop (V); stops after this track (Shift+V)",
+            "Стоп (V); остановка после этого трека (Shift+V)"
+        )
+    } else {
+        tr!("Stop (V)", "Стоп (V)")
+    };
+    button(ui, Icon::Stop, 14.0, BarCmd::Stop, stop_tip, false);
     button(
         ui,
         Icon::SkipForward,

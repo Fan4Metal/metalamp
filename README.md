@@ -94,6 +94,7 @@ The playlist on the right (`Alt+E` shows or hides it) lists "Artist – Title" w
 | `Space`, `C` | Play / pause |
 | `X` | Play |
 | `V` | Stop |
+| `Shift+V` | Stop after the current track (again: go on as usual); the Stop button is lit meanwhile, and the playlist's menu has it too |
 | `Ctrl+Right`, `B` | Next track |
 | `Ctrl+Left`, `Z` | Previous track (the start of the current one after its first 3 seconds) |
 | `Shift+Right` / `Shift+Left`, or `Right` / `Left` with the pointer over the player bar | 5 seconds forward / back |

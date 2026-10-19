@@ -125,6 +125,8 @@ pub enum PlaylistAction {
     EditTags(Vec<usize>),
     /// Entries moved right after the current one.
     PlayNext(Vec<usize>),
+    /// Stop after the track heard, or not.
+    StopAfter,
     /// Save the list under a name; open (and play) a saved one; delete
     /// one; save the list to a file of one's choice.
     SaveAs(String),
@@ -571,6 +573,20 @@ pub fn show(
                 }
             }
             ui.separator();
+            let mut stop_after = player.stop_after;
+            if ui
+                .checkbox(
+                    &mut stop_after,
+                    tr!(
+                        "Stop after the current track (Shift+V)",
+                        "Стоп после текущего трека (Shift+V)"
+                    ),
+                )
+                .clicked()
+            {
+                actions.push(PlaylistAction::StopAfter);
+                ui.close();
+            }
             if ui
                 .button(tr!("Clear the playlist", "Очистить плейлист"))
                 .clicked()
