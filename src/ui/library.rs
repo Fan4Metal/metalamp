@@ -116,6 +116,21 @@ pub struct View {
     pub album_row: Option<usize>,
     /// Albums in all the view's artists (the "All" row).
     pub all_albums: usize,
+    /// Each track: left by the view's filter and the search.
+    shown: Vec<bool>,
+}
+
+impl View {
+    /// The tracks of `album` the view's filter and the search leave, in
+    /// the album's order.
+    fn album_tracks(&self, library: &Library, album: AlbumId) -> Vec<TrackId> {
+        library.albums[album as usize]
+            .tracks
+            .iter()
+            .copied()
+            .filter(|&t| self.shown.get(t as usize).copied().unwrap_or(false))
+            .collect()
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -679,6 +694,7 @@ fn build(library: &Library, stats: &Stats, key: &ViewKey) -> View {
         artist_row,
         album_row,
         all_albums,
+        shown,
     }
 }
 
@@ -1577,7 +1593,7 @@ fn drag_tracks(ui: &Ui, library: &Library, tracks: &[TrackId]) {
 /// The tracks of `album`, or of every album shown ("All").
 fn album_tracks(library: &Library, view: &View, album: Option<AlbumId>) -> Vec<TrackId> {
     match album {
-        Some(a) => library.albums[a as usize].tracks.clone(),
+        Some(a) => view.album_tracks(library, a),
         None => view.tracks.clone(),
     }
 }
@@ -1588,10 +1604,7 @@ fn show_folder_of(library: &Library, track: TrackId) {
 
 /// Play `album`, or every album shown.
 fn play_albums(library: &Library, view: &View, album: Option<AlbumId>) -> LibraryAction {
-    let tracks = match album {
-        Some(a) => library.albums[a as usize].tracks.clone(),
-        None => view.tracks.clone(),
-    };
+    let tracks = album_tracks(library, view, album);
     LibraryAction::Play { tracks, start: 0 }
 }
 
@@ -1780,7 +1793,7 @@ fn albums_grid(
                     Sense::click_and_drag(),
                 );
                 if resp.drag_started() {
-                    drag_tracks(ui, library, &library.albums[album_id as usize].tracks);
+                    drag_tracks(ui, library, &view.album_tracks(library, album_id));
                 }
                 let selected = current == Some(i);
                 if selected {
