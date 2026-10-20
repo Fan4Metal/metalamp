@@ -1323,6 +1323,7 @@ fn artists_pane(
     ];
     let mut w = widths(settings, "artists", &[150.0, 55.0, 55.0]);
     let mut sort = settings.sorts.get("artists").copied();
+    let mut arranged = arrangement(settings, "artists");
     let rows = view.artists.len() + 1;
     let current = view.artist_row.map_or(0, |r| r + 1);
     let mut ui = pane_ui(ui, rect, "artists");
@@ -1332,6 +1333,7 @@ fn artists_pane(
         columns: &columns,
         widths: &mut w,
         sort: &mut sort,
+        arrangement: &mut arranged,
         rows,
         scroll_to: lv.scroll[0].take(),
         drag: false,
@@ -1423,6 +1425,24 @@ fn artists_pane(
         settings.columns.insert("artists".into(), w);
         *changed = true;
     }
+    if resp.arranged {
+        store_arrangement(settings, "artists", arranged, columns.len());
+        *changed = true;
+    }
+}
+
+/// The table `name`'s columns as the settings arrange them.
+fn arrangement(settings: &Settings, name: &str) -> table::Arrangement {
+    settings.arrangements.get(name).cloned().unwrap_or_default()
+}
+
+/// Keeps a table's arrangement of its `n` columns; none when as they were.
+fn store_arrangement(settings: &mut Settings, name: &str, a: table::Arrangement, n: usize) {
+    if a.is_default(n) {
+        settings.arrangements.remove(name);
+    } else {
+        settings.arrangements.insert(name.into(), a);
+    }
 }
 
 fn store_sort(settings: &mut Settings, name: &str, sort: Option<Sort>) {
@@ -1461,6 +1481,7 @@ fn albums_table(
     let columns = album_columns();
     let mut w = widths(settings, "albums", &ALBUM_WIDTHS);
     let mut sort = settings.sorts.get("albums").copied();
+    let mut arranged = arrangement(settings, "albums");
     let rows = view.albums.len() + 1;
     let current = view.album_row.map_or(0, |r| r + 1);
     let mut ui = pane_ui(ui, rect, "albums");
@@ -1469,6 +1490,7 @@ fn albums_table(
         columns: &columns,
         widths: &mut w,
         sort: &mut sort,
+        arrangement: &mut arranged,
         rows,
         scroll_to: lv.scroll[1].take(),
         drag: true,
@@ -1524,6 +1546,10 @@ fn albums_table(
     }
     if resp.resized {
         settings.columns.insert("albums".into(), w);
+        *changed = true;
+    }
+    if resp.arranged {
+        store_arrangement(settings, "albums", arranged, columns.len());
         *changed = true;
     }
 }
@@ -1673,9 +1699,10 @@ fn albums_grid(
     let columns = album_columns();
     let mut w = widths(settings, "albums", &ALBUM_WIDTHS);
     let mut sort = settings.sorts.get("albums").copied();
+    let mut arranged = arrangement(settings, "albums");
     // The edges fit the columns to the albums' table's texts.
     let painter = ui.painter().clone();
-    let (sorted, resized) = table::header_row(
+    let head = table::header_row(
         ui,
         egui::Id::new("albums"),
         header,
@@ -1683,6 +1710,7 @@ fn albums_grid(
         &columns,
         &mut w,
         &mut sort,
+        &mut arranged,
         &mut |i| {
             table::fit_width(
                 &painter,
@@ -1692,12 +1720,16 @@ fn albums_grid(
             )
         },
     );
-    if sorted {
+    if head.sorted {
         store_sort(settings, "albums", sort);
         *changed = true;
     }
-    if resized {
+    if head.resized {
         settings.columns.insert("albums".into(), w);
+        *changed = true;
+    }
+    if head.arranged {
+        store_arrangement(settings, "albums", arranged, columns.len());
         *changed = true;
     }
 
@@ -1986,6 +2018,7 @@ fn tracks_pane(
         ],
     );
     let mut sort = settings.sorts.get("tracks").copied();
+    let mut arranged = arrangement(settings, "tracks");
     let rows = view.tracks.len();
     let mut ui = pane_ui(ui, rect, "tracks");
     let selected = &lv.selected;
@@ -1994,6 +2027,7 @@ fn tracks_pane(
         columns: &columns,
         widths: &mut w,
         sort: &mut sort,
+        arrangement: &mut arranged,
         rows,
         scroll_to: lv.scroll[2].take(),
         drag: true,
@@ -2152,6 +2186,10 @@ fn tracks_pane(
     }
     if resp.resized {
         settings.columns.insert("tracks".into(), w);
+        *changed = true;
+    }
+    if resp.arranged {
+        store_arrangement(settings, "tracks", arranged, columns.len());
         *changed = true;
     }
 }

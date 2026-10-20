@@ -73,6 +73,9 @@ pub struct Settings {
     pub columns: HashMap<String, Vec<f32>>,
     /// Each table's sort, by the table's name; none: the library's order.
     pub sorts: HashMap<String, Sort>,
+    /// Each table's columns shown and their order, by the table's name;
+    /// none: all of them in their own order.
+    pub arrangements: HashMap<String, crate::ui::table::Arrangement>,
     /// 0 to 100.
     pub volume: u8,
     pub mute: bool,
@@ -317,6 +320,7 @@ impl Default for Settings {
             tracks_height: 300.0,
             columns: HashMap::new(),
             sorts: HashMap::new(),
+            arrangements: HashMap::new(),
             volume: 80,
             mute: false,
             repeat: Repeat::Off,
