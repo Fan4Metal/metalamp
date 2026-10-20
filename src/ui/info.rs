@@ -2,9 +2,9 @@
 //! player bar's cover opens it for the track heard, I, Alt+3 or the context
 //! menus of the tracks and the playlist for the track selected. The path
 //! cover, the title, the artist and the album on top with the audio
-//! properties as chips; the tag's fields in their usual order in two columns
-//! (empty ones as a dash), the tag's other fields under them; the file's
-//! path and the rest. Shown, not edited; the text can be selected and
+//! properties as chips; the main fields in the usual order of taggers (the
+//! short ones two a line, empty ones as a dash), the tag's other fields
+//! under them (only those it has); the file's path and the rest. Shown, not edited; the text can be selected and
 //! copied. The cross, Esc, Enter or a click outside closes it. When the
 //! program's window cannot hold it (the player and playlist layout), it
 //! is a window of its own, as the settings are. The file is read on a
@@ -27,29 +27,27 @@ const WIDTH: f32 = 720.0;
 /// The cover's side in the window, in points.
 const COVER: f32 = 150.0;
 
-/// The usual ID3v2 fields, left column, then right column; a
-/// field shown for the first of its keys the tag has.
-const LEFT: [&[ItemKey]; 8] = [
-    &[ItemKey::TrackNumber],
-    &[ItemKey::TrackTitle],
-    &[ItemKey::TrackArtist],
-    &[ItemKey::AlbumTitle],
-    &[ItemKey::Year, ItemKey::RecordingDate],
-    &[ItemKey::Genre],
-    &[ItemKey::AlbumArtist],
-    &[ItemKey::Composer],
+/// The main fields in the order taggers show them, each shown for the
+/// first of its keys the tag has (a dash when it has none); the short
+/// ones two a line.
+enum Line {
+    One(&'static [ItemKey]),
+    Two(&'static [ItemKey], &'static [ItemKey]),
+}
+const MAIN: [Line; 8] = [
+    Line::One(&[ItemKey::TrackTitle]),
+    Line::One(&[ItemKey::TrackArtist]),
+    Line::One(&[ItemKey::AlbumTitle]),
+    Line::One(&[ItemKey::AlbumArtist]),
+    Line::One(&[ItemKey::Composer]),
+    Line::Two(&[ItemKey::Year, ItemKey::RecordingDate], &[ItemKey::Genre]),
+    Line::Two(&[ItemKey::TrackNumber], &[ItemKey::DiscNumber]),
+    Line::One(&[ItemKey::Comment]),
 ];
-const RIGHT: [&[ItemKey]; 9] = [
-    &[ItemKey::DiscNumber],
-    &[ItemKey::Publisher, ItemKey::Label],
-    &[ItemKey::OriginalArtist],
-    &[ItemKey::CopyrightMessage],
-    &[ItemKey::AudioFileUrl],
-    &[ItemKey::EncodedBy],
-    &[ItemKey::Bpm, ItemKey::IntegerBpm],
-    &[ItemKey::ReplayGainTrackGain],
-    &[ItemKey::ReplayGainAlbumGain],
-];
+/// The width of the first value of a line of two, in points.
+const SHORT: f32 = 150.0;
+/// The names' column at most, in points; a longer name is cut.
+const MAX_NAME: f32 = 190.0;
 
 #[derive(Default)]
 pub struct InfoView {
@@ -455,43 +453,57 @@ fn chips(d: &Details) -> Vec<String> {
     out
 }
 
-/// The sections under the hero: the tag's fields, then the file.
+/// The sections under the hero: the main fields, the tag's other fields
+/// (only those it has), the lyrics, then the file. The names of every
+/// section in one column.
 fn body(ui: &mut Ui, d: &Details) {
     ui.add_space(18.0);
+    ui.spacing_mut().item_spacing.y = 6.0;
+    let more: Vec<(String, &str)> = d
+        .fields
+        .iter()
+        .filter(|(k, _)| !is_main(*k) && !is_hidden(*k))
+        .map(|(k, v)| (field_name(*k), v.as_str()))
+        .collect();
+    let file = file_lines(d);
+    let names = MAIN
+        .iter()
+        .map(|l| match l {
+            Line::One(k) | Line::Two(k, _) => field_name(k[0]),
+        })
+        .chain(more.iter().map(|(n, _)| n.clone()))
+        .chain(file.iter().map(|(n, _)| n.clone()));
+    let width = names_width(ui, names);
+    let seconds = MAIN.iter().filter_map(|l| match l {
+        Line::Two(_, k) => Some(field_name(k[0])),
+        Line::One(_) => None,
+    });
+    let second = names_width(ui, seconds);
+
     let tags = d.tags.join(" · ");
-    section(ui, tr!("Tag", "Тег"), |ui| {
+    section(ui, tr!("Main", "Основное"), |ui| {
         ui.label(RichText::new(tags).size(11.0).color(palette::text_weak()));
     });
-    ui.columns(2, |cols| {
-        fields_grid(&mut cols[0], "info_left", &LEFT, d);
-        fields_grid(&mut cols[1], "info_right", &RIGHT, d);
-    });
-    ui.add_space(4.0);
-    egui::Grid::new("info_comment")
-        .num_columns(2)
-        .spacing(vec2(12.0, 6.0))
-        .show(ui, |ui| {
-            field(
-                ui,
-                &field_name(ItemKey::Comment),
-                value(d, &[ItemKey::Comment]),
-                true,
-            );
-            ui.end_row();
-            let shown: Vec<ItemKey> = LEFT
-                .iter()
-                .chain(RIGHT.iter())
-                .flat_map(|keys| keys.iter().copied())
-                .chain([ItemKey::Comment])
-                .collect();
-            for (key, text) in d.fields.iter().filter(|(k, _)| !shown.contains(k)) {
-                if is_hidden(*key) {
-                    continue;
-                }
-                field(ui, &field_name(*key), text, true);
-                ui.end_row();
-            }
-        });
+    for l in &MAIN {
+        match l {
+            Line::One(keys) => line(ui, width, &field_name(keys[0]), |ui| {
+                shown_value(ui, value(d, keys), keys[0] == ItemKey::Comment);
+            }),
+            Line::Two(first, then) => line(ui, width, &field_name(first[0]), |ui| {
+                cell(ui, SHORT, |ui| shown_value(ui, value(d, first), false));
+                cell(ui, second, |ui| name(ui, &field_name(then[0])));
+                shown_value(ui, value(d, then), false);
+            }),
+        }
+    }
+
+    if !more.is_empty() {
+        ui.add_space(14.0);
+        section(ui, tr!("Additional", "Дополнительно"), |_| {});
+        for (n, text) in &more {
+            line(ui, width, n, |ui| shown_value(ui, text, true));
+        }
+    }
 
     // The lyrics apart: many lines, which the fields' grid would stretch.
     let lyrics = value(d, &[ItemKey::UnsyncLyrics, ItemKey::Lyrics]);
@@ -510,34 +522,44 @@ fn body(ui: &mut Ui, d: &Details) {
             crate::win::show_in_folder(&d.path);
         }
     });
-    egui::Grid::new("info_file")
-        .num_columns(2)
-        .spacing(vec2(12.0, 6.0))
-        .show(ui, |ui| {
-            field(ui, tr!("Path", "Путь"), &d.path.display().to_string(), true);
-            ui.end_row();
-            if let Some((delay, padding)) = d.gapless {
-                field(
-                    ui,
-                    tr!("LAME tag", "Тег LAME"),
-                    &tr!(
-                        format!("encoder delay {delay}, padding {padding} samples"),
-                        format!("задержка кодировщика {delay}, добивка {padding} сэмплов")
-                    ),
-                    true,
-                );
-                ui.end_row();
-            }
-            for p in &d.pictures {
-                let mut text = p.format.clone();
-                if let Some((w, h)) = p.pixels {
-                    text += &format!(" {w}×{h}");
-                }
-                text += &format!(", {}", format::size(p.bytes as u64));
-                field(ui, &picture_name(p.kind), &text, true);
-                ui.end_row();
-            }
-        });
+    for (n, text) in &file {
+        line(ui, width, n, |ui| shown_value(ui, text, true));
+    }
+}
+
+/// The lines of the section "File": the path, an MP3's LAME tag, the
+/// pictures.
+fn file_lines(d: &Details) -> Vec<(String, String)> {
+    let mut out = vec![(
+        tr!("Path", "Путь").to_owned(),
+        d.path.display().to_string(),
+    )];
+    if let Some((delay, padding)) = d.gapless {
+        out.push((
+            tr!("LAME tag", "Тег LAME").to_owned(),
+            tr!(
+                format!("encoder delay {delay}, padding {padding} samples"),
+                format!("задержка кодировщика {delay}, добивка {padding} сэмплов")
+            ),
+        ));
+    }
+    for p in &d.pictures {
+        let mut text = p.format.clone();
+        if let Some((w, h)) = p.pixels {
+            text += &format!(" {w}×{h}");
+        }
+        text += &format!(", {}", format::size(p.bytes as u64));
+        out.push((picture_name(p.kind), text));
+    }
+    out
+}
+
+/// A key shown among the main fields.
+fn is_main(key: ItemKey) -> bool {
+    MAIN.iter().any(|l| match l {
+        Line::One(k) => k.contains(&key),
+        Line::Two(a, b) => a.contains(&key) || b.contains(&key),
+    })
 }
 
 /// Fields not listed among the others: the lyrics have a section of
@@ -570,26 +592,52 @@ fn section(ui: &mut Ui, title: &str, right: impl FnOnce(&mut Ui)) {
     ui.add_space(10.0);
 }
 
-/// A column of fields: a label and a value each, in a grid that sizes
-/// the labels' column to the widest.
-fn fields_grid(ui: &mut Ui, id: &str, keys: &[&[ItemKey]], d: &Details) {
-    egui::Grid::new(id)
-        .num_columns(2)
-        .spacing(vec2(12.0, 6.0))
-        .show(ui, |ui| {
-            for keys in keys {
-                field(ui, &field_name(keys[0]), value(d, keys), false);
-                ui.end_row();
-            }
-        });
+/// The names' column: as wide as the widest of `names`, at most
+/// `MAX_NAME` (measured, not left to a grid, which sizes its columns by
+/// the frame before).
+fn names_width(ui: &Ui, names: impl Iterator<Item = String>) -> f32 {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    names
+        .map(|n| {
+            ui.painter()
+                .layout_no_wrap(n, font.clone(), palette::text())
+                .size()
+                .x
+        })
+        .fold(0.0, f32::max)
+        .min(MAX_NAME)
+        .ceil()
 }
 
-/// A label in the weak colour and its value (a dash when empty), as two
-/// cells of a grid; `wrap`: a long value takes more lines, else it is cut.
-fn field(ui: &mut Ui, label: &str, text: &str, wrap: bool) {
-    // Not truncated: a grid sizes its columns by the frame before, so a
-    // truncated label would never get its room.
-    ui.add(egui::Label::new(RichText::new(label).color(palette::text_weak())).extend());
+/// A line of a section: `label` in the names' column (`width`), then
+/// `value` in the room right of it.
+fn line(ui: &mut Ui, width: f32, label: &str, value: impl FnOnce(&mut Ui)) {
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 12.0;
+        cell(ui, width, |ui| name(ui, label));
+        value(ui);
+    });
+}
+
+/// A cell `width` points wide whatever it holds.
+fn cell(ui: &mut Ui, width: f32, add: impl FnOnce(&mut Ui)) {
+    let size = vec2(width, ui.spacing().interact_size.y);
+    let layout = egui::Layout::left_to_right(egui::Align::Min);
+    ui.allocate_ui_with_layout(size, layout, |ui| {
+        ui.set_width(width);
+        add(ui);
+    });
+}
+
+/// A field's name, in the weak colour; cut (whole in a tooltip) when
+/// longer than its cell.
+fn name(ui: &mut Ui, text: &str) {
+    ui.add(egui::Label::new(RichText::new(text).color(palette::text_weak())).truncate());
+}
+
+/// A field's value, a dash when empty; `wrap`: a long value takes more
+/// lines, else it is cut.
+fn shown_value(ui: &mut Ui, text: &str, wrap: bool) {
     if text.is_empty() {
         ui.label(RichText::new("—").color(palette::line()));
     } else {
