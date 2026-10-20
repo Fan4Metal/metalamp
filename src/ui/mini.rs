@@ -1,10 +1,11 @@
 //! The mini player (Ctrl+M, the title row's button; metalmpv's): the
 //! window made a square of the cover heard (the app icon on the bar's
-//! ground without one), always over the other windows. Over the cover
-//! while the pointer moves there (or rests on them, or nothing plays): the
-//! title, the artist and the way back to the whole window along the top;
-//! the seek bar, Previous, Play/Pause, Next, the speaker and the volume
-//! along the bottom. The cover moves the window, a double click on it goes
+//! ground without one), always over the other windows. The title and the
+//! artist along the top always, on a band fading into the cover; while the
+//! pointer moves there (or rests on them, or nothing plays) the band is
+//! whole with the way back to the whole window, and the seek bar,
+//! Previous, Play/Pause, Next, the speaker and the volume are along the
+//! bottom. The cover moves the window, a double click on it goes
 //! back. The window's place and size are `App::enter_mini`'s.
 
 use std::path::{Path, PathBuf};
@@ -144,35 +145,55 @@ pub fn show(ui: &mut Ui, now: &NowPlaying<'_>, icon: &TextureHandle) -> Vec<BarC
         || egui::Popup::is_any_open(&ctx)
         || (hover.is_some_and(|p| rect.contains(p))
             && (!playing || on_controls || down || still < CONTROLS_FOR));
-    if !shown {
-        return cmds;
-    }
-    if playing && !on_controls && !down {
+    if shown && playing && !on_controls && !down {
         ctx.request_repaint_after(Duration::from_secs_f32((CONTROLS_FOR - still).max(0.05)));
     }
     let ground = palette::bar_bg().gamma_multiply_u8(225);
 
-    // The top: the title and the artist, the way back.
+    // The top: the title and the artist always; the way back with the
+    // controls. Without them, the band fades into the cover below the
+    // names, so the cover is hidden the least.
     let top = Rect::from_min_size(rect.min, vec2(rect.width(), TOP));
-    painter.rect_filled(top, 0.0, ground);
-    let back = Rect::from_center_size(pos2(top.right() - 22.0, top.center().y), vec2(32.0, 30.0));
-    let resp = ui.interact(back, ui.id().with("mini_back"), Sense::click());
-    if resp.hovered() {
-        painter.rect_filled(back, 4.0, palette::hover());
-    }
-    let color = if resp.hovered() {
-        palette::text_bright()
+    let mut room = top.width() - 24.0;
+    if shown {
+        painter.rect_filled(top, 0.0, ground);
+        let back =
+            Rect::from_center_size(pos2(top.right() - 22.0, top.center().y), vec2(32.0, 30.0));
+        let resp = ui.interact(back, ui.id().with("mini_back"), Sense::click());
+        if resp.hovered() {
+            painter.rect_filled(back, 4.0, palette::hover());
+        }
+        let color = if resp.hovered() {
+            palette::text_bright()
+        } else {
+            palette::text()
+        };
+        icons::paint(&painter, Icon::Mini, back.center(), 14.0, color, ground);
+        if resp
+            .on_hover_text(with_key(tr!("The whole window", "Всё окно"), Cmd::Mini))
+            .clicked()
+        {
+            cmds.push(BarCmd::Whole);
+        }
+        room = back.left() - 6.0 - (top.left() + 12.0);
     } else {
-        palette::text()
-    };
-    icons::paint(&painter, Icon::Mini, back.center(), 14.0, color, ground);
-    if resp
-        .on_hover_text(with_key(tr!("The whole window", "Всё окно"), Cmd::Mini))
-        .clicked()
-    {
-        cmds.push(BarCmd::Whole);
+        let fade = Rect::from_min_size(rect.min, vec2(rect.width(), TOP + 26.0));
+        let mut mesh = egui::Mesh::default();
+        let solid = palette::bar_bg().gamma_multiply(0.9);
+        let under = palette::bar_bg().gamma_multiply(0.75);
+        let clear = Color32::TRANSPARENT;
+        mesh.colored_vertex(fade.left_top(), solid);
+        mesh.colored_vertex(fade.right_top(), solid);
+        mesh.colored_vertex(pos2(fade.right(), top.bottom()), under);
+        mesh.colored_vertex(pos2(fade.left(), top.bottom()), under);
+        mesh.colored_vertex(fade.right_bottom(), clear);
+        mesh.colored_vertex(fade.left_bottom(), clear);
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        mesh.add_triangle(3, 2, 4);
+        mesh.add_triangle(3, 4, 5);
+        painter.add(mesh);
     }
-    let room = back.left() - 6.0 - (top.left() + 12.0);
     let (title, artist) = if now.has_track() {
         (now.title, now.artist)
     } else {
@@ -191,11 +212,17 @@ pub fn show(ui: &mut Ui, now: &NowPlaying<'_>, icon: &TextureHandle) -> Vec<BarC
         Color32::WHITE,
     );
     if !artist.is_empty() {
+        // Over the cover, a shade brighter than over the bar's ground.
+        let shade = if shown {
+            palette::text_weak()
+        } else {
+            palette::text()
+        };
         let artist = crate::ui::elided(
             &painter,
             artist.to_owned(),
             FontId::proportional(11.5),
-            palette::text_weak(),
+            shade,
             room,
         );
         painter.galley(
@@ -203,6 +230,10 @@ pub fn show(ui: &mut Ui, now: &NowPlaying<'_>, icon: &TextureHandle) -> Vec<BarC
             artist,
             Color32::WHITE,
         );
+    }
+
+    if !shown {
+        return cmds;
     }
 
     // The bottom: the seek bar over the buttons and the volume.
