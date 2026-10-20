@@ -873,7 +873,7 @@ fn section(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
 }
 
 /// A line between the rows of a card.
-fn divider(ui: &mut Ui) {
+pub(crate) fn divider(ui: &mut Ui) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
     ui.painter().hline(
         rect.x_range(),
@@ -1293,16 +1293,7 @@ fn processing(
             |ui| switch(ui, &mut dsp.normalize),
         );
         divider(ui);
-        row(
-            ui,
-            tr!("Limiter", "Лимитер"),
-            Some(tr!(
-                "Holds the peaks at -1 dBFS after the processing, so raised bands, preamp or enhancer never clip; a raised preamp then makes a loud track denser rather than louder. Turned off, a raise is heard in full, and what passes full scale is clipped by Windows.",
-                "Держит пики на -1 dBFS после обработки, чтобы поднятые полосы, предусиление или улучшение звука не клиповали; поднятое предусиление тогда делает громкий трек плотнее, а не громче. Если его выключить, подъём слышен целиком, а то, что выходит за полную шкалу, обрезает Windows."
-            )),
-            50.0,
-            |ui| switch(ui, &mut dsp.limiter),
-        );
+        limiter(ui, dsp);
     });
     section(ui, tr!("Equalizer", "Эквалайзер"), |ui| {
         ui.add_space(8.0);
@@ -1395,6 +1386,21 @@ fn processing(
     });
 }
 
+/// The limiter's row: here under the loudness, and in the equalizer's
+/// window under the bands (`ui::eq_window`).
+pub(crate) fn limiter(ui: &mut Ui, dsp: &mut DspSettings) {
+    row(
+        ui,
+        tr!("Limiter", "Лимитер"),
+        Some(tr!(
+            "Holds the peaks at -1 dBFS after the processing, so raised bands, preamp or enhancer never clip; a raised preamp then makes a loud track denser rather than louder. Turned off, a raise is heard in full, and what passes full scale is clipped by Windows.",
+            "Держит пики на -1 dBFS после обработки, чтобы поднятые полосы, предусиление или улучшение звука не клиповали; поднятое предусиление тогда делает громкий трек плотнее, а не громче. Если его выключить, подъём слышен целиком, а то, что выходит за полную шкалу, обрезает Windows."
+        )),
+        50.0,
+        |ui| switch(ui, &mut dsp.limiter),
+    );
+}
+
 /// A row with a slider of 0 to 10.
 fn amount(ui: &mut Ui, title: &str, hint: &str, value: &mut u8) {
     row(ui, title, Some(hint), CONTROL, |ui| {
@@ -1463,8 +1469,8 @@ fn eq_head(
         .map(|(en, ru, _)| tr!(*en, *ru));
     ui.horizontal(|ui| {
         switch(ui, &mut dsp.eq).on_hover_text(tr!(
-            "Ten bands and a preamp; the limiter after them (Settings, Sound) keeps the sound from clipping.",
-            "Десять полос и предусиление; лимитер после них (Настройки, Звук) не даёт звуку клиповать."
+            "Ten bands and a preamp; the limiter after them keeps the sound from clipping.",
+            "Десять полос и предусиление; лимитер после них не даёт звуку клиповать."
         ));
         ui.add_space(4.0);
         let name = match (mine, built_in) {

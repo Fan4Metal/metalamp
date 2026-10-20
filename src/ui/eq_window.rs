@@ -1,6 +1,7 @@
 //! The equalizer's window, opened by the player bar's button under it:
 //! the same equalizer as the settings window's Sound page (the switch,
-//! the presets, one's own presets, the sliders), on a card of its own.
+//! the presets, one's own presets, the sliders) and the limiter under it
+//! (as on the Sound page's loudness card), on a card of its own.
 //! Not modal: the player and its keys go on. The cross, Esc or the bar's
 //! button close it; it can be dragged by its free space. When the
 //! program's window cannot hold it (the player and playlist layout), it
@@ -158,6 +159,10 @@ impl EqWindow {
         });
         ui.add_space(6.0);
         crate::ui::settings::equalizer(ui, dsp, presets, &mut self.naming);
+        // The limiter after the bands: a raised band is heard with it.
+        ui.add_space(4.0);
+        crate::ui::settings::divider(ui);
+        crate::ui::settings::limiter(ui, dsp);
         close
     }
 
