@@ -873,7 +873,7 @@ fn section(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
 }
 
 /// A line between the rows of a card.
-pub(crate) fn divider(ui: &mut Ui) {
+fn divider(ui: &mut Ui) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
     ui.painter().hline(
         rect.x_range(),
@@ -1293,7 +1293,13 @@ fn processing(
             |ui| switch(ui, &mut dsp.normalize),
         );
         divider(ui);
-        limiter(ui, dsp, true);
+        row(
+            ui,
+            tr!("Limiter", "Лимитер"),
+            Some(limiter_hint()),
+            50.0,
+            |ui| switch(ui, &mut dsp.limiter),
+        );
     });
     section(ui, tr!("Equalizer", "Эквалайзер"), |ui| {
         ui.add_space(8.0);
@@ -1386,26 +1392,13 @@ fn processing(
     });
 }
 
-/// The limiter's row: here under the loudness with its hint, and in the
-/// equalizer's window under the bands (`ui::eq_window`) with the hint as
-/// the switch's tip (`hint` false).
-pub(crate) fn limiter(ui: &mut Ui, dsp: &mut DspSettings, hint: bool) {
-    let text = tr!(
+/// What the limiter does: the loudness card's hint, and the tip of its
+/// state in the equalizer's window (`ui::eq_window`).
+pub(crate) fn limiter_hint() -> &'static str {
+    tr!(
         "Holds the peaks at -1 dBFS after the processing, so raised bands, preamp or enhancer never clip; a raised preamp then makes a loud track denser rather than louder. Turned off, a raise is heard in full, and what passes full scale is clipped by Windows.",
         "Держит пики на -1 dBFS после обработки, чтобы поднятые полосы, предусиление или улучшение звука не клиповали; поднятое предусиление тогда делает громкий трек плотнее, а не громче. Если его выключить, подъём слышен целиком, а то, что выходит за полную шкалу, обрезает Windows."
-    );
-    row(
-        ui,
-        tr!("Limiter", "Лимитер"),
-        hint.then_some(text),
-        50.0,
-        |ui| {
-            let response = switch(ui, &mut dsp.limiter);
-            if !hint {
-                response.on_hover_text(text);
-            }
-        },
-    );
+    )
 }
 
 /// A row with a slider of 0 to 10.

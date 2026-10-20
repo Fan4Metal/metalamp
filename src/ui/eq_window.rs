@@ -1,7 +1,7 @@
 //! The equalizer's window, opened by the player bar's button under it:
 //! the same equalizer as the settings window's Sound page (the switch,
-//! the presets, one's own presets, the sliders) and the limiter under it
-//! (as on the Sound page's loudness card), on a card of its own.
+//! the presets, one's own presets, the sliders), on a card of its own,
+//! the limiter's state beside the cross (a click switches it).
 //! Not modal: the player and its keys go on. The cross, Esc or the bar's
 //! button close it; it can be dragged by its free space. When the
 //! program's window cannot hold it (the player and playlist layout), it
@@ -39,6 +39,37 @@ pub struct EqWindow {
     /// The player's keys pressed in its own window, for the app to run
     /// (the program's window does not hear them).
     pub cmds: Vec<crate::keymap::Cmd>,
+}
+
+/// The limiter's state, "Limiter: on" (the state in the accent) or "off",
+/// small beside the cross: a raised band is heard with it or without it.
+/// A click turns it on or off, as the Sound page's switch.
+fn limiter_state(ui: &mut egui::Ui, on: &mut bool) {
+    let font = egui::FontId::proportional(13.0);
+    let mut job = egui::text::LayoutJob::default();
+    let format = |color| egui::TextFormat::simple(font.clone(), color);
+    job.append(
+        tr!("Limiter: ", "Лимитер: "),
+        0.0,
+        format(palette::text_weak()),
+    );
+    let (state, color) = if *on {
+        (tr!("on", "вкл."), palette::accent())
+    } else {
+        (tr!("off", "выкл."), palette::text_weak())
+    };
+    job.append(state, 0.0, format(color));
+    let response = ui
+        .add(egui::Label::new(job).sense(egui::Sense::click()))
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(format!(
+            "{}\n\n{}",
+            crate::ui::settings::limiter_hint(),
+            tr!("A click turns it on or off.", "Щелчок включает или выключает его.")
+        ));
+    if response.clicked() {
+        *on = !*on;
+    }
 }
 
 /// The window of its own's title, by which it is found.
@@ -155,14 +186,12 @@ impl EqWindow {
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 close |= super::close_cross(ui);
+                ui.add_space(10.0);
+                limiter_state(ui, &mut dsp.limiter);
             });
         });
         ui.add_space(6.0);
         crate::ui::settings::equalizer(ui, dsp, presets, &mut self.naming);
-        // The limiter after the bands: a raised band is heard with it.
-        ui.add_space(4.0);
-        crate::ui::settings::divider(ui);
-        crate::ui::settings::limiter(ui, dsp, false);
         close
     }
 
