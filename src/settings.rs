@@ -59,6 +59,11 @@ pub struct Settings {
     pub visual_click: bool,
     /// The visualization's colours, apart from the theme's.
     pub visual_colours: crate::palette::VisualColours,
+    /// The playlist's line of a track (`title_format`), and whether its
+    /// rows show their numbers and lengths.
+    pub playlist_format: String,
+    pub playlist_numbers: bool,
+    pub playlist_lengths: bool,
     /// The folders of the media library.
     pub library_folders: Vec<PathBuf>,
     /// The views of the library (filters over its tracks, `library::filter`),
@@ -319,6 +324,9 @@ impl Default for Settings {
             visual_enabled: true,
             visual_click: true,
             visual_colours: Default::default(),
+            playlist_format: crate::title_format::DEFAULT.to_owned(),
+            playlist_numbers: true,
+            playlist_lengths: true,
             library_folders: Vec::new(),
             views: Vec::new(),
             view: String::new(),

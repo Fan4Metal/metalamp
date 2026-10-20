@@ -32,6 +32,7 @@ mod settings;
 mod smtc;
 mod stats;
 mod taskbar;
+mod title_format;
 mod tray;
 mod ui;
 mod update;

@@ -1171,6 +1171,7 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
             },
         );
     });
+    section(ui, tr!("Playlist", "Плейлист"), |ui| playlist_rows(ui, settings));
     section(ui, tr!("Media keys", "Медиаклавиши"), |ui| {
         row(
             ui,
@@ -1907,6 +1908,90 @@ fn tints(
     }
 }
 
+/// The playlist's rows: the line's template, chosen among the ready ones
+/// (named by their fields) or typed; the numbers and the lengths.
+fn playlist_rows(ui: &mut Ui, settings: &mut Settings) {
+    use crate::title_format::{FIELDS, PRESETS, field_label, render};
+    let label = |t: &str| render(t, &|n| field_label(n).map(str::to_owned));
+    row(
+        ui,
+        tr!("Track's line", "Строка трека"),
+        Some(tr!(
+            "How a track is written in the playlist and on the narrow player.",
+            "Как трек записан в плейлисте и в узком плеере."
+        )),
+        CONTROL,
+        |ui| {
+            let format = &mut settings.playlist_format;
+            let own = !PRESETS.contains(&format.as_str());
+            let shown = if own {
+                tr!("Own template", "Свой шаблон").to_owned()
+            } else {
+                label(format)
+            };
+            egui::ComboBox::from_id_salt("settings_playlist_format")
+                .selected_text(shown)
+                .width(CONTROL - 10.0)
+                .show_ui(ui, |ui| {
+                    for p in PRESETS {
+                        if ui.selectable_label(format == p, label(p)).clicked() {
+                            *format = p.to_owned();
+                        }
+                    }
+                });
+        },
+    );
+    divider(ui);
+    let fields: Vec<String> = FIELDS.iter().map(|f| format!("%{f}%")).collect();
+    let fields = fields.join(", ");
+    row(
+        ui,
+        tr!("Template", "Шаблон"),
+        Some(&tr!(
+            format!(
+                "The fields {fields}; a part in square brackets is shown only when a field in it has something: [%artist% – ]%title%."
+            ),
+            format!(
+                "Поля {fields}; часть в квадратных скобках показывается, только если в ней есть хоть одно поле: [%artist% – ]%title%."
+            )
+        )),
+        CONTROL,
+        |ui| {
+            let field = ui.add(
+                egui::TextEdit::singleline(&mut settings.playlist_format)
+                    .desired_width(CONTROL - 10.0),
+            );
+            super::take_leaving_key(ui, &field);
+        },
+    );
+    divider(ui);
+    row(
+        ui,
+        tr!("Numbers", "Номера"),
+        Some(tr!(
+            "Each row's number in the playlist.",
+            "Номер каждой строки плейлиста."
+        )),
+        CONTROL,
+        |ui| {
+            switch(ui, &mut settings.playlist_numbers);
+        },
+    );
+    divider(ui);
+    row(
+        ui,
+        tr!("Lengths", "Длительность"),
+        Some(tr!(
+            "Each track's length at the right of its row.",
+            "Длительность трека справа в строке."
+        )),
+        CONTROL,
+        |ui| {
+            switch(ui, &mut settings.playlist_lengths);
+        },
+    );
+}
+
 /// The visualization's colours as round swatches, each painted with its
 /// gradient (`gradient_disc`: up the level, across the place), the chosen
 /// one ringed; last the user's own colour, its picker starting from the
@@ -2271,6 +2356,9 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     settings.visual_enabled = d.visual_enabled;
     settings.visual_click = d.visual_click;
     settings.visual_colours = d.visual_colours;
+    settings.playlist_format = d.playlist_format;
+    settings.playlist_numbers = d.playlist_numbers;
+    settings.playlist_lengths = d.playlist_lengths;
     settings.theme = d.theme;
     settings.accent = d.accent;
     settings.selection = d.selection;

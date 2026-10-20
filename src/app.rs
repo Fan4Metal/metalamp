@@ -550,11 +550,17 @@ impl App {
         let (bitrate, sample_rate, channels) = track
             .and_then(|t| self.library.tracks.get(t as usize))
             .map_or((0, 0, 0), |t| (t.bitrate, t.sample_rate, t.channels));
-        // "N. Artist – Title", as the playlist has it.
-        let number = self.player.queue.current().map(|i| format!("{}. ", i + 1));
+        // "N. Artist – Title", as the playlist has it (its template, its
+        // number when it shows them).
+        let number = self
+            .player
+            .queue
+            .current()
+            .filter(|_| self.settings.playlist_numbers)
+            .map(|i| format!("{}. ", i + 1));
         let heading = match track.and_then(|t| self.library.tracks.get(t as usize)) {
-            Some(t) if !t.artist.is_empty() => format!("{} – {}", t.artist, t.title),
-            _ => title.to_owned(),
+            Some(t) => crate::title_format::line(&self.settings.playlist_format, t),
+            None => title.to_owned(),
         };
         let heading = format!("{}{heading}", number.unwrap_or_default());
         crate::ui::player_bar::NowPlaying {
@@ -1762,6 +1768,11 @@ impl eframe::App for App {
         }
         let alone = self.settings.window_layout == WindowLayout::Playlist && !mini;
         self.playlist_view.no_library = alone;
+        self.playlist_view
+            .format
+            .clone_from(&self.settings.playlist_format);
+        self.playlist_view.numbers = self.settings.playlist_numbers;
+        self.playlist_view.lengths = self.settings.playlist_lengths;
         if alone {
             let cover = self.playing_cover(&ctx);
             let shown_cover = self.settings.playlist_cover;

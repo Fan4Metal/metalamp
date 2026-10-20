@@ -62,6 +62,11 @@ pub struct PlaylistView {
     /// The window shows no library (the player and playlist layout): its
     /// "Go to" items are left out.
     pub no_library: bool,
+    /// The rows: their line's template (`title_format`), and whether the
+    /// numbers and the lengths are shown (the settings', set by the app).
+    pub format: String,
+    pub numbers: bool,
+    pub lengths: bool,
     /// The playlists of the section and when they were listed: the saved
     /// ones, then those in the library's folders; each file's number of
     /// tracks, with the time of the file it was counted in (read again only
@@ -80,13 +85,14 @@ struct Listed {
 }
 
 /// The rows' text and what the search leaves, built again only when the
-/// playlist, the library or the search changed: for every entry each
-/// frame, it was a lookup and a string or two (a long list at 50 frames
-/// a second while playing).
+/// playlist, the library, the search or the template changed: for every
+/// entry each frame, it was a lookup and a string or two (a long list at
+/// 50 frames a second while playing).
 struct Rows {
-    /// The playlist's revision, the library's generation and the search.
-    key: (u64, u64, String),
-    /// Each entry's "Artist – Title" and length.
+    /// The playlist's revision, the library's generation, the search and
+    /// the template.
+    key: (u64, u64, String, String),
+    /// Each entry's line (by the template) and length.
     lines: Vec<(String, Option<u32>)>,
     /// The entries the search leaves.
     shown: Vec<usize>,
@@ -95,22 +101,26 @@ struct Rows {
 }
 
 impl Rows {
-    fn of(key: (u64, u64, String), player: &Player, library: &Library) -> Rows {
+    fn of(key: (u64, u64, String, String), player: &Player, library: &Library) -> Rows {
         let words = crate::library::query_words(&key.2);
-        let lines: Vec<(String, Option<u32>)> = player
+        let described: Vec<(String, String, Option<u32>)> = player
             .queue
             .entries()
             .iter()
-            .map(|e| describe(library, &e.path))
+            .map(|e| describe(library, &e.path, &key.3))
             .collect();
-        let shown = (0..lines.len())
+        // The search finds the line, and the artist, the title and the
+        // album whatever the line shows.
+        let shown = (0..described.len())
             .filter(|&i| {
                 words.is_empty() || {
-                    let text = crate::library::search_form(&lines[i].0);
+                    let text = crate::library::search_form(&described[i].1);
                     words.iter().all(|w| text.contains(w.as_str()))
                 }
             })
             .collect();
+        let lines: Vec<(String, Option<u32>)> =
+            described.into_iter().map(|(line, _, ms)| (line, ms)).collect();
         let total = lines.iter().filter_map(|l| l.1).map(u64::from).sum();
         Rows {
             key,
@@ -179,25 +189,28 @@ pub enum PlaylistAction {
     Export,
 }
 
-/// The line of an entry: "Artist – Title" from the library, else the
-/// file's name; and its length, if known.
-fn describe(library: &Library, path: &std::path::Path) -> (String, Option<u32>) {
+/// The line of an entry by `template` from the library, else the file's
+/// name; what the search looks in (the line, the artist, the title, the
+/// album); and its length, if known.
+fn describe(
+    library: &Library,
+    path: &std::path::Path,
+    template: &str,
+) -> (String, String, Option<u32>) {
     match library.track_at(path) {
         Some(id) => {
             let t = &library.tracks[id as usize];
-            let text = if t.artist.is_empty() {
-                t.title.clone()
-            } else {
-                format!("{} – {}", t.artist, t.title)
-            };
-            (text, Some(t.duration_ms))
+            let line = crate::title_format::line(template, t);
+            let search = format!("{line} {} {} {}", t.artist, t.title, t.album);
+            (line, search, Some(t.duration_ms))
         }
-        None => (
-            path.file_stem()
+        None => {
+            let name = path
+                .file_stem()
                 .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-            None,
-        ),
+                .unwrap_or_default();
+            (name.clone(), name, None)
+        }
     }
 }
 
@@ -318,7 +331,12 @@ pub fn show(
     }
 
     // The rows the search leaves, as indices into the playlist.
-    let key = (player.queue.revision, library.generation, pv.query.clone());
+    let key = (
+        player.queue.revision,
+        library.generation,
+        pv.query.clone(),
+        pv.format.clone(),
+    );
     if pv.rows.as_ref().is_none_or(|r| r.key != key) {
         pv.rows = Some(Arc::new(Rows::of(key, player, library)));
     }
@@ -439,7 +457,14 @@ pub fn show(
     // Tracks dragged from the library: let go over the list, they are put
     // in at the slot (with a search, before the entry shown there).
     let from_library = egui::DragAndDrop::has_payload_of_type::<crate::ui::DraggedTracks>(ui.ctx());
-    let number_w = format!("{}.", count.max(1)).len() as f32 * 7.5 + 8.0;
+    // The numbers' column, none when they are not shown.
+    let number_w = if pv.numbers {
+        format!("{}.", count.max(1)).len() as f32 * 7.5 + 8.0
+    } else {
+        0.0
+    };
+    let lengths = pv.lengths;
+    let numbers = pv.numbers;
     let out = scroll.show_viewport(&mut child, |ui, viewport| {
         let height = (shown.len() as f32 * ROW_HEIGHT).max(viewport.height());
         // The viewport's width: less the scroll bar's.
@@ -474,18 +499,24 @@ pub fn show(
             };
             let (text, length) = &lines[i];
             let length = length
+                .filter(|_| lengths)
                 .map(|ms| format::time(u64::from(ms)))
                 .unwrap_or_default();
-            let num =
-                painter.layout_no_wrap(format!("{}.", i + 1), font.clone(), palette::text_weak());
-            painter.galley(
-                pos2(
-                    r.left() + 6.0 + number_w - num.size().x - 6.0,
-                    r.center().y - num.size().y / 2.0,
-                ),
-                num,
-                palette::text_weak(),
-            );
+            if numbers {
+                let num = painter.layout_no_wrap(
+                    format!("{}.", i + 1),
+                    font.clone(),
+                    palette::text_weak(),
+                );
+                painter.galley(
+                    pos2(
+                        r.left() + 6.0 + number_w - num.size().x - 6.0,
+                        r.center().y - num.size().y / 2.0,
+                    ),
+                    num,
+                    palette::text_weak(),
+                );
+            }
             let len = painter.layout_no_wrap(length, font.clone(), color);
             let len_x = r.right() - 8.0 - len.size().x;
             let text_left = r.left() + 6.0 + number_w;
