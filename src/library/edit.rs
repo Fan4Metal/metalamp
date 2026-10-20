@@ -114,15 +114,13 @@ pub fn is_other(key: ItemKey) -> bool {
         )
 }
 
-/// The files whose tags can be written: MP3, WAV, FLAC, M4A.
+/// The files whose tags can be written (`with_tag`'s formats), by the
+/// extension.
 pub fn writable(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| {
-            ["mp3", "wav", "flac", "m4a", "m4b", "mp4"]
-                .iter()
-                .any(|w| e.eq_ignore_ascii_case(w))
-        })
+    matches!(
+        FileType::from_path(path),
+        Some(FileType::Mpeg | FileType::Wav | FileType::Flac | FileType::Mp4)
+    )
 }
 
 /// A tag's fields as the window edits them.
@@ -388,13 +386,25 @@ fn number_text(key: Key, value: &str) -> Result<Option<(String, Option<String>)>
         )
     };
     if key == Key::Year {
-        let date = value
-            .chars()
-            .all(|c| c.is_ascii_digit() || "-.T: ".contains(c))
-            .then(|| value.parse::<Timestamp>().ok())
-            .flatten();
+        // `1987`, `1987-05`, `1987-05-01`, `1987-05-01T12:30:00`: four
+        // digits, then two a part (lofty's parse would take `19871` as
+        // 1987-01).
+        let parts: Vec<&str> = value.split(['-', 'T', ':']).collect();
+        let shaped = parts.len() <= 6
+            && parts.iter().enumerate().all(|(i, p)| {
+                p.len() == if i == 0 { 4 } else { 2 } && p.bytes().all(|b| b.is_ascii_digit())
+            });
+        let date = shaped.then(|| value.parse::<Timestamp>().ok()).flatten();
+        let in_range = |d: &Timestamp| {
+            d.year >= 1
+                && d.month.is_none_or(|m| (1..=12).contains(&m))
+                && d.day.is_none_or(|d| (1..=31).contains(&d))
+                && d.hour.is_none_or(|h| h < 24)
+                && d.minute.is_none_or(|m| m < 60)
+                && d.second.is_none_or(|s| s < 60)
+        };
         return match date {
-            Some(d) if d.year >= 1 => Ok(Some((value.to_owned(), None))),
+            Some(d) if in_range(&d) => Ok(Some((value.to_owned(), None))),
             _ => Err(bad()),
         };
     }
@@ -510,6 +520,17 @@ mod tests {
         assert!(number_text(Key::Year, "nineteen").is_err());
         assert_eq!(number_text(Key::Year, "1999"), Ok(Some((n("1999"), None))));
         assert!(Key::Year.takes("1987-05-01"));
+        assert!(Key::Year.takes("1987-05-01T12:30:00"));
+        assert!(!Key::Year.takes("19871"));
+        assert!(!Key::Year.takes("1987-5"));
+        assert!(!Key::Year.takes("1987-13"));
+    }
+
+    /// `key as usize` is the key's place in `ALL`, which the window and
+    /// `Changes::main` index by.
+    #[test]
+    fn keys_at_their_places() {
+        assert!(Key::ALL.iter().enumerate().all(|(i, k)| *k as usize == i));
     }
 
     /// A FLAC with a cover keeps it when a field is written (lofty writes

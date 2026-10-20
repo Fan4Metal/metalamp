@@ -2241,7 +2241,14 @@ fn context_menu(
                 tr!("Show in folder", "Показать в папке"),
             );
             if extras.contains(&MenuChoice::EditTags) {
-                item(ui, MenuChoice::EditTags, &edit_tags_label());
+                // An album's: its tracks at once, which Ctrl+E (the
+                // selection) does not do.
+                let label = if id == "albums" {
+                    tr!("Edit the album's tags…", "Изменить теги альбома…").to_owned()
+                } else {
+                    edit_tags_label()
+                };
+                item(ui, MenuChoice::EditTags, &label);
             }
             if extras.contains(&MenuChoice::Info) {
                 item(

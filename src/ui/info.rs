@@ -96,6 +96,10 @@ pub struct InfoView {
     /// The fields as `edit` reads and writes them: of all the files shown
     /// at once, or of the one edited.
     form: Option<Form>,
+    /// Forms still writing when another file was opened (the main window
+    /// stays interactive beside a window of its own): polled for what
+    /// they wrote, then dropped.
+    finishing: Vec<Form>,
     editing: bool,
     /// Where to go once the fields typed in are written (`go`).
     then: Option<Option<usize>>,
@@ -192,7 +196,9 @@ impl Form {
                 .iter()
                 .map(|p| {
                     crate::guard::catch(p, || edit::read(p))
-                        .unwrap_or_else(|| Err("cannot be read".to_owned()))
+                        .unwrap_or_else(|| {
+                            Err(tr!("cannot be read", "не удалось прочитать").to_owned())
+                        })
                         .map_err(|e| format!("{}: {e}", p.display()))
                 })
                 .collect();
@@ -296,7 +302,9 @@ impl Form {
             let mut errors = Vec::new();
             for p in &paths {
                 match crate::guard::catch(p, || edit::write(p, &changes))
-                    .unwrap_or_else(|| Err("cannot be written".to_owned()))
+                    .unwrap_or_else(|| {
+                        Err(tr!("cannot be written", "не удалось записать").to_owned())
+                    })
                 {
                     Ok(()) => written += 1,
                     Err(e) => errors.push(format!("{}: {e}", p.display())),
@@ -340,6 +348,9 @@ impl InfoView {
         // Another file's details are not shown while these are read.
         self.shown = None;
         self.cover = None;
+        if let Some(form) = self.form.take_if(|f| f.state == State::Saving) {
+            self.finishing.push(form);
+        }
         self.switch(ctx, to);
     }
 
@@ -418,11 +429,19 @@ impl InfoView {
     /// an error, the window goes where it was going, or stops editing; the
     /// files are read again either way.
     fn poll_form(&mut self, ctx: &egui::Context) -> bool {
+        let mut written = false;
+        self.finishing.retain_mut(|f| match f.poll() {
+            Polled::Written { any, .. } => {
+                written |= any;
+                false
+            }
+            Polled::Nothing => true,
+        });
         let Some(form) = &mut self.form else {
-            return false;
+            return written;
         };
         let Polled::Written { any, ok } = form.poll() else {
-            return false;
+            return written;
         };
         if ok {
             let to = match self.then.take() {
@@ -440,17 +459,30 @@ impl InfoView {
         } else {
             self.then = None;
         }
-        any
+        written || any
     }
 
     /// Goes to the file `to` (or all of them), saving the fields typed in
-    /// first.
+    /// first; not while one of them cannot be written (`stuck`).
     fn go(&mut self, ctx: &egui::Context, to: Option<usize>) {
+        if self.stuck() {
+            return;
+        }
         if self.editing && self.form.as_ref().is_some_and(Form::touched) {
             self.save(ctx, Some(to));
         } else {
             self.switch(ctx, to);
         }
+    }
+
+    /// A field typed in holds what cannot be written (a number that is
+    /// not one, red): nothing is saved and no other file is gone to.
+    fn stuck(&self) -> bool {
+        self.editing
+            && self
+                .form
+                .as_ref()
+                .is_some_and(|f| f.touched() && !f.valid())
     }
 
     fn save(&mut self, ctx: &egui::Context, then: Option<Option<usize>>) {
@@ -673,7 +705,7 @@ impl InfoView {
         let nav = Nav {
             at: self.at,
             count: self.paths.len(),
-            enabled: !saving,
+            enabled: !saving && !self.stuck(),
         };
         let top = match (self.at, shown) {
             (None, _) => Top::all(self.paths.len(), self.form.as_ref()),
@@ -731,7 +763,13 @@ impl InfoView {
                 );
             }
             (Some(_), Some(Ok(d))) => {
-                let form = self.form.as_mut().filter(|_| editing);
+                // Gone to another file, the one before stays shown until
+                // it is read: its fields are shown as they are, not in
+                // the other file's form.
+                let form = self
+                    .form
+                    .as_mut()
+                    .filter(|f| editing && f.paths.first() == Some(&d.path));
                 scrolled(ui, room, |ui| {
                     ui.add_enabled_ui(!saving, |ui| body_one(ui, d, form, acts));
                 });
@@ -1019,10 +1057,10 @@ fn body_one(ui: &mut Ui, d: &Details, form: Option<&mut Form>, acts: &mut Vec<Ac
         ui.label(RichText::new(tags).size(11.0).color(palette::text_weak()));
     });
     let mut form = form;
-    match (&mut form, editing) {
-        (Some(f), _) => main_lines(ui, width, pad, &mut Mode::Edit(f)),
+    match form.as_mut() {
+        Some(f) => main_lines(ui, width, pad, &mut Mode::Edit(f)),
         // Editing, until the fields are read: as shown.
-        (None, _) => main_lines(ui, width, pad, &mut Mode::Read(d)),
+        None => main_lines(ui, width, pad, &mut Mode::Read(d)),
     }
 
     if !more.is_empty() {
