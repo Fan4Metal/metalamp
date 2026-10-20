@@ -337,6 +337,9 @@ impl InfoView {
             Some(0)
         };
         self.paths = paths;
+        // Another file's details are not shown while these are read.
+        self.shown = None;
+        self.cover = None;
         self.switch(ctx, to);
     }
 
@@ -659,16 +662,10 @@ impl InfoView {
         ui.spacing_mut().item_spacing = vec2(8.0, 4.0);
         crate::ui::settings::round_widgets(ui);
         let wanted = self.wanted.clone().unwrap_or_default();
-        let shown = self
-            .shown
-            .as_ref()
-            .filter(|(p, _)| *p == wanted)
-            .map(|(_, d)| d);
-        let cover = self
-            .cover
-            .as_ref()
-            .filter(|(p, _)| *p == wanted)
-            .map(|(_, t)| t.clone());
+        // Going to another file, the one before stays until it is read: a
+        // window shrunk to "Reading..." for a moment and grown back blinked.
+        let shown = self.shown.as_ref().map(|(_, d)| d);
+        let cover = self.cover.as_ref().map(|(_, t)| t.clone());
         let saving = self
             .form
             .as_ref()
@@ -714,13 +711,13 @@ impl InfoView {
         };
         match (self.at, shown) {
             (None, _) => match &mut self.form {
-                Some(form) if form.state != State::Reading => {
+                Some(form) => {
                     let paths = &self.paths;
                     scrolled(ui, room, |ui| {
                         ui.add_enabled_ui(!saving, |ui| body_all(ui, form, paths, editing, acts));
                     });
                 }
-                _ => reading(ui),
+                None => reading(ui),
             },
             (Some(_), None) => reading(ui),
             (Some(_), Some(Err(e))) => {
@@ -1024,13 +1021,8 @@ fn body_one(ui: &mut Ui, d: &Details, form: Option<&mut Form>, acts: &mut Vec<Ac
     let mut form = form;
     match (&mut form, editing) {
         (Some(f), _) => main_lines(ui, width, pad, &mut Mode::Edit(f)),
-        (None, true) => {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.weak(tr!("Reading…", "Чтение…"));
-            });
-        }
-        (None, false) => main_lines(ui, width, pad, &mut Mode::Read(d)),
+        // Editing, until the fields are read: as shown.
+        (None, _) => main_lines(ui, width, pad, &mut Mode::Read(d)),
     }
 
     if !more.is_empty() {
@@ -1098,10 +1090,12 @@ fn body_all(ui: &mut Ui, form: &mut Form, paths: &[PathBuf], editing: bool, acts
     let width = names_width(ui, main_names());
     section(ui, tr!("Main", "Основное"), |ui| {
         if !editing {
-            edit_button(ui, None, acts);
+            let reading = form.state != State::Ready;
+            edit_button(ui, reading.then_some(tr!("Reading…", "Чтение…")), acts);
         }
     });
-    if editing {
+    // Until the files are read, empty boxes of the same size.
+    if editing && form.state != State::Reading {
         main_lines(ui, width, EDIT_PAD, &mut Mode::Edit(form));
     } else {
         main_lines(ui, width, EDIT_PAD, &mut Mode::All(form));
