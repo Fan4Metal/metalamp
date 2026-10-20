@@ -1117,8 +1117,8 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
             ui,
             tr!("Visualization", "Визуализация"),
             Some(tr!(
-                "On the right of the player bar with a visualization; a click on it goes on to the next one (unless switched off below), the right button lists them, \"No visualization\" (the program's name) among them. Switched off, it shows the program's name (the narrow player's room stays dark), takes no clicks and no time.",
-                "Справа на панели плеера с визуализацией; щелчок по ней переключает на следующую (если не выключено ниже), правая кнопка показывает список, в том числе «Без визуализации» (название программы). Выключенная здесь, она показывает название программы (в узком плеере место остаётся тёмным), не отзывается на щелчки и не тратит время."
+                "On the right of the player bar with a visualization; each window layout (with the library, the player and playlist) keeps its own; a click on it goes on to the next one (unless switched off below), the right button lists them, \"No visualization\" (the program's name) among them. Switched off, it shows the program's name (the narrow player's room stays dark), takes no clicks and no time.",
+                "Справа на панели плеера с визуализацией; у каждого вида окна (с библиотекой, плеер и плейлист) своя; щелчок по ней переключает на следующую (если не выключено ниже), правая кнопка показывает список, в том числе «Без визуализации» (название программы). Выключенная здесь, она показывает название программы (в узком плеере место остаётся тёмным), не отзывается на щелчки и не тратит время."
             )),
             CONTROL,
             |ui| {
@@ -1126,11 +1126,11 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
                 let on = settings.visual_enabled;
                 ui.add_enabled_ui(on, |ui| {
                     egui::ComboBox::from_id_salt("settings_visual")
-                        .selected_text(settings.visualization.label())
+                        .selected_text(settings.visual().label())
                         .width(CONTROL - 70.0)
                         .show_ui(ui, |ui| {
                             for v in Visual::ALL {
-                                ui.selectable_value(&mut settings.visualization, v, v.label());
+                                ui.selectable_value(settings.visual_mut(), v, v.label());
                             }
                         });
                 });
@@ -2391,6 +2391,7 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     settings.bar_layout = d.bar_layout;
     settings.window_layout = d.window_layout;
     settings.visualization = d.visualization;
+    settings.playlist_visualization = d.playlist_visualization;
     settings.visual_enabled = d.visual_enabled;
     settings.visual_click = d.visual_click;
     settings.visual_colours = d.visual_colours;

@@ -107,8 +107,10 @@ pub struct Settings {
     /// The player bar's time counts down to the track's end.
     pub time_remaining: bool,
     pub bar_layout: BarLayout,
-    /// What the bar's display shows.
+    /// What the bar's display shows with the library, and in the player
+    /// and playlist layout (each its own: `visual`).
     pub visualization: Visual,
+    pub playlist_visualization: Visual,
     /// The output device's endpoint id (empty: Windows' default) and its
     /// name, shown while it is not present.
     pub output_device: String,
@@ -350,6 +352,7 @@ impl Default for Settings {
             time_remaining: false,
             bar_layout: BarLayout::default(),
             visualization: Visual::default(),
+            playlist_visualization: Visual::default(),
             output_device: String::new(),
             output_device_name: String::new(),
             dsp: Default::default(),
@@ -498,11 +501,26 @@ impl Settings {
         }
     }
 
-    /// The visualization shown: the one chosen while the switch is on,
-    /// else none.
+    /// The visualization chosen for the window layout in use.
+    pub fn visual(&self) -> Visual {
+        match self.window_layout {
+            WindowLayout::Library => self.visualization,
+            WindowLayout::Playlist => self.playlist_visualization,
+        }
+    }
+
+    pub fn visual_mut(&mut self) -> &mut Visual {
+        match self.window_layout {
+            WindowLayout::Library => &mut self.visualization,
+            WindowLayout::Playlist => &mut self.playlist_visualization,
+        }
+    }
+
+    /// The visualization shown: the layout's while the switch is on, else
+    /// none.
     pub fn visual_shown(&self) -> Visual {
         if self.visual_enabled {
-            self.visualization
+            self.visual()
         } else {
             Visual::Off
         }
@@ -590,6 +608,13 @@ mod tests {
         };
         assert_eq!(s.visual_shown(), Visual::Off);
         s.visual_enabled = true;
+        assert_eq!(s.visual_shown(), Visual::Scope);
+        // Each window layout its own.
+        s.window_layout = WindowLayout::Playlist;
+        assert_eq!(s.visual_shown(), Visual::default());
+        *s.visual_mut() = Visual::Waveform;
+        assert_eq!(s.visualization, Visual::Scope);
+        s.window_layout = WindowLayout::Library;
         assert_eq!(s.visual_shown(), Visual::Scope);
         // A click goes through "none" too.
         assert_eq!(Visual::Spectrogram.next(), Visual::Off);

@@ -576,7 +576,7 @@ impl App {
         crate::ui::player_bar::NowPlaying {
             heading,
             layout: self.bar_layout(),
-            visual: self.settings.visualization,
+            visual: self.settings.visual(),
             visual_enabled: self.settings.visual_enabled,
             visual_click: self.settings.visual_click,
             status: self.player.status,
@@ -658,7 +658,7 @@ impl App {
                     self.place_changed = Some(Instant::now());
                 }
                 BarCmd::Visual(v) => {
-                    self.settings.visualization = v;
+                    *self.settings.visual_mut() = v;
                     self.place_changed = Some(Instant::now());
                 }
                 BarCmd::Equalizer(button) => self.eq_window.toggle(button),
