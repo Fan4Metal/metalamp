@@ -157,7 +157,7 @@ fn tag_name(tag: TagType, head: &[u8]) -> String {
     }
 }
 
-fn fields_of(tag: &lofty::tag::Tag) -> Vec<(ItemKey, String)> {
+pub(super) fn fields_of(tag: &lofty::tag::Tag) -> Vec<(ItemKey, String)> {
     // Every text value by key, keys in the order they came.
     let mut found: Vec<(ItemKey, Vec<String>)> = Vec::new();
     for item in tag.items() {

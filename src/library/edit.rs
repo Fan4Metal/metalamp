@@ -1,5 +1,6 @@
-//! Writing the main fields of a track's tag (the tag editor,
-//! `ui::tag_editor`). The file's own tag is read (an MP3's first ID3v2
+//! Writing a track's tag (the file info window's editing, `ui::info`):
+//! the main fields, and the other text fields the tag already has. The
+//! file's own tag is read (an MP3's first ID3v2
 //! tag, as the library reads it: `tags::first_tag_view`), split into the
 //! fields every tag has and the rest (`SplitTag`), the fields changed, and
 //! the two merged back (`MergeTag`) and written: frames lofty cannot map
@@ -15,32 +16,38 @@ use lofty::config::{ParseOptions, WriteOptions};
 use lofty::file::{AudioFile, FileType};
 use lofty::ogg::OggPictureStorage;
 use lofty::prelude::*;
-use lofty::tag::{ItemKey, MergeTag, SplitTag, Tag};
+use lofty::tag::{ItemKey, ItemValue, MergeTag, SplitTag, Tag, TagItem};
 
-/// The fields the editor shows, in its order.
+/// The main fields, in the order the window shows them (`Key::ALL`, and
+/// `key as usize` is the place in it).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
     Title,
     Artist,
-    AlbumArtist,
     Album,
+    AlbumArtist,
+    Composer,
     Year,
+    Genre,
     Track,
     Disc,
-    Genre,
     Comment,
 }
 
+/// How many main fields there are.
+pub const MAIN: usize = 10;
+
 impl Key {
-    pub const ALL: [Key; 9] = [
+    pub const ALL: [Key; MAIN] = [
         Key::Title,
         Key::Artist,
-        Key::AlbumArtist,
         Key::Album,
+        Key::AlbumArtist,
+        Key::Composer,
         Key::Year,
+        Key::Genre,
         Key::Track,
         Key::Disc,
-        Key::Genre,
         Key::Comment,
     ];
 
@@ -50,6 +57,7 @@ impl Key {
             Key::Artist => tr!("Artist", "Исполнитель"),
             Key::AlbumArtist => tr!("Album artist", "Исполнитель альбома"),
             Key::Album => tr!("Album", "Альбом"),
+            Key::Composer => tr!("Composer", "Композитор"),
             Key::Year => tr!("Year", "Год"),
             Key::Track => tr!("Track", "Номер"),
             Key::Disc => tr!("Disc", "Диск"),
@@ -58,28 +66,103 @@ impl Key {
         }
     }
 
+    /// The tag's keys the field is read from, the first one the tag has
+    /// (ID3v2.3's TYER is read as ID3v2.4's TDRC); the track and disc
+    /// numbers carry their totals (`details`).
+    pub fn items(self) -> &'static [ItemKey] {
+        match self {
+            Key::Title => &[ItemKey::TrackTitle],
+            Key::Artist => &[ItemKey::TrackArtist],
+            Key::Album => &[ItemKey::AlbumTitle],
+            Key::AlbumArtist => &[ItemKey::AlbumArtist],
+            Key::Composer => &[ItemKey::Composer],
+            Key::Year => &[ItemKey::Year, ItemKey::RecordingDate],
+            Key::Genre => &[ItemKey::Genre],
+            Key::Track => &[ItemKey::TrackNumber],
+            Key::Disc => &[ItemKey::DiscNumber],
+            Key::Comment => &[ItemKey::Comment],
+        }
+    }
+
     /// A number field: the year, `3` or `3/12` for the track and the disc.
     pub fn is_number(self) -> bool {
         matches!(self, Key::Year | Key::Track | Key::Disc)
     }
+
+    /// `value` can be written to this field: any text, or for a number
+    /// field a number (with its total), or nothing.
+    pub fn takes(self, value: &str) -> bool {
+        !self.is_number() || parse_number(self, value).is_ok()
+    }
 }
 
-/// The fields' values in [`Key::ALL`]'s order; empty: none.
-pub type Values = [String; 9];
+/// A key of the tag that is none of the main fields (nor a total of
+/// theirs), nor the length (the window's chip) or the lyrics (a section
+/// of their own): the window's "Additional" fields.
+pub fn is_other(key: ItemKey) -> bool {
+    !Key::ALL.iter().any(|k| k.items().contains(&key))
+        && !matches!(
+            key,
+            ItemKey::TrackTotal
+                | ItemKey::DiscTotal
+                | ItemKey::Length
+                | ItemKey::Lyrics
+                | ItemKey::UnsyncLyrics
+        )
+}
 
-/// What to write: for each field, the value to put (empty: the field
-/// removed), or `None` to leave it as it is.
-pub type Changes = [Option<String>; 9];
+/// The files whose tags can be written: MP3, WAV, FLAC, M4A.
+pub fn writable(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| {
+            ["mp3", "wav", "flac", "m4a", "m4b", "mp4"]
+                .iter()
+                .any(|w| e.eq_ignore_ascii_case(w))
+        })
+}
+
+/// A tag's fields as the window edits them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Values {
+    /// In [`Key::ALL`]'s order; empty: none.
+    pub main: [String; MAIN],
+    /// The other text fields ([`is_other`]), several values of a key
+    /// joined with "; ".
+    pub other: Vec<(ItemKey, String)>,
+}
+
+/// What to write.
+#[derive(Clone, Debug, Default)]
+pub struct Changes {
+    /// For each main field, the value to put (empty: the field removed),
+    /// or `None` to leave it as it is.
+    pub main: [Option<String>; MAIN],
+    /// Other fields to put (values split at "; "; empty: removed).
+    pub other: Vec<(ItemKey, String)>,
+}
 
 /// The values of `path`'s tag (all empty when it has none).
 pub fn read(path: &Path) -> Result<Values, String> {
-    with_tag(path, |tag| Ok(values(tag)), false)
+    with_tag(
+        path,
+        |tag| {
+            Ok(Values {
+                main: values(tag),
+                other: super::details::fields_of(tag)
+                    .into_iter()
+                    .filter(|(k, _)| is_other(*k))
+                    .collect(),
+            })
+        },
+        false,
+    )
 }
 
 /// Writes `changes` to `path`'s tag (one is made when it has none).
 pub fn write(path: &Path, changes: &Changes) -> Result<(), String> {
     // Checked before the file is touched: a bad number writes nothing.
-    for (key, change) in Key::ALL.iter().zip(changes) {
+    for (key, change) in Key::ALL.iter().zip(&changes.main) {
         if let Some(v) = change
             && key.is_number()
         {
@@ -220,7 +303,7 @@ fn is_id3v23(path: &Path) -> bool {
         .is_ok_and(|()| &head[..3] == b"ID3" && head[3] == 3)
 }
 
-fn values(tag: &Tag) -> Values {
+fn values(tag: &Tag) -> [String; MAIN] {
     let text =
         |s: Option<std::borrow::Cow<'_, str>>| s.map(|s| s.trim().to_owned()).unwrap_or_default();
     let numbered = |n: Option<u32>, total: Option<u32>| match (n, total) {
@@ -228,13 +311,16 @@ fn values(tag: &Tag) -> Values {
         (Some(n), None) => n.to_string(),
         _ => String::new(),
     };
+    let item = |key: ItemKey| {
+        tag.get_string(key)
+            .map(|s| s.trim().to_owned())
+            .unwrap_or_default()
+    };
     Key::ALL.map(|k| match k {
         Key::Title => text(tag.title()),
         Key::Artist => text(tag.artist()),
-        Key::AlbumArtist => tag
-            .get_string(ItemKey::AlbumArtist)
-            .map(|s| s.trim().to_owned())
-            .unwrap_or_default(),
+        Key::AlbumArtist => item(ItemKey::AlbumArtist),
+        Key::Composer => item(ItemKey::Composer),
         Key::Album => text(tag.album()),
         Key::Year => tag.date().map(|d| d.year.to_string()).unwrap_or_default(),
         Key::Track => numbered(tag.track(), tag.track_total()),
@@ -270,7 +356,10 @@ fn parse_number(key: Key, value: &str) -> Result<Option<(u32, Option<u32>)>, Str
 }
 
 fn apply(tag: &mut Tag, changes: &Changes) -> Result<(), String> {
-    for (&key, change) in Key::ALL.iter().zip(changes) {
+    for (key, value) in &changes.other {
+        put_other(tag, *key, value);
+    }
+    for (&key, change) in Key::ALL.iter().zip(&changes.main) {
         let Some(value) = change else { continue };
         let value = value.trim().to_owned();
         let empty = value.is_empty();
@@ -279,9 +368,17 @@ fn apply(tag: &mut Tag, changes: &Changes) -> Result<(), String> {
             Key::Title => tag.set_title(value),
             Key::Artist if empty => tag.remove_artist(),
             Key::Artist => tag.set_artist(value),
-            Key::AlbumArtist if empty => tag.remove_key(ItemKey::AlbumArtist),
-            Key::AlbumArtist => {
-                tag.insert_text(ItemKey::AlbumArtist, value);
+            Key::AlbumArtist | Key::Composer => {
+                let item = if key == Key::Composer {
+                    ItemKey::Composer
+                } else {
+                    ItemKey::AlbumArtist
+                };
+                if empty {
+                    tag.remove_key(item);
+                } else {
+                    tag.insert_text(item, value);
+                }
             }
             Key::Album if empty => tag.remove_album(),
             Key::Album => tag.set_album(value),
@@ -319,6 +416,24 @@ fn apply(tag: &mut Tag, changes: &Changes) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Puts `value` as `key`'s values (split at "; ", as the window joined
+/// them), of the kind the tag had for it (a URL frame's link stays one);
+/// an empty value removes the key.
+fn put_other(tag: &mut Tag, key: ItemKey, value: &str) {
+    let link = tag
+        .get(key)
+        .is_some_and(|i| matches!(i.value(), ItemValue::Locator(_)));
+    tag.remove_key(key);
+    for part in value.split("; ").map(str::trim).filter(|p| !p.is_empty()) {
+        let value = if link {
+            ItemValue::Locator(part.to_owned())
+        } else {
+            ItemValue::Text(part.to_owned())
+        };
+        tag.push(TagItem::new(key, value));
+    }
 }
 
 #[cfg(test)]
@@ -377,9 +492,9 @@ mod tests {
         };
         assert_eq!(pictures(&file), 1);
         let mut changes: Changes = Default::default();
-        changes[7] = Some("Metal".into());
+        changes.main[Key::Genre as usize] = Some("Metal".into());
         write(&file, &changes).unwrap();
-        assert_eq!(read(&file).unwrap()[7], "Metal");
+        assert_eq!(read(&file).unwrap().main[Key::Genre as usize], "Metal");
         assert_eq!(pictures(&file), 1, "the cover is lost");
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -411,19 +526,58 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("old.mp3");
         std::fs::write(&file, &bytes).unwrap();
-        let before = read(&file).unwrap();
-        assert_eq!(before[0], "Old title");
-        assert_eq!(before[3], "Old album");
+        let before = read(&file).unwrap().main;
+        assert_eq!(before[Key::Title as usize], "Old title");
+        assert_eq!(before[Key::Album as usize], "Old album");
         let mut changes: Changes = Default::default();
-        changes[2] = Some("Old band".into());
+        changes.main[Key::AlbumArtist as usize] = Some("Old band".into());
         write(&file, &changes).unwrap();
-        let after = read(&file).unwrap();
-        assert_eq!(after[2], "Old band");
-        assert_eq!(after[0], "Old title");
-        assert_eq!(after[1], "Old artist");
-        assert_eq!(after[3], "Old album");
-        assert_eq!(after[4], "1999");
+        let after = read(&file).unwrap().main;
+        assert_eq!(after[Key::AlbumArtist as usize], "Old band");
+        assert_eq!(after[Key::Title as usize], "Old title");
+        assert_eq!(after[Key::Artist as usize], "Old artist");
+        assert_eq!(after[Key::Album as usize], "Old album");
+        assert_eq!(after[Key::Year as usize], "1999");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The other fields: several values split at "; ", a link kept a
+    /// link, an empty value removing the key; the main fields' keys are
+    /// not among them.
+    #[test]
+    fn other_fields() {
+        let mut tag = Tag::new(lofty::tag::TagType::Id3v2);
+        tag.insert(TagItem::new(
+            ItemKey::AudioFileUrl,
+            ItemValue::Locator("http://old".into()),
+        ));
+        tag.insert_text(ItemKey::Publisher, "Old".into());
+        tag.insert_text(ItemKey::Mood, "Calm".into());
+        put_other(&mut tag, ItemKey::AudioFileUrl, "http://new");
+        put_other(&mut tag, ItemKey::Publisher, "A; B ;  ");
+        put_other(&mut tag, ItemKey::Mood, " ");
+        assert!(matches!(
+            tag.get(ItemKey::AudioFileUrl).map(TagItem::value),
+            Some(ItemValue::Locator(s)) if s == "http://new"
+        ));
+        let publishers: Vec<_> = tag
+            .get_strings(ItemKey::Publisher)
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(publishers, ["A", "B"]);
+        assert!(tag.get(ItemKey::Mood).is_none());
+        assert!(!is_other(ItemKey::RecordingDate));
+        assert!(!is_other(ItemKey::TrackTotal));
+        assert!(!is_other(ItemKey::UnsyncLyrics));
+        assert!(is_other(ItemKey::Publisher));
+    }
+
+    #[test]
+    fn writable_by_extension() {
+        assert!(writable(Path::new("a.MP3")));
+        assert!(writable(Path::new("a.flac")));
+        assert!(!writable(Path::new("a.wma")));
+        assert!(!writable(Path::new("a")));
     }
 
     /// A copy of `METALAMP_SAMPLE` (an MP3) with its tag changed, read
@@ -439,22 +593,31 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let copy = dir.join("copy.mp3");
         std::fs::copy(&sample, &copy).unwrap();
-        let before = read(&copy).unwrap();
+        let before = read(&copy).unwrap().main;
         let v23 = is_id3v23(&copy);
         let frames_before = id3_frames(&copy);
         let mut changes: Changes = Default::default();
-        changes[0] = Some("Edited title".into());
-        changes[2] = Some("Various Artists".into());
-        changes[5] = Some("7/9".into());
+        changes.main[Key::Title as usize] = Some("Edited title".into());
+        changes.main[Key::AlbumArtist as usize] = Some("Various Artists".into());
+        changes.main[Key::Track as usize] = Some("7/9".into());
+        changes.other = vec![(ItemKey::Publisher, "Hansa; BMG".into())];
         write(&copy, &changes).unwrap();
-        let after = read(&copy).unwrap();
+        let read_back = read(&copy).unwrap();
+        assert!(
+            read_back
+                .other
+                .contains(&(ItemKey::Publisher, "Hansa; BMG".into())),
+            "{:?}",
+            read_back.other
+        );
+        let after = read_back.main;
         // Written in the version it had.
         assert_eq!(is_id3v23(&copy), v23);
-        assert_eq!(after[0], "Edited title");
-        assert_eq!(after[2], "Various Artists");
-        assert_eq!(after[5], "7/9");
-        assert_eq!(after[1], before[1]);
-        assert_eq!(after[3], before[3]);
+        assert_eq!(after[Key::Title as usize], "Edited title");
+        assert_eq!(after[Key::AlbumArtist as usize], "Various Artists");
+        assert_eq!(after[Key::Track as usize], "7/9");
+        assert_eq!(after[Key::Artist as usize], before[Key::Artist as usize]);
+        assert_eq!(after[Key::Album as usize], before[Key::Album as usize]);
         // Every frame of the original is still there (TPE2 may be new).
         let frames_after = id3_frames(&copy);
         for f in &frames_before {

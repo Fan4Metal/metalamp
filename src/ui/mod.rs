@@ -17,7 +17,6 @@ pub mod spectrum;
 pub mod start;
 pub mod status;
 pub mod table;
-pub mod tag_editor;
 pub mod title;
 pub mod view_editor;
 pub mod visual;

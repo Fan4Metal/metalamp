@@ -92,7 +92,6 @@ pub struct App {
     pub(crate) stats: crate::stats::Stats,
     listening: crate::stats::Listening,
     /// The tag editor.
-    tag_editor: crate::ui::tag_editor::TagEditor,
     /// Over the others and the mini player as last applied to the window
     /// (`None`: not yet).
     applied_modes: Option<(bool, bool)>,
@@ -240,7 +239,6 @@ impl App {
             stats: crate::stats::Stats::load(),
             listening: crate::stats::Listening::default(),
             eq_window: crate::ui::eq_window::EqWindow::from_env(),
-            tag_editor: crate::ui::tag_editor::TagEditor::default(),
             tray: None,
             off_taskbar: false,
             applied_modes: None,
@@ -405,7 +403,7 @@ impl App {
             LibraryAction::EditTags(tracks) => {
                 let paths = self.paths_of(&tracks);
                 if let Some(ctx) = self.wake.get().cloned() {
-                    self.tag_editor.open(&ctx, paths);
+                    self.file_info.open(&ctx, paths, true);
                 }
             }
             LibraryAction::Rate(tracks, n) => {
@@ -754,7 +752,7 @@ impl App {
                 crate::ui::playlist::PlaylistAction::Export => self.export_playlist(frame),
                 crate::ui::playlist::PlaylistAction::EditTags(indices) => {
                     let paths = self.playlist_paths(&indices);
-                    self.tag_editor.open(ctx, paths);
+                    self.file_info.open(ctx, paths, true);
                 }
                 crate::ui::playlist::PlaylistAction::GoTo(i, to_album) => {
                     let track = self
@@ -880,7 +878,7 @@ impl App {
                     let tracks = self.library_view.selected_tracks_of(&self.library);
                     self.paths_of(&tracks)
                 };
-                self.tag_editor.open(ctx, paths);
+                self.file_info.open(ctx, paths, true);
             }
             Cmd::View(n) => {
                 if crate::ui::library::choose_view(&mut self.settings, usize::from(n)) {
@@ -1626,12 +1624,13 @@ impl eframe::App for App {
         {
             self.info_request = Some(PathBuf::from(path));
         }
-        // `METALAMP_TAG_EDITOR=<file>`: the tag editor at start (GUI checks).
-        if let Some(path) = std::env::var_os("METALAMP_TAG_EDITOR")
-            && !self.tag_editor.open
+        // `METALAMP_TAG_EDITOR=<file>[;<file>…]`: the file info editing
+        // them at start (GUI checks).
+        if let Some(paths) = std::env::var_os("METALAMP_TAG_EDITOR")
             && ctx.cumulative_frame_nr() == 1
         {
-            self.tag_editor.open(&ctx, vec![PathBuf::from(path)]);
+            let paths = std::env::split_paths(&paths).collect();
+            self.file_info.open(&ctx, paths, true);
         }
         if self.env_view_editor && self.loaded {
             self.env_view_editor = false;
@@ -1642,8 +1641,7 @@ impl eframe::App for App {
         let modal = self.about.open
             || self.file_info.open
             || self.settings_dialog.open
-            || self.view_editor.open
-            || self.tag_editor.open;
+            || self.view_editor.open;
         // Outside the modals only the search fields keep the focus: a
         // button that Tab focused took every key of the player until a
         // click elsewhere (the keys wait while anything has the focus).
@@ -1873,13 +1871,9 @@ impl eframe::App for App {
             return;
         }
         if let Some(path) = self.info_request.take() {
-            self.file_info.open(&ctx, &path);
+            self.file_info.open(&ctx, vec![path], false);
         }
         crate::ui::paint_dragged_tracks(&ctx);
-        if self.tag_editor.show(&ctx).written {
-            // The files written: their tags read again.
-            self.rescan();
-        }
         // The equalizer's window, under the modals.
         let before = (self.settings.dsp.clone(), self.settings.eq_presets.clone());
         self.eq_window.show(
@@ -1899,7 +1893,10 @@ impl eframe::App for App {
         if (&self.settings.dsp, &self.settings.eq_presets) != (&before.0, &before.1) {
             self.place_changed = Some(Instant::now());
         }
-        self.file_info.show(&ctx, self.hwnd);
+        if self.file_info.show(&ctx, self.hwnd, &self.settings.keys) {
+            // The files written: their tags read again.
+            self.rescan();
+        }
         self.about.show(&ctx);
         if self
             .view_editor
