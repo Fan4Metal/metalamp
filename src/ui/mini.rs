@@ -20,6 +20,48 @@ use crate::palette;
 use crate::player::Status;
 use crate::ui::icons::{self, Icon};
 
+/// A running line's pause at either end, in seconds, and its speed, in
+/// points a second.
+const MARQUEE_PAUSE: f64 = 1.6;
+const MARQUEE_SPEED: f64 = 28.0;
+
+/// How far a line `over` points too long has run at `now` (seconds): from
+/// the time its text came (kept by `key` in egui's memory), a pause at the
+/// start, on to its end, a pause, back, and so on, as Winamp's title. The
+/// next frame is asked for: soon while it moves, at the pause's end else.
+fn marquee(ctx: &egui::Context, key: &str, text: &str, over: f32, now: f64) -> f32 {
+    let id = egui::Id::new(("mini_marquee", key));
+    let start = ctx.data_mut(|d| {
+        let kept = d.get_temp_mut_or_insert_with(id, || (text.to_owned(), now));
+        if kept.0 != text {
+            *kept = (text.to_owned(), now);
+        }
+        kept.1
+    });
+    let (offset, still) = marquee_at(now - start, over);
+    let wait = if still > 0.0 { still } else { 1.0 / 30.0 };
+    ctx.request_repaint_after(Duration::from_secs_f64(wait));
+    over * offset as f32
+}
+
+/// Where a line `over` points too long is `t` seconds after its text
+/// came: 0 to 1 of the way to its end, and how long it stays there (0
+/// while it moves).
+fn marquee_at(t: f64, over: f32) -> (f64, f64) {
+    let travel = f64::from(over.max(1.0)) / MARQUEE_SPEED;
+    let cycle = 2.0 * (MARQUEE_PAUSE + travel);
+    let t = t.rem_euclid(cycle);
+    if t < MARQUEE_PAUSE {
+        (0.0, MARQUEE_PAUSE - t)
+    } else if t < MARQUEE_PAUSE + travel {
+        ((t - MARQUEE_PAUSE) / travel, 0.0)
+    } else if t < 2.0 * MARQUEE_PAUSE + travel {
+        (1.0, 2.0 * MARQUEE_PAUSE + travel - t)
+    } else {
+        (1.0 - (t - 2.0 * MARQUEE_PAUSE - travel) / travel, 0.0)
+    }
+}
+
 /// The window's side at first, in points.
 pub const SIDE: f32 = 300.0;
 /// Its least side, in points.
@@ -199,19 +241,41 @@ pub fn show(ui: &mut Ui, now: &NowPlaying<'_>, icon: &TextureHandle) -> Vec<BarC
     };
     // Centred, with room kept alike on both sides (the way back's on the
     // right while it is shown); a soft shadow of the ground under each
-    // line, so they read over any cover.
+    // line, so they read over any cover. A line too long even in a smaller
+    // font runs (`marquee`).
     let side = if shown { 44.0 } else { 14.0 };
     let room = (top.width() - 2.0 * side).max(20.0);
-    let line = |text: &str, size: f32, colour: Color32, y: f32| {
-        let font = FontId::proportional(size);
+    let clip = Rect::from_min_max(
+        pos2(top.left() + side, top.top()),
+        pos2(top.right() - side, top.bottom() + 4.0),
+    );
+    let now_s = ctx.input(|i| i.time);
+    let line = |key: &str, text: &str, size: f32, colour: Color32, y: f32| {
         let shadow = palette::bar_bg().gamma_multiply(0.85);
-        let under = crate::ui::elided(&painter, text.to_owned(), font.clone(), shadow, room);
-        let galley = crate::ui::elided(&painter, text.to_owned(), font, colour, room);
-        let x = top.center().x - galley.size().x / 2.0;
+        let layout = |size: f32, colour: Color32| {
+            painter.layout_no_wrap(text.to_owned(), FontId::proportional(size), colour)
+        };
+        let fits = [size, size * 0.9, size * 0.82]
+            .into_iter()
+            .find(|&s| layout(s, colour).size().x <= room);
+        let (size, offset) = match fits {
+            Some(s) => (s, None),
+            None => {
+                let s = size * 0.82;
+                let over = layout(s, colour).size().x - room;
+                (s, Some(marquee(&ctx, key, text, over, now_s)))
+            }
+        };
+        let (galley, under) = (layout(size, colour), layout(size, shadow));
+        let x = match offset {
+            Some(o) => clip.left() - o,
+            None => top.center().x - galley.size().x / 2.0,
+        };
+        let painter = painter.with_clip_rect(clip.intersect(painter.clip_rect()));
         painter.galley(pos2(x + 0.8, y + 1.0), under, shadow);
         painter.galley(pos2(x, y), galley, colour);
     };
-    line(title, 14.5, palette::text_bright(), top.top() + 4.0);
+    line("title", title, 14.5, palette::text_bright(), top.top() + 4.0);
     if !artist.is_empty() {
         // Over the cover, a shade brighter than over the bar's ground.
         let shade = if shown {
@@ -219,7 +283,7 @@ pub fn show(ui: &mut Ui, now: &NowPlaying<'_>, icon: &TextureHandle) -> Vec<BarC
         } else {
             palette::text()
         };
-        line(artist, 12.0, shade, top.top() + 24.0);
+        line("artist", artist, 12.0, shade, top.top() + 24.0);
     }
 
     if !shown {
@@ -294,4 +358,25 @@ pub fn show(ui: &mut Ui, now: &NowPlaying<'_>, icon: &TextureHandle) -> Vec<BarC
     player_bar::mute_button(ui, &painter, speaker, now, &mut cmds);
     player_bar::volume_slider(ui, &painter, slider, now, &mut cmds);
     cmds
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_long_line_runs_and_rests() {
+        // 56 points too long: 2 s on the way at 28 points a second.
+        let over = 56.0;
+        assert_eq!(marquee_at(0.0, over), (0.0, MARQUEE_PAUSE));
+        let (half, still) = marquee_at(MARQUEE_PAUSE + 1.0, over);
+        assert!((half - 0.5).abs() < 1e-9 && still == 0.0);
+        let (end, still) = marquee_at(MARQUEE_PAUSE + 2.0 + 0.5, over);
+        assert!(end == 1.0 && (still - (MARQUEE_PAUSE - 0.5)).abs() < 1e-9);
+        let (back, _) = marquee_at(2.0 * MARQUEE_PAUSE + 2.0 + 1.0, over);
+        assert!((back - 0.5).abs() < 1e-9);
+        // Round again.
+        let cycle = 2.0 * (MARQUEE_PAUSE + 2.0);
+        assert_eq!(marquee_at(cycle, over), marquee_at(0.0, over));
+    }
 }
