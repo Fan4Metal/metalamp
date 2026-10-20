@@ -562,6 +562,7 @@ impl App {
             layout: self.bar_layout(),
             visual: self.settings.visualization,
             visual_enabled: self.settings.visual_enabled,
+            visual_click: self.settings.visual_click,
             status: self.player.status,
             title,
             artist,

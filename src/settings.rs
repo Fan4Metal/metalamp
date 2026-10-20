@@ -54,6 +54,9 @@ pub struct Settings {
     /// is dark and takes no click; on, `visualization` is the one chosen,
     /// "none" among them.
     pub visual_enabled: bool,
+    /// A click on the visualization goes on to the next one (the right
+    /// button lists them either way).
+    pub visual_click: bool,
     /// The folders of the media library.
     pub library_folders: Vec<PathBuf>,
     /// The views of the library (filters over its tracks, `library::filter`),
@@ -311,6 +314,7 @@ impl Default for Settings {
             playlist_window: None,
             window_layout: WindowLayout::default(),
             visual_enabled: true,
+            visual_click: true,
             library_folders: Vec::new(),
             views: Vec::new(),
             view: String::new(),

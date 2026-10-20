@@ -86,6 +86,8 @@ pub struct NowPlaying<'a> {
     /// The visualization at all (the settings' switch): off, the display
     /// takes no click and has no menu.
     pub visual_enabled: bool,
+    /// A click on the display goes on to the next visualization.
+    pub visual_click: bool,
     /// The equalizer is on.
     pub eq: bool,
     /// Playing stops after the track heard (Shift+V): Stop is lit.
@@ -309,17 +311,18 @@ fn visual_display(
     if logo || now.visual != Visual::Off {
         visual.paint(painter, inner);
     }
+    let how = if now.visual_click {
+        tr!(
+            "A click: the next one; the right button: the list",
+            "Щелчок: следующая; правая кнопка: список"
+        )
+    } else {
+        tr!("The right button: the list", "Правая кнопка: список")
+    };
     let response = ui
         .interact(display, ui.id().with("visual"), Sense::click())
-        .on_hover_text(format!(
-            "{}. {}",
-            now.visual.label(),
-            tr!(
-                "A click: the next one; the right button: the list",
-                "Щелчок: следующая; правая кнопка: список"
-            )
-        ));
-    if response.clicked() {
+        .on_hover_text(format!("{}. {how}", now.visual.label()));
+    if response.clicked() && now.visual_click {
         cmds.push(BarCmd::Visual(now.visual.next()));
     }
     egui::Popup::context_menu(&response).show(|ui| {

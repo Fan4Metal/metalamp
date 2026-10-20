@@ -1117,8 +1117,8 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
             ui,
             tr!("Visualization", "Визуализация"),
             Some(tr!(
-                "On the right of the player bar with a visualization; a click on it goes on to the next one, the right button lists them, \"No visualization\" (the program's name) among them. Switched off, it shows the program's name (the narrow player's room stays dark), takes no clicks and no time.",
-                "Справа на панели плеера с визуализацией; щелчок по ней переключает на следующую, правая кнопка показывает список, в том числе «Без визуализации» (название программы). Выключенная здесь, она показывает название программы (в узком плеере место остаётся тёмным), не отзывается на щелчки и не тратит время."
+                "On the right of the player bar with a visualization; a click on it goes on to the next one (unless switched off below), the right button lists them, \"No visualization\" (the program's name) among them. Switched off, it shows the program's name (the narrow player's room stays dark), takes no clicks and no time.",
+                "Справа на панели плеера с визуализацией; щелчок по ней переключает на следующую (если не выключено ниже), правая кнопка показывает список, в том числе «Без визуализации» (название программы). Выключенная здесь, она показывает название программы (в узком плеере место остаётся тёмным), не отзывается на щелчки и не тратит время."
             )),
             CONTROL,
             |ui| {
@@ -1133,6 +1133,24 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
                                 ui.selectable_value(&mut settings.visualization, v, v.label());
                             }
                         });
+                });
+            },
+        );
+        divider(ui);
+        row(
+            ui,
+            tr!(
+                "A click switches the visualization",
+                "Щелчок переключает визуализацию"
+            ),
+            Some(tr!(
+                "A click on the visualization goes on to the next one. Off, it is chosen from the list of the right button or here.",
+                "Щелчок по визуализации переключает на следующую. Если выключено, она выбирается из списка по правой кнопке или здесь."
+            )),
+            CONTROL,
+            |ui| {
+                ui.add_enabled_ui(settings.visual_enabled, |ui| {
+                    switch(ui, &mut settings.visual_click);
                 });
             },
         );
@@ -2182,6 +2200,7 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     settings.window_layout = d.window_layout;
     settings.visualization = d.visualization;
     settings.visual_enabled = d.visual_enabled;
+    settings.visual_click = d.visual_click;
     settings.theme = d.theme;
     settings.accent = d.accent;
     settings.selection = d.selection;
