@@ -878,10 +878,14 @@ fn view_row(
         Stroke::new(1.0, palette::line()),
     );
     let whole = tr!("Whole library", "Вся библиотека");
-    // The view's icon in the accent while it narrows the library; the
-    // library's own, weak, for the whole of it.
+    // The view's icon in its colour (the accent's by default) while it
+    // narrows the library; the library's own, weak, for the whole of it.
     let (name, icon, icon_colour) = match settings.current_view() {
-        Some(v) => (v.name.clone(), view_icon(v.icon), palette::accent()),
+        Some(v) => (
+            v.name.clone(),
+            view_icon(v.icon),
+            palette::icon_colour(v.colour),
+        ),
         None => (whole.to_owned(), Icon::Library, palette::text_weak()),
     };
     let cy = rect.center().y;
@@ -924,17 +928,25 @@ fn view_row(
         .show(|ui| {
             ui.set_min_width(VIEW_MENU_WIDTH);
             let current = settings.current_view().map(|v| v.name.as_str());
-            let items = std::iter::once((None, Icon::Library)).chain(
+            let items = std::iter::once((None, Icon::Library, None)).chain(
                 settings
                     .views
                     .iter()
-                    .map(|v| (Some(v.name.as_str()), view_icon(v.icon))),
+                    .map(|v| (Some(v.name.as_str()), view_icon(v.icon), v.colour)),
             );
-            for (i, (name, icon)) in items.enumerate() {
+            for (i, (name, icon, colour)) in items.enumerate() {
                 let shortcut = (i < 9)
                     .then(|| crate::keymap::shortcut(Cmd::View(i as u8)))
                     .filter(|k| !k.is_empty());
-                if view_item(ui, icon, name.unwrap_or(whole), name == current, shortcut) {
+                let own = colour.map(|c| palette::icon_colour(Some(c)));
+                let item = ViewItem {
+                    icon,
+                    own,
+                    name: name.unwrap_or(whole),
+                    on: name == current,
+                    shortcut,
+                };
+                if view_item(ui, item) {
                     pick = Some(name.unwrap_or("").to_owned());
                     ui.close();
                 }
@@ -999,7 +1011,23 @@ pub fn view_icon(icon: ViewIcon) -> Icon {
 const VIEW_MENU_WIDTH: f32 = 280.0;
 
 /// right; the one in use on the selection's ground. True when clicked.
-fn view_item(ui: &mut Ui, icon: Icon, name: &str, on: bool, shortcut: Option<String>) -> bool {
+struct ViewItem<'a> {
+    icon: Icon,
+    /// The view's own colour, its icon always in it.
+    own: Option<egui::Color32>,
+    name: &'a str,
+    on: bool,
+    shortcut: Option<String>,
+}
+
+fn view_item(ui: &mut Ui, item: ViewItem) -> bool {
+    let ViewItem {
+        icon,
+        own,
+        name,
+        on,
+        shortcut,
+    } = item;
     // The menu's width: a popup offers all the window.
     let width = ui.available_width().min(VIEW_MENU_WIDTH);
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 24.0), Sense::click());
@@ -1018,7 +1046,11 @@ fn view_item(ui: &mut Ui, icon: Icon, name: &str, on: bool, shortcut: Option<Str
         palette::text()
     };
     let cy = rect.center().y;
-    let icon_colour = if on { palette::accent() } else { text };
+    let icon_colour = match own {
+        Some(c) => c,
+        None if on => palette::accent(),
+        None => text,
+    };
     icons::paint(
         painter,
         icon,

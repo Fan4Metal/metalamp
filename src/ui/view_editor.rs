@@ -279,11 +279,20 @@ impl ViewEditor {
                         vec2(70.0, ui.spacing().interact_size.y),
                         egui::Label::new(tr!("Icon", "Иконка")),
                     );
+                    let colour = crate::palette::icon_colour(self.draft.colour);
                     for icon in ViewIcon::ALL {
-                        if icon_choice(ui, icon, self.draft.icon == icon) {
+                        if icon_choice(ui, icon, self.draft.icon == icon, colour) {
                             self.draft.icon = icon;
                         }
                     }
+                });
+                // Its colour.
+                ui.horizontal(|ui| {
+                    ui.add_sized(
+                        vec2(70.0, ui.spacing().interact_size.y),
+                        egui::Label::new(tr!("Colour", "Цвет")),
+                    );
+                    super::settings::view_colours(ui, &mut self.draft.colour);
                 });
                 ui.add_space(8.0);
 
@@ -556,9 +565,9 @@ fn rule_row(
     remove
 }
 
-/// One of the views' icons to choose: the chosen one in the accent on the
-/// selection's ground, as the player bar's toggles. True when clicked.
-fn icon_choice(ui: &mut Ui, icon: ViewIcon, chosen: bool) -> bool {
+/// One of the views' icons to choose: the chosen one in its `colour` on
+/// the selection's ground, as the player bar's toggles. True when clicked.
+fn icon_choice(ui: &mut Ui, icon: ViewIcon, chosen: bool, colour: egui::Color32) -> bool {
     let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 28.0), Sense::click());
     let ground = if chosen {
         palette::selected_bg()
@@ -569,7 +578,7 @@ fn icon_choice(ui: &mut Ui, icon: ViewIcon, chosen: bool) -> bool {
     };
     ui.painter().rect_filled(rect, 5.0, ground);
     let colour = if chosen {
-        palette::accent()
+        colour
     } else if resp.hovered() {
         palette::text_bright()
     } else {

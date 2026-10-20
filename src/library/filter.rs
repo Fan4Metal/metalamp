@@ -25,6 +25,9 @@ pub struct Filter {
     /// Shown before the name, in the row under the artists and its menu.
     #[serde(deserialize_with = "icon_or_note")]
     pub icon: ViewIcon,
+    /// The icon's colour; none: the accent in use.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub colour: Option<crate::palette::Accent>,
     /// One rule holding is enough; else every rule must hold.
     pub any: bool,
     pub rules: Vec<Rule>,
@@ -711,5 +714,17 @@ mod tests {
         let later: Filter =
             serde_json::from_str(r#"{"name":"a","icon":"rocket","any":true}"#).unwrap();
         assert_eq!((later.icon, later.any), (ViewIcon::Note, true));
+        // The icon's colour: none (the accent's) is not written, one's own
+        // is kept by name; a view without it reads as the accent's.
+        assert!(!json.contains("colour"), "{json}");
+        assert_eq!(old.colour, None);
+        for colour in [crate::palette::Accent::Teal, crate::palette::Accent::Custom(0x12ab9f)] {
+            let f = Filter {
+                colour: Some(colour),
+                ..f.clone()
+            };
+            let json = serde_json::to_string(&f).unwrap();
+            assert_eq!(serde_json::from_str::<Filter>(&json).unwrap(), f, "{json}");
+        }
     }
 }

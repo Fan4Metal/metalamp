@@ -1835,6 +1835,44 @@ fn accents(ui: &mut Ui, accent: &mut Accent) {
     }
 }
 
+/// A view's icon colour, left to right: the accent in use (none), the
+/// ready accents, the user's own (its picker starting from the colour in
+/// use).
+pub(crate) fn view_colours(ui: &mut Ui, colour: &mut Option<Accent>) {
+    ui.spacing_mut().item_spacing.x = 5.0;
+    let (rect, response) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
+    let response = response.on_hover_text(tr!("The accent's", "Цвет акцента"));
+    swatch(ui, rect, colour.is_none(), response.hovered(), |p, centre, r| {
+        p.circle_filled(centre, r, palette::accent());
+        // A dot of the ground: it follows the accent.
+        p.circle_filled(centre, r * 0.35, palette::panel_bg());
+    });
+    if response.clicked() {
+        *colour = None;
+    }
+    for a in Accent::ALL {
+        let (rect, response) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
+        let response = response.on_hover_text(a.label());
+        swatch(ui, rect, *colour == Some(a), response.hovered(), |p, centre, r| {
+            p.circle_filled(centre, r, a.base());
+        });
+        if response.clicked() {
+            *colour = Some(a);
+        }
+    }
+    let mut own = match *colour {
+        Some(c @ Accent::Custom(_)) => c,
+        _ => {
+            let c = palette::icon_colour(*colour);
+            custom([c.r(), c.g(), c.b()])
+        }
+    };
+    let chosen = matches!(colour, Some(Accent::Custom(_)));
+    if own_colour(ui, &mut own, chosen) {
+        *colour = Some(own);
+    }
+}
+
 /// A round swatch in `rect`: ringed when chosen, a little bigger under the
 /// pointer; `fill` paints the inside at a centre and a radius.
 fn swatch(

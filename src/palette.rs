@@ -215,6 +215,16 @@ fn along(stops: &[(f32, u32)], t: f32) -> Color32 {
     mix(hex(ca), hex(cb), ((t - a) / (b - a)).clamp(0.0, 1.0))
 }
 
+/// A view's icon in `own` colour (none: the accent in use), a shade
+/// deeper on a light ground as the accent is.
+pub fn icon_colour(own: Option<Accent>) -> Color32 {
+    match own {
+        None => accent(),
+        Some(a) if current().dark => a.base(),
+        Some(a) => mix(a.base(), Color32::BLACK, 0.12),
+    }
+}
+
 /// The visualization's colours in use.
 pub fn visual() -> VisualPalette {
     current().visual
