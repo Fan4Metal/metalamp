@@ -17,7 +17,7 @@
 
 MetalAMP is an audio player for Windows built around a media library: the music folders are scanned once, and the artists, the albums with their covers and the tracks are then shown at once and filtered as a search is typed. Playback uses the decoders of Windows itself (Media Foundation) and the WASAPI audio output, so the program is a single executable without additional libraries, and albums meant to be heard without pauses play without gaps.
 
-![MetalAMP: the artists on the left with Amorphis chosen, the covers of its albums, the tracks of Eclipse with the one playing in amber, the player bar on top and the playlist on the right](images/screenshot.png)
+![MetalAMP: the artists on the left, the covers of the albums, the tracks under them, the player bar on top with Amorphis' The Circle playing, and the playlist on the right with that track in amber](images/screenshot.png)
 
 *Screenshot of version 0.1.0.*
 
