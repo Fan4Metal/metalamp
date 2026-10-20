@@ -374,7 +374,6 @@ fn winamp(
         palette::accent(),
         palette::list_bg(),
     );
-    time(ui, painter, time_rect, now, palette::accent(), cmds);
     visual_display(
         ui,
         painter,
@@ -385,6 +384,9 @@ fn winamp(
         false,
         cmds,
     );
+    // After the display, whose click covers it: a widget registered later
+    // takes the click, and the time's went on to the next visualization.
+    time(ui, painter, time_rect, now, palette::accent(), cmds);
 
     // The title in a field, the facts under it, the volume.
     let right = Rect::from_min_max(
