@@ -4,8 +4,8 @@
 //! tags…" open it editing the files selected. The cover, the title, the
 //! artist and the album on top with the audio properties as chips; the
 //! main fields in the usual order of taggers (the short ones two a line,
-//! empty ones as a dash), the tag's other fields under them (only those it
-//! has), the lyrics, the file's path and the rest; the text can be
+//! in boxes as while editing), the tag's other fields under them (only
+//! those it has), the lyrics, the file's path and the rest; the text can be
 //! selected and copied. Several files are shown one at a time (‹ ›) or all
 //! at once: the main fields with the value the files share or
 //! "(different)", and the files' names.
@@ -1007,7 +1007,7 @@ fn body_one(ui: &mut Ui, d: &Details, form: Option<&mut Form>, acts: &mut Vec<Ac
         .chain(more.iter().map(|o| field_name(o.key())))
         .chain(file.iter().map(|(n, _)| n.clone()));
     let width = names_width(ui, names);
-    let pad = if editing { EDIT_PAD } else { 0.0 };
+    let pad = EDIT_PAD;
 
     let tags = d.tags.join(" · ");
     section(ui, tr!("Main", "Основное"), |ui| {
@@ -1044,8 +1044,8 @@ fn body_one(ui: &mut Ui, d: &Details, form: Option<&mut Form>, acts: &mut Vec<Ac
                         text_field(ui, field, false, true, None, false);
                     }
                 }),
-                (Other::Shown(_, text), _) => line(ui, width, &n, 0.0, |ui| {
-                    shown_value(ui, text, true);
+                (Other::Shown(_, text), _) => line(ui, width, &n, pad, |ui| {
+                    boxed(ui, text, "", Some(1), None);
                 }),
                 (Other::Edited(..), None) => {}
             }
@@ -1104,7 +1104,7 @@ fn body_all(ui: &mut Ui, form: &mut Form, paths: &[PathBuf], editing: bool, acts
     if editing {
         main_lines(ui, width, EDIT_PAD, &mut Mode::Edit(form));
     } else {
-        main_lines(ui, width, 0.0, &mut Mode::All(form));
+        main_lines(ui, width, EDIT_PAD, &mut Mode::All(form));
         errors(ui, &form.errors);
     }
     ui.add_space(14.0);
@@ -1174,18 +1174,13 @@ fn main_lines(ui: &mut Ui, width: f32, pad: f32, mode: &mut Mode) {
 /// room left).
 fn main_cell(ui: &mut Ui, mode: &mut Mode, key: edit::Key, width: Option<f32>) {
     let comment = key == edit::Key::Comment;
+    let rows = comment.then_some(2);
     match mode {
-        Mode::Read(d) => shown_value(ui, value(d, key.items()), comment),
+        Mode::Read(d) => boxed(ui, value(d, key.items()), "", rows, width),
         Mode::All(form) => match form.main.get(key as usize) {
-            Some(f) if f.mixed => {
-                ui.label(
-                    RichText::new(tr!("(different)", "(разные)"))
-                        .italics()
-                        .color(palette::text_weak()),
-                );
-            }
-            Some(f) => shown_value(ui, &f.shown, comment),
-            None => shown_value(ui, "", false),
+            Some(f) if f.mixed => boxed(ui, "", tr!("(different)", "(разные)"), rows, width),
+            Some(f) => boxed(ui, &f.shown, "", rows, width),
+            None => boxed(ui, "", "", rows, width),
         },
         Mode::Edit(form) => {
             // The first field takes the keys once the fields came.
@@ -1234,6 +1229,28 @@ fn text_field(
         resp.request_focus();
     }
     super::take_leaving_key(ui, &resp);
+}
+
+/// A value shown in a box as the text fields' while editing, but not
+/// editable (its text can be selected and copied); `rows`: on as many
+/// lines at least, a longer value wrapped, else on one line.
+fn boxed(ui: &mut Ui, text: &str, hint: &str, rows: Option<usize>, width: Option<f32>) {
+    let mut text = text;
+    let edit = match rows {
+        Some(rows) => egui::TextEdit::multiline(&mut text).desired_rows(rows),
+        None => egui::TextEdit::singleline(&mut text),
+    };
+    // egui draws a field that cannot be edited without its ground: the
+    // editable one's, painted under it.
+    let ground = ui.painter().add(egui::Shape::Noop);
+    let resp = ui.add(
+        edit.hint_text(hint)
+            .desired_width(width.unwrap_or(ui.available_width())),
+    );
+    let radius = ui.visuals().widgets.inactive.corner_radius;
+    let fill = ui.visuals().extreme_bg_color;
+    ui.painter()
+        .set(ground, egui::epaint::RectShape::filled(resp.rect, radius, fill));
 }
 
 /// "Edit" in a section's heading, disabled with `why_not`.
