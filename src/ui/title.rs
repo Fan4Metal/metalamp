@@ -22,8 +22,9 @@ pub enum TitleCmd {
     ToggleMaximize,
     Close,
     About,
-    /// Over the other windows, or not (Ctrl+T).
-    OnTop,
+    /// The player and playlist layout, or the library's (the window
+    /// layout's key).
+    Layout,
     /// The mini player: the cover and the least of the controls, over
     /// the other windows (Ctrl+M).
     Mini,
@@ -32,7 +33,8 @@ pub enum TitleCmd {
 /// The modes the title row's own buttons show lit.
 #[derive(Clone, Copy, Default)]
 pub struct Modes {
-    pub on_top: bool,
+    /// The player and playlist layout, without the library.
+    pub alone: bool,
 }
 
 /// `update` is the tag of a newer release, shown as a button left of
@@ -136,8 +138,9 @@ pub fn row(
         }
     }
 
-    // The mini player and "over the others", left of the window's own:
-    // narrower, lit in the accent while on.
+    // The mini player and the layout without the library, left of the
+    // window's own: narrower, lit in the accent while on. ("Over the
+    // others" is Ctrl+T's.)
     let toggles = [
         (
             TitleCmd::Mini,
@@ -146,16 +149,22 @@ pub fn row(
             with_key(tr!("Mini player", "Мини-плеер"), Cmd::Mini),
         ),
         (
-            TitleCmd::OnTop,
-            Icon::Pin,
-            modes.on_top,
+            TitleCmd::Layout,
+            Icon::PlaylistLayout,
+            modes.alone,
             with_key(
-                if modes.on_top {
-                    tr!("Over the other windows: on", "Поверх всех окон: вкл.")
+                if modes.alone {
+                    tr!(
+                        "Back to the library",
+                        "Вернуться к библиотеке"
+                    )
                 } else {
-                    tr!("Over the other windows", "Поверх всех окон")
+                    tr!(
+                        "Without the library: the player and the playlist",
+                        "Без библиотеки: плеер и плейлист"
+                    )
                 },
-                Cmd::OnTop,
+                Cmd::WindowLayout,
             ),
         ),
     ];

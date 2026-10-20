@@ -148,6 +148,9 @@ pub enum Icon {
     /// A screen with a small one in its bottom right corner: the mini
     /// player (metalmpv's).
     Mini,
+    /// A tall narrow window, a bar on top and the lines of a list under
+    /// it: the player and playlist layout, without the library.
+    PlaylistLayout,
     /// A play triangle with lines of a list: the playlists (save, open).
     Playlists,
 }
@@ -224,6 +227,7 @@ impl Icon {
         Icon::Globe,
         Icon::Pin,
         Icon::Mini,
+        Icon::PlaylistLayout,
         Icon::Playlists,
     ];
 }
@@ -837,6 +841,20 @@ pub fn paint(painter: &Painter, icon: Icon, c: Pos2, size: f32, color: Color32, 
                 egui::StrokeKind::Inside,
             );
             painter.rect_filled(rect(0.3, 0.3, 3.9, 2.4), 0.6 * k, color);
+        }
+        Icon::PlaylistLayout => {
+            // The window as the layout's: narrow and tall.
+            painter.rect_stroke(
+                rect(-4.8, -6.0, 9.6, 12.0),
+                0.9 * k,
+                line,
+                egui::StrokeKind::Inside,
+            );
+            // The player bar, then the list.
+            painter.rect_filled(rect(-2.9, -4.1, 5.8, 2.3), 0.5 * k, color);
+            for y in [0.2, 2.2, 4.2] {
+                painter.line_segment([p(-2.9, y), p(2.9, y)], pen(1.0));
+            }
         }
         Icon::Plus => {
             painter.line_segment([p(-5.0, 0.0), p(5.0, 0.0)], pen(1.5));

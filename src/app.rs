@@ -532,6 +532,16 @@ impl App {
 
     /// The player bar's layout: the one chosen, or the narrow one of the
     /// player and playlist layout.
+    /// The library's layout, or the player and playlist alone (the title
+    /// row's button and the window layout's key).
+    fn switch_layout(&mut self) {
+        self.settings.window_layout = match self.settings.window_layout {
+            WindowLayout::Library => WindowLayout::Playlist,
+            WindowLayout::Playlist => WindowLayout::Library,
+        };
+        self.place_changed = Some(Instant::now());
+    }
+
     fn bar_layout(&self) -> crate::settings::BarLayout {
         match self.settings.window_layout {
             WindowLayout::Library => self.settings.bar_layout,
@@ -838,13 +848,7 @@ impl App {
                 self.layout_after_mini = true;
                 self.place_changed = Some(Instant::now());
             }
-            Cmd::WindowLayout => {
-                self.settings.window_layout = match self.settings.window_layout {
-                    WindowLayout::Library => WindowLayout::Playlist,
-                    WindowLayout::Playlist => WindowLayout::Library,
-                };
-                self.place_changed = Some(Instant::now());
-            }
+            Cmd::WindowLayout => self.switch_layout(),
             // The playlist is the window in the player and playlist layout.
             Cmd::Playlist if self.settings.window_layout == WindowLayout::Playlist => {
                 self.settings.mini = false;
@@ -1497,13 +1501,10 @@ impl App {
         let maximized = frameless::is_maximized(&ctx);
         let title = self.window_title();
         let modes = title::Modes {
-            on_top: self.settings.on_top,
+            alone: self.settings.window_layout == WindowLayout::Playlist,
         };
         match title::row(ui, &title, maximized, &icon, update.as_deref(), modes) {
-            Some(TitleCmd::OnTop) => {
-                self.settings.on_top = !self.settings.on_top;
-                self.place_changed = Some(Instant::now());
-            }
+            Some(TitleCmd::Layout) => self.switch_layout(),
             Some(TitleCmd::Mini) => {
                 self.settings.mini = !self.settings.mini;
                 self.place_changed = Some(Instant::now());
