@@ -16,6 +16,9 @@ use lofty::config::{ParseOptions, WriteOptions};
 use lofty::file::{AudioFile, FileType};
 use lofty::ogg::OggPictureStorage;
 use lofty::prelude::*;
+use lofty::TextEncoding;
+use lofty::id3::v2::{Frame, FrameId, Id3v2Tag, TextInformationFrame};
+use lofty::tag::items::Timestamp;
 use lofty::tag::{ItemKey, ItemValue, MergeTag, SplitTag, Tag, TagItem};
 
 /// The main fields, in the order the window shows them (`Key::ALL`, and
@@ -90,9 +93,9 @@ impl Key {
     }
 
     /// `value` can be written to this field: any text, or for a number
-    /// field a number (with its total), or nothing.
+    /// field a number (with its total) or a date, or nothing.
     pub fn takes(self, value: &str) -> bool {
-        !self.is_number() || parse_number(self, value).is_ok()
+        !self.is_number() || number_text(self, value).is_ok()
     }
 }
 
@@ -155,7 +158,7 @@ pub fn read(path: &Path) -> Result<Values, String> {
                     .collect(),
             })
         },
-        false,
+        None,
     )
 }
 
@@ -166,19 +169,25 @@ pub fn write(path: &Path, changes: &Changes) -> Result<(), String> {
         if let Some(v) = change
             && key.is_number()
         {
-            parse_number(*key, v)?;
+            number_text(*key, v)?;
         }
     }
-    with_tag(path, |tag| apply(tag, changes), true)
+    with_tag(path, |tag| apply(tag, changes), Some(changes))
 }
 
 /// Reads `path`'s own tag, lets `f` see (and change) its common fields,
-/// and when `save`, writes it back with the rest of it kept.
+/// and when it writes `changes`, writes it back with the rest of it kept.
 fn with_tag<R>(
     path: &Path,
     f: impl FnOnce(&mut Tag) -> Result<R, String>,
-    save: bool,
+    changes: Option<&Changes>,
 ) -> Result<R, String> {
+    let save = changes.is_some();
+    let numbers = |tag: &mut Id3v2Tag| {
+        if let Some(changes) = changes {
+            keep_numbers(tag, changes);
+        }
+    };
     let (view, file_type) = super::tags::first_tag_view(path).map_err(|e| e.to_string())?;
     let mut reader = BufReader::new(view);
     let options = ParseOptions::new().read_properties(false);
@@ -196,7 +205,7 @@ fn with_tag<R>(
                         .or_else(|| file.id3v1().cloned().map(Tag::from)),
                 )
             });
-            edit(tag, f, save, path, write)
+            edit(tag, f, save, path, write, numbers)
         }
         Some(FileType::Wav) => {
             let file = lofty::iff::wav::WavFile::read_from(&mut reader, options).map_err(err)?;
@@ -205,7 +214,7 @@ fn with_tag<R>(
                 .id3v2()
                 .cloned()
                 .unwrap_or_else(|| seeded(file.riff_info().cloned().map(Tag::from)));
-            edit(tag, f, save, path, write)
+            edit(tag, f, save, path, write, numbers)
         }
         Some(FileType::Flac) => {
             let file = lofty::flac::FlacFile::read_from(&mut reader, options).map_err(err)?;
@@ -217,7 +226,7 @@ fn with_tag<R>(
             for (picture, info) in file.pictures() {
                 let _ = tag.insert_picture(picture.clone(), Some(*info));
             }
-            edit(tag, f, save, path, write)
+            edit(tag, f, save, path, write, |_| {})
         }
         Some(FileType::Mp4) => {
             let file = lofty::mp4::Mp4File::read_from(&mut reader, options).map_err(err)?;
@@ -228,6 +237,7 @@ fn with_tag<R>(
                 save,
                 path,
                 write,
+                |_| {},
             )
         }
         _ => Err(tr!(
@@ -256,14 +266,15 @@ fn seeded(other: Option<Tag>) -> lofty::id3::v2::Id3v2Tag {
     tag.into()
 }
 
-/// `tag` split, its common fields given to `f`, merged back and, when
-/// `save`, written to `path`.
+/// `tag` split, its common fields given to `f`, merged back, `fix`ed and,
+/// when `save`, written to `path`.
 fn edit<T, R>(
     tag: T,
     f: impl FnOnce(&mut Tag) -> Result<R, String>,
     save: bool,
     path: &Path,
     write: WriteOptions,
+    fix: impl FnOnce(&mut <T::Remainder as MergeTag>::Merged),
 ) -> Result<R, String>
 where
     T: SplitTag,
@@ -272,11 +283,36 @@ where
     let (rest, mut common) = tag.split_tag();
     let out = f(&mut common)?;
     if save {
-        rest.merge_tag(common)
+        let mut merged = rest.merge_tag(common);
+        fix(&mut merged);
+        merged
             .save_to_path(path, write)
             .map_err(|e| in_use(&e.to_string()))?;
     }
     Ok(out)
+}
+
+/// lofty writes an ID3v2 tag's track and disc numbers from numbers
+/// (`3/12`): the frames written are put back as typed (`03/12`).
+fn keep_numbers(tag: &mut Id3v2Tag, changes: &Changes) {
+    for (key, id) in [(Key::Track, "TRCK"), (Key::Disc, "TPOS")] {
+        let Some(value) = &changes.main[key as usize] else {
+            continue;
+        };
+        let Ok(Some((number, total))) = number_text(key, value) else {
+            continue;
+        };
+        let text = match total {
+            Some(total) => format!("{number}/{total}"),
+            None => number,
+        };
+        let id = FrameId::Valid(std::borrow::Cow::Borrowed(id));
+        tag.insert(Frame::Text(TextInformationFrame::new(
+            id,
+            TextEncoding::Latin1,
+            text,
+        )));
+    }
 }
 
 /// Windows' "used by another process" (a sharing violation, os error
@@ -306,15 +342,19 @@ fn is_id3v23(path: &Path) -> bool {
 fn values(tag: &Tag) -> [String; MAIN] {
     let text =
         |s: Option<std::borrow::Cow<'_, str>>| s.map(|s| s.trim().to_owned()).unwrap_or_default();
-    let numbered = |n: Option<u32>, total: Option<u32>| match (n, total) {
-        (Some(n), Some(t)) => format!("{n}/{t}"),
-        (Some(n), None) => n.to_string(),
-        _ => String::new(),
-    };
     let item = |key: ItemKey| {
         tag.get_string(key)
             .map(|s| s.trim().to_owned())
             .unwrap_or_default()
+    };
+    // As the tag has them (`03/12`), as the file info shows them.
+    let numbered = |number: ItemKey, total: ItemKey| {
+        let (n, t) = (item(number), item(total));
+        if n.is_empty() || t.is_empty() || n.contains('/') {
+            n
+        } else {
+            format!("{n}/{t}")
+        }
     };
     Key::ALL.map(|k| match k {
         Key::Title => text(tag.title()),
@@ -322,17 +362,21 @@ fn values(tag: &Tag) -> [String; MAIN] {
         Key::AlbumArtist => item(ItemKey::AlbumArtist),
         Key::Composer => item(ItemKey::Composer),
         Key::Album => text(tag.album()),
-        Key::Year => tag.date().map(|d| d.year.to_string()).unwrap_or_default(),
-        Key::Track => numbered(tag.track(), tag.track_total()),
-        Key::Disc => numbered(tag.disk(), tag.disk_total()),
+        Key::Year => match item(ItemKey::Year) {
+            y if y.is_empty() => item(ItemKey::RecordingDate),
+            y => y,
+        },
+        Key::Track => numbered(ItemKey::TrackNumber, ItemKey::TrackTotal),
+        Key::Disc => numbered(ItemKey::DiscNumber, ItemKey::DiscTotal),
         Key::Genre => text(tag.genre()),
         Key::Comment => text(tag.comment()),
     })
 }
 
-/// A number field's value: the number and its total (`3/12`), none when
-/// empty; an error naming the field otherwise.
-fn parse_number(key: Key, value: &str) -> Result<Option<(u32, Option<u32>)>, String> {
+/// A number field's value as it is written: the number and its total as
+/// typed (`03`, `03/12`; spaces left out), the year as a date (`1987`,
+/// `1987-05-01`); none when empty; an error naming the field otherwise.
+fn number_text(key: Key, value: &str) -> Result<Option<(String, Option<String>)>, String> {
     let value = value.trim();
     if value.is_empty() {
         return Ok(None);
@@ -343,16 +387,27 @@ fn parse_number(key: Key, value: &str) -> Result<Option<(u32, Option<u32>)>, Str
             format!("{}: не число: {value}", key.label())
         )
     };
+    if key == Key::Year {
+        let date = value
+            .chars()
+            .all(|c| c.is_ascii_digit() || "-.T: ".contains(c))
+            .then(|| value.parse::<Timestamp>().ok())
+            .flatten();
+        return match date {
+            Some(d) if d.year >= 1 => Ok(Some((value.to_owned(), None))),
+            _ => Err(bad()),
+        };
+    }
+    let number = |s: &str| {
+        let s = s.trim();
+        s.parse::<u32>().map(|_| s.to_owned()).map_err(|_| bad())
+    };
     let (n, total) = value.split_once('/').unwrap_or((value, ""));
-    let n: u32 = n.trim().parse().map_err(|_| bad())?;
     let total = match total.trim() {
         "" => None,
-        t => Some(t.parse().map_err(|_| bad())?),
+        t => Some(number(t)?),
     };
-    if key == Key::Year && !(1..=9999).contains(&n) {
-        return Err(bad());
-    }
-    Ok(Some((n, total)))
+    Ok(Some((number(n)?, total)))
 }
 
 fn apply(tag: &mut Tag, changes: &Changes) -> Result<(), String> {
@@ -386,30 +441,30 @@ fn apply(tag: &mut Tag, changes: &Changes) -> Result<(), String> {
             Key::Genre => tag.set_genre(value),
             Key::Comment if empty => tag.remove_comment(),
             Key::Comment => tag.set_comment(value),
-            Key::Year => match parse_number(key, &value)? {
+            Key::Year => match number_text(key, &value)? {
                 None => tag.remove_date(),
-                Some((year, _)) => tag.set_date(lofty::tag::items::Timestamp {
-                    year: year as u16,
-                    ..Default::default()
-                }),
-            },
-            Key::Track => {
-                tag.remove_track();
-                tag.remove_track_total();
-                if let Some((n, total)) = parse_number(key, &value)? {
-                    tag.set_track(n);
-                    if let Some(t) = total {
-                        tag.set_track_total(t);
+                Some((date, _)) => {
+                    if let Ok(date) = date.parse::<Timestamp>() {
+                        tag.set_date(date);
                     }
                 }
-            }
-            Key::Disc => {
-                tag.remove_disk();
-                tag.remove_disk_total();
-                if let Some((n, total)) = parse_number(key, &value)? {
-                    tag.set_disk(n);
+            },
+            // As typed: Vorbis comments keep `03`; ID3v2's frames are put
+            // back so (`keep_numbers`); MP4 holds numbers.
+            Key::Track | Key::Disc => {
+                let (number_key, total_key) = if key == Key::Track {
+                    tag.remove_track();
+                    tag.remove_track_total();
+                    (ItemKey::TrackNumber, ItemKey::TrackTotal)
+                } else {
+                    tag.remove_disk();
+                    tag.remove_disk_total();
+                    (ItemKey::DiscNumber, ItemKey::DiscTotal)
+                };
+                if let Some((n, total)) = number_text(key, &value)? {
+                    tag.insert_text(number_key, n);
                     if let Some(t) = total {
-                        tag.set_disk_total(t);
+                        tag.insert_text(total_key, t);
                     }
                 }
             }
@@ -442,12 +497,19 @@ mod tests {
 
     #[test]
     fn numbers() {
-        assert_eq!(parse_number(Key::Track, " 3 "), Ok(Some((3, None))));
-        assert_eq!(parse_number(Key::Track, "3/12"), Ok(Some((3, Some(12)))));
-        assert_eq!(parse_number(Key::Disc, ""), Ok(None));
-        assert!(parse_number(Key::Track, "three").is_err());
-        assert!(parse_number(Key::Year, "0").is_err());
-        assert_eq!(parse_number(Key::Year, "1999"), Ok(Some((1999, None))));
+        let n = |s: &str| s.to_owned();
+        assert_eq!(number_text(Key::Track, " 03 "), Ok(Some((n("03"), None))));
+        assert_eq!(
+            number_text(Key::Track, "03 / 12"),
+            Ok(Some((n("03"), Some(n("12")))))
+        );
+        assert_eq!(number_text(Key::Disc, ""), Ok(None));
+        assert!(number_text(Key::Track, "three").is_err());
+        assert!(number_text(Key::Track, "3/x").is_err());
+        assert!(number_text(Key::Year, "0").is_err());
+        assert!(number_text(Key::Year, "nineteen").is_err());
+        assert_eq!(number_text(Key::Year, "1999"), Ok(Some((n("1999"), None))));
+        assert!(Key::Year.takes("1987-05-01"));
     }
 
     /// A FLAC with a cover keeps it when a field is written (lofty writes
@@ -493,8 +555,20 @@ mod tests {
         assert_eq!(pictures(&file), 1);
         let mut changes: Changes = Default::default();
         changes.main[Key::Genre as usize] = Some("Metal".into());
+        changes.main[Key::Track as usize] = Some("03/12".into());
         write(&file, &changes).unwrap();
-        assert_eq!(read(&file).unwrap().main[Key::Genre as usize], "Metal");
+        let main = read(&file).unwrap().main;
+        assert_eq!(main[Key::Genre as usize], "Metal");
+        // lofty reads a FLAC's numbers as numbers; the comment keeps them
+        // as typed.
+        assert_eq!(main[Key::Track as usize], "3/12");
+        let mut f = std::fs::File::open(&file).unwrap();
+        let raw = ParseOptions::new().implicit_conversions(false);
+        let flac = lofty::flac::FlacFile::read_from(&mut f, raw).unwrap();
+        let comments = flac.vorbis_comments().unwrap();
+        assert_eq!(comments.get("TRACKNUMBER"), Some("03"));
+        assert_eq!(comments.get("TRACKTOTAL"), Some("12"));
+        drop(f);
         assert_eq!(pictures(&file), 1, "the cover is lost");
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -599,7 +673,7 @@ mod tests {
         let mut changes: Changes = Default::default();
         changes.main[Key::Title as usize] = Some("Edited title".into());
         changes.main[Key::AlbumArtist as usize] = Some("Various Artists".into());
-        changes.main[Key::Track as usize] = Some("7/9".into());
+        changes.main[Key::Track as usize] = Some("07/09".into());
         changes.other = vec![(ItemKey::Publisher, "Hansa; BMG".into())];
         write(&copy, &changes).unwrap();
         let read_back = read(&copy).unwrap();
@@ -615,7 +689,7 @@ mod tests {
         assert_eq!(is_id3v23(&copy), v23);
         assert_eq!(after[Key::Title as usize], "Edited title");
         assert_eq!(after[Key::AlbumArtist as usize], "Various Artists");
-        assert_eq!(after[Key::Track as usize], "7/9");
+        assert_eq!(after[Key::Track as usize], "07/09");
         assert_eq!(after[Key::Artist as usize], before[Key::Artist as usize]);
         assert_eq!(after[Key::Album as usize], before[Key::Album as usize]);
         // Every frame of the original is still there (TPE2 may be new).
