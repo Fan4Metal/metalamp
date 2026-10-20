@@ -154,7 +154,6 @@ pub fn show(ui: &mut Ui, now: &NowPlaying<'_>, icon: &TextureHandle) -> Vec<BarC
     // controls. Without them, the band fades into the cover below the
     // names, so the cover is hidden the least.
     let top = Rect::from_min_size(rect.min, vec2(rect.width(), TOP));
-    let mut room = top.width() - 24.0;
     if shown {
         painter.rect_filled(top, 0.0, ground);
         let back =
@@ -175,7 +174,6 @@ pub fn show(ui: &mut Ui, now: &NowPlaying<'_>, icon: &TextureHandle) -> Vec<BarC
         {
             cmds.push(BarCmd::Whole);
         }
-        room = back.left() - 6.0 - (top.left() + 12.0);
     } else {
         let fade = Rect::from_min_size(rect.min, vec2(rect.width(), TOP + 26.0));
         let mut mesh = egui::Mesh::default();
@@ -199,18 +197,21 @@ pub fn show(ui: &mut Ui, now: &NowPlaying<'_>, icon: &TextureHandle) -> Vec<BarC
     } else {
         ("MetalAMP", "")
     };
-    let title = crate::ui::elided(
-        &painter,
-        title.to_owned(),
-        FontId::proportional(13.5),
-        palette::text_bright(),
-        room,
-    );
-    painter.galley(
-        pos2(top.left() + 12.0, top.top() + 6.0),
-        title,
-        Color32::WHITE,
-    );
+    // Centred, with room kept alike on both sides (the way back's on the
+    // right while it is shown); a soft shadow of the ground under each
+    // line, so they read over any cover.
+    let side = if shown { 44.0 } else { 14.0 };
+    let room = (top.width() - 2.0 * side).max(20.0);
+    let line = |text: &str, size: f32, colour: Color32, y: f32| {
+        let font = FontId::proportional(size);
+        let shadow = palette::bar_bg().gamma_multiply(0.85);
+        let under = crate::ui::elided(&painter, text.to_owned(), font.clone(), shadow, room);
+        let galley = crate::ui::elided(&painter, text.to_owned(), font, colour, room);
+        let x = top.center().x - galley.size().x / 2.0;
+        painter.galley(pos2(x + 0.8, y + 1.0), under, shadow);
+        painter.galley(pos2(x, y), galley, colour);
+    };
+    line(title, 14.5, palette::text_bright(), top.top() + 4.0);
     if !artist.is_empty() {
         // Over the cover, a shade brighter than over the bar's ground.
         let shade = if shown {
@@ -218,18 +219,7 @@ pub fn show(ui: &mut Ui, now: &NowPlaying<'_>, icon: &TextureHandle) -> Vec<BarC
         } else {
             palette::text()
         };
-        let artist = crate::ui::elided(
-            &painter,
-            artist.to_owned(),
-            FontId::proportional(11.5),
-            shade,
-            room,
-        );
-        painter.galley(
-            pos2(top.left() + 12.0, top.top() + 25.0),
-            artist,
-            Color32::WHITE,
-        );
+        line(artist, 12.0, shade, top.top() + 24.0);
     }
 
     if !shown {
