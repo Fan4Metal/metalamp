@@ -54,7 +54,7 @@ pub struct Visualizer {
     gram_texture: Option<egui::TextureHandle>,
     /// What the texture shows: changed columns, colours or width make it
     /// anew.
-    gram_drawn: Option<(u64, [Color32; 4], usize)>,
+    gram_drawn: Option<(u64, palette::VisualPalette, Color32, usize)>,
     gram_count: u64,
     /// The oscilloscope's stretch of the wave.
     scope: Vec<f32>,
@@ -310,16 +310,22 @@ impl Visualizer {
         painter.hline(rect.x_range(), cy, Stroke::new(1.0, palette::line()));
         let mut mesh = Mesh::default();
         let n = self.wave.len();
+        let colours = palette::visual();
         for (i, &[peak, rms]) in self.wave.iter().enumerate() {
             let x1 = rect.right() - WAVE_PITCH * (n - 1 - i) as f32;
             let x0 = (x1 - WAVE_PITCH).max(rect.left());
             if x1 <= rect.left() {
                 continue;
             }
-            for (level, colour) in [
-                (peak, palette::spectrum_low()),
-                (rms, palette::spectrum_high()),
-            ] {
+            // The peak's shade around the RMS's: by their levels when the
+            // colours tell the level, else the floor's and the top's.
+            let place = (x0 - rect.left()) / rect.width();
+            let (outer, inner) = if colours.by_level() {
+                (colours.at(peak, place), colours.at(rms, place))
+            } else {
+                (colours.at(0.0, place), colours.at(1.0, place))
+            };
+            for (level, colour) in [(peak, outer), (rms, inner)] {
                 let h = (level * half).max(0.5);
                 quad(&mut mesh, x0, cy - h, x1, cy + h, colour);
             }
@@ -347,12 +353,30 @@ impl Visualizer {
                 pos2(x, y)
             })
             .collect();
-        // A glow under the line, as a tube's trace.
-        let glow = palette::spectrum_low().gamma_multiply(0.35);
-        painter.add(Shape::line(points.clone(), Stroke::new(4.0, glow)));
+        // A glow under the line, as a tube's trace; each point coloured by
+        // its place (a rainbow along the line) or, when the colours tell
+        // the level, by how far it swings.
+        let colours = palette::visual();
+        let colour_at = move |p: egui::Pos2, top: bool| {
+            let place = (p.x - rect.left()) / rect.width();
+            let level = if colours.by_level() {
+                ((p.y - cy).abs() / half.max(1.0)).sqrt()
+            } else if top {
+                1.0
+            } else {
+                0.0
+            };
+            colours.at(level, place)
+        };
+        painter.add(Shape::line(
+            points.clone(),
+            egui::epaint::PathStroke::new_uv(4.0, move |_, p| {
+                colour_at(p, false).gamma_multiply(0.35)
+            }),
+        ));
         painter.add(Shape::line(
             points,
-            Stroke::new(1.5, palette::spectrum_high()),
+            egui::epaint::PathStroke::new_uv(1.5, move |_, p| colour_at(p, true)),
         ));
     }
 
@@ -361,23 +385,42 @@ impl Visualizer {
             return;
         };
         let cap = columns(rect.width(), GRAM_PITCH);
-        let colours = [
-            palette::list_bg(),
-            palette::spectrum_low(),
-            palette::spectrum_high(),
-            palette::spectrum_peak(),
-        ];
+        let visual = palette::visual();
+        let ground = palette::list_bg();
+        // Each band's colours, from the ground up: the floor's, the top's
+        // and the peaks' at its place (a rainbow from the bass up), or
+        // along the level's when the colours tell it.
+        let colours: Vec<[Color32; 4]> = (0..rows)
+            .map(|band| {
+                let place = band as f32 / (rows - 1).max(1) as f32;
+                if visual.by_level() {
+                    [
+                        ground,
+                        visual.at(0.0, place),
+                        visual.at(0.6, place),
+                        visual.at(1.0, place),
+                    ]
+                } else {
+                    [
+                        ground,
+                        visual.at(0.0, place),
+                        visual.at(1.0, place),
+                        visual.peak(place),
+                    ]
+                }
+            })
+            .collect();
         // Also the width: resized while paused, it is drawn anew.
-        let drawn = (self.gram_count, colours, cap);
+        let drawn = (self.gram_count, visual, ground, cap);
         if self.gram_drawn != Some(drawn) || self.gram_texture.is_none() {
             // Right-aligned: the newest column at the right edge, the top
             // row the highest band.
-            let mut image = ColorImage::filled([cap, rows], colours[0]);
+            let mut image = ColorImage::filled([cap, rows], ground);
             let skip = cap.saturating_sub(self.gram.len());
             for (i, column) in self.gram.iter().enumerate().take(cap) {
                 for (band, &level) in column.iter().enumerate() {
                     let y = rows - 1 - band;
-                    image.pixels[y * cap + skip + i] = gram_colour(level, &colours);
+                    image.pixels[y * cap + skip + i] = gram_colour(level, &colours[band]);
                 }
             }
             match &mut self.gram_texture {

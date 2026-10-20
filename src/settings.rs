@@ -57,6 +57,8 @@ pub struct Settings {
     /// A click on the visualization goes on to the next one (the right
     /// button lists them either way).
     pub visual_click: bool,
+    /// The visualization's colours, apart from the theme's.
+    pub visual_colours: crate::palette::VisualColours,
     /// The folders of the media library.
     pub library_folders: Vec<PathBuf>,
     /// The views of the library (filters over its tracks, `library::filter`),
@@ -154,6 +156,7 @@ impl Settings {
             accent: self.accent,
             selection: self.selection,
             playing: self.playing,
+            visual: self.visual_colours,
         }
     }
 }
@@ -315,6 +318,7 @@ impl Default for Settings {
             window_layout: WindowLayout::default(),
             visual_enabled: true,
             visual_click: true,
+            visual_colours: Default::default(),
             library_folders: Vec::new(),
             views: Vec::new(),
             view: String::new(),

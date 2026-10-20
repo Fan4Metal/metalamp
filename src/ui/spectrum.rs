@@ -9,7 +9,7 @@
 use std::f32::consts::PI;
 use std::time::Instant;
 
-use egui::{Color32, Mesh, Painter, Rect, pos2};
+use egui::{Mesh, Painter, Rect, pos2};
 
 use crate::palette;
 
@@ -168,40 +168,39 @@ impl Analyzer {
         let pitch = rect.width() / bands as f32;
         let bar_w = (pitch - BAR_GAP).max(1.0);
         let top_room = rect.height() - PEAK_HEIGHT;
+        let colours = palette::visual();
         let mut mesh = Mesh::default();
         for (b, (&h, &(peak, _))) in self.bars.iter().zip(&self.peaks).enumerate() {
             let x0 = rect.left() + pitch * b as f32 + (pitch - bar_w) / 2.0;
             let x1 = x0 + bar_w;
+            // The band's place among them, for a rainbow.
+            let place = b as f32 / (bands - 1).max(1) as f32;
             if h > 0.0 {
                 let y1 = rect.bottom();
                 let y0 = y1 - top_room * h;
-                let top = lerp(palette::spectrum_low(), palette::spectrum_high(), h);
+                let (top, foot) = (colours.at(h, place), colours.at(0.0, place));
                 let i = mesh.vertices.len() as u32;
                 mesh.colored_vertex(pos2(x0, y0), top);
                 mesh.colored_vertex(pos2(x1, y0), top);
-                mesh.colored_vertex(pos2(x1, y1), palette::spectrum_low());
-                mesh.colored_vertex(pos2(x0, y1), palette::spectrum_low());
+                mesh.colored_vertex(pos2(x1, y1), foot);
+                mesh.colored_vertex(pos2(x0, y1), foot);
                 mesh.add_triangle(i, i + 1, i + 2);
                 mesh.add_triangle(i, i + 2, i + 3);
             }
             if peak > 0.0 {
                 let y = rect.bottom() - top_room * peak - PEAK_HEIGHT;
+                let colour = colours.peak(place);
                 let i = mesh.vertices.len() as u32;
-                mesh.colored_vertex(pos2(x0, y), palette::spectrum_peak());
-                mesh.colored_vertex(pos2(x1, y), palette::spectrum_peak());
-                mesh.colored_vertex(pos2(x1, y + PEAK_HEIGHT), palette::spectrum_peak());
-                mesh.colored_vertex(pos2(x0, y + PEAK_HEIGHT), palette::spectrum_peak());
+                mesh.colored_vertex(pos2(x0, y), colour);
+                mesh.colored_vertex(pos2(x1, y), colour);
+                mesh.colored_vertex(pos2(x1, y + PEAK_HEIGHT), colour);
+                mesh.colored_vertex(pos2(x0, y + PEAK_HEIGHT), colour);
                 mesh.add_triangle(i, i + 1, i + 2);
                 mesh.add_triangle(i, i + 2, i + 3);
             }
         }
         painter.add(mesh);
     }
-}
-
-fn lerp(a: Color32, b: Color32, t: f32) -> Color32 {
-    let c = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t).round() as u8;
-    Color32::from_rgb(c(a.r(), b.r()), c(a.g(), b.g()), c(a.b(), b.b()))
 }
 
 /// An in-place radix-2 FFT of `re.len()` points (a power of two), with

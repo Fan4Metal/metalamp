@@ -50,13 +50,174 @@ fn luminance(c: Color32) -> f32 {
 }
 
 /// What the palette is made of: the settings `theme`, `accent`,
-/// `selection` and `playing`.
+/// `selection`, `playing` and `visual_colours`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Look {
     pub theme: Theme,
     pub accent: Accent,
     pub selection: Tint,
     pub playing: Tint,
+    pub visual: VisualColours,
+}
+
+/// The visualization's colours, apart from the theme's: the accent's
+/// shades (the default), a rainbow across the frequencies, Winamp's green
+/// to red by the level, fire by the level, or the user's own colour's
+/// shades. Kept by name, `rainbow` or `#12AB9F`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum VisualColours {
+    #[default]
+    Accent,
+    Rainbow,
+    Winamp,
+    Fire,
+    /// `0xRRGGBB`, its shades mixed as the accent's.
+    Custom(u32),
+}
+
+impl From<String> for VisualColours {
+    fn from(name: String) -> Self {
+        VisualColours::from_name(&name).unwrap_or_default()
+    }
+}
+
+impl From<VisualColours> for String {
+    fn from(colours: VisualColours) -> Self {
+        colours.name()
+    }
+}
+
+impl VisualColours {
+    /// The ready ones (not the user's own).
+    pub const ALL: [VisualColours; 4] = [
+        VisualColours::Accent,
+        VisualColours::Rainbow,
+        VisualColours::Winamp,
+        VisualColours::Fire,
+    ];
+
+    pub fn name(self) -> String {
+        let name = match self {
+            VisualColours::Accent => "accent",
+            VisualColours::Rainbow => "rainbow",
+            VisualColours::Winamp => "winamp",
+            VisualColours::Fire => "fire",
+            VisualColours::Custom(c) => return format!("#{:06X}", c & 0xffffff),
+        };
+        name.to_owned()
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        if let Some([r, g, b]) = parse_hex(name) {
+            return Some(VisualColours::Custom(u32::from_be_bytes([0, r, g, b])));
+        }
+        Self::ALL.into_iter().find(|c| c.name() == name)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            VisualColours::Accent => tr!("Of the accent", "Из цвета акцента"),
+            VisualColours::Rainbow => tr!("Rainbow", "Радуга"),
+            VisualColours::Winamp => tr!("Winamp", "Как в Winamp"),
+            VisualColours::Fire => tr!("Fire", "Огонь"),
+            VisualColours::Custom(_) => tr!("Your own colour", "Свой цвет"),
+        }
+    }
+}
+
+/// Winamp's spectrum, by the level: green, yellow, red.
+const WINAMP_STOPS: [(f32, u32); 3] = [(0.0, 0x1c9e2a), (0.55, 0xd9cf26), (1.0, 0xe2311d)];
+/// Fire, by the level: a dark red, orange, yellow.
+const FIRE_STOPS: [(f32, u32); 3] = [(0.0, 0x5e0b02), (0.5, 0xe2520c), (1.0, 0xffdc55)];
+
+/// The visualization's colours in use: a colour for a height and a place
+/// across (`at`), and the peaks' (`peak`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VisualPalette {
+    pub colours: VisualColours,
+    /// The shades of the accent or the user's own colour: the floor, the
+    /// top, the peaks.
+    low: Color32,
+    high: Color32,
+    peak: Color32,
+    dark: bool,
+    text: Color32,
+}
+
+impl VisualPalette {
+    /// The colours tell the level (Winamp's, fire), not only the height:
+    /// a waveform's column, a scope's line are coloured by their loudness.
+    pub fn by_level(self) -> bool {
+        matches!(self.colours, VisualColours::Winamp | VisualColours::Fire)
+    }
+
+    /// The colour at `level` (0: the floor, 1: the top) and `place`
+    /// across (0: the lowest band or the left edge, 1: the highest or the
+    /// right edge).
+    pub fn at(self, level: f32, place: f32) -> Color32 {
+        let level = level.clamp(0.0, 1.0);
+        match self.colours {
+            VisualColours::Accent | VisualColours::Custom(_) => mix(self.low, self.high, level),
+            VisualColours::Rainbow => {
+                let hue = rainbow(place);
+                mix(
+                    mix(hue, Color32::BLACK, 0.3),
+                    mix(hue, Color32::WHITE, 0.2),
+                    level,
+                )
+            }
+            VisualColours::Winamp => along(&WINAMP_STOPS, level),
+            VisualColours::Fire => along(&FIRE_STOPS, level),
+        }
+    }
+
+    /// The peaks' colour at `place`.
+    pub fn peak(self, place: f32) -> Color32 {
+        match self.colours {
+            VisualColours::Accent | VisualColours::Custom(_) => self.peak,
+            VisualColours::Rainbow if self.dark => mix(rainbow(place), Color32::WHITE, 0.55),
+            VisualColours::Rainbow => mix(rainbow(place), Color32::BLACK, 0.35),
+            VisualColours::Winamp if self.dark => hex(0xd8d8d8),
+            VisualColours::Fire if self.dark => hex(0xfff0c0),
+            VisualColours::Winamp | VisualColours::Fire => self.text,
+        }
+    }
+}
+
+/// The rainbow's colour at `place` (0: red, 1: violet).
+fn rainbow(place: f32) -> Color32 {
+    let hue = place.clamp(0.0, 1.0) * 280.0;
+    // HSV at a saturation of 0.8 and full value.
+    let (s, v) = (0.8, 1.0);
+    let c = v * s;
+    let x = c * (1.0 - ((hue / 60.0) % 2.0 - 1.0).abs());
+    let (r, g, b) = match (hue / 60.0) as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    let to = |u: f32| ((u + m) * 255.0).round() as u8;
+    rgb(to(r), to(g), to(b))
+}
+
+/// The colour at `t` (0 to 1) of a gradient of `stops`.
+fn along(stops: &[(f32, u32)], t: f32) -> Color32 {
+    let i = stops
+        .windows(2)
+        .position(|w| t <= w[1].0)
+        .unwrap_or(stops.len() - 2);
+    let ((a, ca), (b, cb)) = (stops[i], stops[i + 1]);
+    mix(hex(ca), hex(cb), ((t - a) / (b - a)).clamp(0.0, 1.0))
+}
+
+/// The visualization's colours in use.
+pub fn visual() -> VisualPalette {
+    current().visual
 }
 
 /// The base of the look.
@@ -529,6 +690,7 @@ pub struct Palette {
     pub spectrum_low: Color32,
     pub spectrum_high: Color32,
     pub spectrum_peak: Color32,
+    pub visual: VisualPalette,
 }
 
 impl Palette {
@@ -538,6 +700,7 @@ impl Palette {
             accent,
             selection,
             playing,
+            visual,
         } = look;
         let mut p = match theme {
             Theme::Dark => Palette {
@@ -719,6 +882,8 @@ impl Palette {
         }
         let base = accent.base();
         let (white, black) = (Color32::WHITE, Color32::BLACK);
+        // The visualization's shades: the accent's, or the user's own.
+        let (mut low, mut high, mut peak) = (black, black, black);
         if p.dark {
             p.accent = base;
             p.accent_hover = mix(base, white, 0.16);
@@ -727,6 +892,14 @@ impl Palette {
             p.spectrum_low = mix(base, black, 0.22);
             p.spectrum_high = mix(base, white, 0.45);
             p.spectrum_peak = mix(p.text, base, 0.1);
+            if let VisualColours::Custom(c) = visual {
+                let own = hex(c);
+                (low, high, peak) = (
+                    mix(own, black, 0.22),
+                    mix(own, white, 0.45),
+                    mix(p.text, own, 0.1),
+                );
+            }
         } else {
             // On white the accent is a shade deeper, to be read.
             let deep = mix(base, black, 0.12);
@@ -737,7 +910,26 @@ impl Palette {
             p.spectrum_low = mix(base, black, 0.1);
             p.spectrum_high = mix(base, white, 0.25);
             p.spectrum_peak = mix(p.text, base, 0.3);
+            if let VisualColours::Custom(c) = visual {
+                let own = hex(c);
+                (low, high, peak) = (
+                    mix(own, black, 0.1),
+                    mix(own, white, 0.25),
+                    mix(p.text, own, 0.3),
+                );
+            }
         }
+        if !matches!(visual, VisualColours::Custom(_)) {
+            (low, high, peak) = (p.spectrum_low, p.spectrum_high, p.spectrum_peak);
+        }
+        p.visual = VisualPalette {
+            colours: visual,
+            low,
+            high,
+            peak,
+            dark: p.dark,
+            text: p.text,
+        };
         p.on_accent = if luminance(p.accent) > 0.32 {
             hex(0x1a1b1f)
         } else {
@@ -810,6 +1002,14 @@ impl Palette {
         spectrum_low: Color32::BLACK,
         spectrum_high: Color32::BLACK,
         spectrum_peak: Color32::BLACK,
+        visual: VisualPalette {
+            colours: VisualColours::Accent,
+            low: Color32::BLACK,
+            high: Color32::BLACK,
+            peak: Color32::BLACK,
+            dark: true,
+            text: Color32::WHITE,
+        },
     };
 }
 
@@ -870,9 +1070,6 @@ colours!(
     playing,
     selected_bg,
     selected_text,
-    spectrum_low,
-    spectrum_high,
-    spectrum_peak,
 );
 
 /// egui's visuals in the palette in use: egui's dark or light visuals as
@@ -930,12 +1127,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn visual_colours() {
+        for c in VisualColours::ALL.into_iter().chain([VisualColours::Custom(0x12ab9f)]) {
+            assert_eq!(VisualColours::from_name(&c.name()), Some(c));
+        }
+        assert_eq!(VisualColours::from(String::from("plaid")), VisualColours::Accent);
+        let of = |visual| Palette::of(Look { visual, ..Look::default() }).visual;
+        // The rainbow: red at the bass, violet at the top; the place
+        // matters, not for the others.
+        let rainbow = of(VisualColours::Rainbow);
+        let (bass, top) = (rainbow.at(1.0, 0.0), rainbow.at(1.0, 1.0));
+        assert!(bass.r() > bass.g() && bass.r() > bass.b(), "{bass:?}");
+        assert!(top.b() > top.g() && top.r() > top.g(), "{top:?}");
+        // Winamp's: green at the floor, red at the top, by the level.
+        let winamp = of(VisualColours::Winamp);
+        assert!(winamp.by_level() && !rainbow.by_level());
+        let (floor, loud) = (winamp.at(0.0, 0.3), winamp.at(1.0, 0.3));
+        assert!(floor.g() > floor.r() && loud.r() > loud.g());
+        assert_eq!(winamp.at(0.5, 0.0), winamp.at(0.5, 1.0));
+        // The accent's are the spectrum's shades as before; one's own
+        // colour's are mixed from it.
+        let accent = of(VisualColours::Accent);
+        let p = Palette::of(Look::default());
+        assert_eq!(accent.at(0.0, 0.5), p.spectrum_low);
+        assert_eq!(accent.at(1.0, 0.5), p.spectrum_high);
+        let own = of(VisualColours::Custom(0x2f7cf0));
+        let blue = own.at(1.0, 0.5);
+        assert!(blue.b() > blue.r(), "{blue:?}");
+    }
+
+    #[test]
     fn the_default_is_dark_amber_its_shades_amber_too() {
         let p = Palette::of(Look {
             theme: Theme::Dark,
             accent: Accent::Amber,
             selection: Tint::Accent,
             playing: Tint::Accent,
+            visual: VisualColours::Accent,
         });
         assert_eq!(p.accent, hex(0xf5a623));
         assert_eq!(p.list_bg, hex(0x16171a));
@@ -979,6 +1207,7 @@ mod tests {
                     accent: Accent::Amber,
                     selection,
                     playing: Tint::Accent,
+                    visual: VisualColours::Accent,
                 });
                 let what = format!("{theme:?} {selection:?}");
                 assert!(
@@ -996,6 +1225,7 @@ mod tests {
             accent: Accent::Amber,
             selection: Tint::Grey,
             playing: Tint::Accent,
+            visual: VisualColours::Accent,
         })
         .selected_bg;
         assert_eq!(
@@ -1004,7 +1234,8 @@ mod tests {
                 theme: Theme::Dark,
                 accent: Accent::Red,
                 selection: Tint::Grey,
-                playing: Tint::Accent
+                playing: Tint::Accent,
+                visual: VisualColours::Accent,
             })
             .selected_bg
         );
@@ -1013,7 +1244,8 @@ mod tests {
                 theme: Theme::Light,
                 accent: Accent::Amber,
                 selection: Tint::Custom(0x2b3442),
-                playing: Tint::Accent
+                playing: Tint::Accent,
+                visual: VisualColours::Accent,
             })
             .selected_bg,
             hex(0x2b3442)
@@ -1137,6 +1369,7 @@ mod tests {
                     accent,
                     selection: Tint::Accent,
                     playing: Tint::Accent,
+                    visual: VisualColours::Accent,
                 });
                 let what = format!("{theme:?} {accent:?}");
                 assert!(contrast(p.text, p.list_bg) >= 7.0, "{what}: text");

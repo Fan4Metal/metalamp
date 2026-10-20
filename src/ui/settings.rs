@@ -16,7 +16,7 @@ use crate::audio::output::Device;
 use crate::i18n::LangChoice;
 use crate::keymap::{Action, Chord, Group, Keymap};
 use crate::palette;
-use crate::palette::{Accent, Palette, Theme, Tint};
+use crate::palette::{Accent, Palette, Theme, Tint, VisualColours};
 use crate::settings::{BarLayout, EqPreset, MediaKeys, Settings, Visual, WindowLayout};
 use crate::ui::icons::{self, Icon};
 use crate::update::{Status, Updates, release_url, version_of};
@@ -1154,6 +1154,22 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
                 });
             },
         );
+        divider(ui);
+        row(
+            ui,
+            tr!("Visualization's colours", "Цвета визуализации"),
+            Some(tr!(
+                "Apart from the theme: the accent's shades, a rainbow across the frequencies, Winamp's green to red or fire by the level, or one's own colour's shades.",
+                "Отдельно от темы: оттенки акцента, радуга по частотам, зелёный-жёлтый-красный как в Winamp или огонь по уровню, либо оттенки своего цвета."
+            )),
+            ACCENTS_WIDTH,
+            |ui| {
+                let look = settings.look();
+                ui.add_enabled_ui(settings.visual_enabled, |ui| {
+                    visual_colours(ui, &mut settings.visual_colours, look);
+                });
+            },
+        );
     });
     section(ui, tr!("Media keys", "Медиаклавиши"), |ui| {
         row(
@@ -1891,6 +1907,59 @@ fn tints(
     }
 }
 
+/// The visualization's colours as round swatches, each painted with its
+/// gradient (`gradient_disc`: up the level, across the place), the chosen
+/// one ringed; last the user's own colour, its picker starting from the
+/// accent.
+fn visual_colours(ui: &mut Ui, colours: &mut VisualColours, look: palette::Look) {
+    ui.spacing_mut().item_spacing.x = 5.0;
+    let mut own = match *colours {
+        VisualColours::Custom(c) => Accent::Custom(c),
+        _ => {
+            let c = look.accent.base();
+            custom([c.r(), c.g(), c.b()])
+        }
+    };
+    let chosen = matches!(colours, VisualColours::Custom(_));
+    if own_colour(ui, &mut own, chosen)
+        && let Accent::Custom(c) = own
+    {
+        *colours = VisualColours::Custom(c);
+    }
+    for &c in VisualColours::ALL.iter().rev() {
+        let (rect, response) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
+        let response = response.on_hover_text(c.label());
+        let shades = Palette::of(palette::Look { visual: c, ..look }).visual;
+        swatch(ui, rect, *colours == c, response.hovered(), |p, centre, r| {
+            gradient_disc(p, centre, r, shades);
+        });
+        if response.clicked() {
+            *colours = c;
+        }
+    }
+}
+
+/// A disc of `shades`' colours: the level up, the place across.
+fn gradient_disc(painter: &egui::Painter, centre: egui::Pos2, r: f32, shades: palette::VisualPalette) {
+    let colour = |p: egui::Pos2| {
+        let level = (centre.y + r - p.y) / (2.0 * r);
+        let place = (p.x - centre.x + r) / (2.0 * r);
+        shades.at(level, place)
+    };
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(centre, colour(centre));
+    const STEPS: u32 = 32;
+    for i in 0..=STEPS {
+        let a = i as f32 / STEPS as f32 * std::f32::consts::TAU;
+        let p = centre + vec2(a.cos(), a.sin()) * r;
+        mesh.colored_vertex(p, colour(p));
+        if i > 0 {
+            mesh.add_triangle(0, i, i + 1);
+        }
+    }
+    painter.add(mesh);
+}
+
 /// The width of the own colour's picker, its square and its hue bar.
 const PICKER: f32 = 180.0;
 
@@ -2201,6 +2270,7 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     settings.visualization = d.visualization;
     settings.visual_enabled = d.visual_enabled;
     settings.visual_click = d.visual_click;
+    settings.visual_colours = d.visual_colours;
     settings.theme = d.theme;
     settings.accent = d.accent;
     settings.selection = d.selection;
