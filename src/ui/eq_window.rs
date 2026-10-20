@@ -162,7 +162,7 @@ impl EqWindow {
         // The limiter after the bands: a raised band is heard with it.
         ui.add_space(4.0);
         crate::ui::settings::divider(ui);
-        crate::ui::settings::limiter(ui, dsp);
+        crate::ui::settings::limiter(ui, dsp, false);
         close
     }
 

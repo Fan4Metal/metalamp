@@ -1293,7 +1293,7 @@ fn processing(
             |ui| switch(ui, &mut dsp.normalize),
         );
         divider(ui);
-        limiter(ui, dsp);
+        limiter(ui, dsp, true);
     });
     section(ui, tr!("Equalizer", "Эквалайзер"), |ui| {
         ui.add_space(8.0);
@@ -1386,18 +1386,25 @@ fn processing(
     });
 }
 
-/// The limiter's row: here under the loudness, and in the equalizer's
-/// window under the bands (`ui::eq_window`).
-pub(crate) fn limiter(ui: &mut Ui, dsp: &mut DspSettings) {
+/// The limiter's row: here under the loudness with its hint, and in the
+/// equalizer's window under the bands (`ui::eq_window`) with the hint as
+/// the switch's tip (`hint` false).
+pub(crate) fn limiter(ui: &mut Ui, dsp: &mut DspSettings, hint: bool) {
+    let text = tr!(
+        "Holds the peaks at -1 dBFS after the processing, so raised bands, preamp or enhancer never clip; a raised preamp then makes a loud track denser rather than louder. Turned off, a raise is heard in full, and what passes full scale is clipped by Windows.",
+        "Держит пики на -1 dBFS после обработки, чтобы поднятые полосы, предусиление или улучшение звука не клиповали; поднятое предусиление тогда делает громкий трек плотнее, а не громче. Если его выключить, подъём слышен целиком, а то, что выходит за полную шкалу, обрезает Windows."
+    );
     row(
         ui,
         tr!("Limiter", "Лимитер"),
-        Some(tr!(
-            "Holds the peaks at -1 dBFS after the processing, so raised bands, preamp or enhancer never clip; a raised preamp then makes a loud track denser rather than louder. Turned off, a raise is heard in full, and what passes full scale is clipped by Windows.",
-            "Держит пики на -1 dBFS после обработки, чтобы поднятые полосы, предусиление или улучшение звука не клиповали; поднятое предусиление тогда делает громкий трек плотнее, а не громче. Если его выключить, подъём слышен целиком, а то, что выходит за полную шкалу, обрезает Windows."
-        )),
+        hint.then_some(text),
         50.0,
-        |ui| switch(ui, &mut dsp.limiter),
+        |ui| {
+            let response = switch(ui, &mut dsp.limiter);
+            if !hint {
+                response.on_hover_text(text);
+            }
+        },
     );
 }
 
