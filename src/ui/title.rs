@@ -22,19 +22,9 @@ pub enum TitleCmd {
     ToggleMaximize,
     Close,
     About,
-    /// The player and playlist layout, or the library's (the window
-    /// layout's key).
-    Layout,
     /// The mini player: the cover and the least of the controls, over
     /// the other windows (Ctrl+M).
     Mini,
-}
-
-/// The modes the title row's own buttons show lit.
-#[derive(Clone, Copy, Default)]
-pub struct Modes {
-    /// The player and playlist layout, without the library.
-    pub alone: bool,
 }
 
 /// `update` is the tag of a newer release, shown as a button left of
@@ -45,7 +35,6 @@ pub fn row(
     maximized: bool,
     icon: &TextureHandle,
     update: Option<&str>,
-    modes: Modes,
 ) -> Option<TitleCmd> {
     let rect = ui.max_rect();
     ui.painter().rect_filled(rect, 0.0, palette::title_bg());
@@ -138,60 +127,33 @@ pub fn row(
         }
     }
 
-    // The mini player and the layout without the library, left of the
-    // window's own: narrower, lit in the accent while on. ("Over the
-    // others" is Ctrl+T's.)
-    let toggles = [
-        (
-            TitleCmd::Mini,
-            Icon::Mini,
-            false,
-            with_key(tr!("Mini player", "Мини-плеер"), Cmd::Mini),
-        ),
-        (
-            TitleCmd::Layout,
-            Icon::PlaylistLayout,
-            modes.alone,
-            with_key(
-                if modes.alone {
-                    tr!(
-                        "Back to the library",
-                        "Вернуться к библиотеке"
-                    )
-                } else {
-                    tr!(
-                        "Without the library: the player and the playlist",
-                        "Без библиотеки: плеер и плейлист"
-                    )
-                },
-                Cmd::WindowLayout,
-            ),
-        ),
-    ];
-    for (kind, icon, on, tip) in toggles {
+    // The mini player, left of the window's own: narrower. ("Over the
+    // others" is Ctrl+T's, the layout without the library its key's.)
+    {
         let r = Rect::from_min_max(pos2(right - 36.0, rect.top()), pos2(right, rect.bottom()));
         right = r.left();
-        let response = ui.interact(r, ui.id().with(("title_toggle", icon)), Sense::CLICK);
+        let response = ui.interact(r, ui.id().with("title_mini"), Sense::CLICK);
         if response.hovered() {
             ui.painter().rect_filled(r, 0.0, palette::hover());
         }
-        let color = if on {
-            palette::accent()
-        } else if response.hovered() {
+        let color = if response.hovered() {
             palette::text_bright()
         } else {
             palette::text_weak()
         };
         icons::paint(
             ui.painter(),
-            icon,
+            Icon::Mini,
             r.center(),
             13.0,
             color,
             palette::title_bg(),
         );
-        if response.on_hover_text(tip).clicked() {
-            cmd = Some(kind);
+        if response
+            .on_hover_text(with_key(tr!("Mini player", "Мини-плеер"), Cmd::Mini))
+            .clicked()
+        {
+            cmd = Some(TitleCmd::Mini);
         }
     }
 
