@@ -1567,14 +1567,19 @@ fn album_menu(
                 });
             }
         }
+        // The file info editing the album's tracks at once.
+        Some(MenuChoice::EditTags) if album.is_some() => {
+            actions.push(LibraryAction::EditTags(album_tracks(library, view, album)));
+        }
         _ => {}
     }
 }
 
-/// An album's menu goes to its artist; the menu of every album shown, not.
+/// An album's menu goes to its artist and edits its tags; the menu of
+/// every album shown, neither.
 fn album_extras(album: Option<AlbumId>) -> &'static [MenuChoice] {
     if album.is_some() {
-        &[MenuChoice::GoToArtist]
+        &[MenuChoice::GoToArtist, MenuChoice::EditTags]
     } else {
         &[]
     }
