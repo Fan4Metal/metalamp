@@ -578,6 +578,10 @@ impl Player<'_> {
         let Some(seg) = self.heard() else { return };
         let (id, path, gain) = (seg.id, seg.path.clone(), seg.gain);
         let paused = self.paused;
+        // Its start already told; a seek right after its Play (taking up
+        // where the last run left off) comes before that, and the start is
+        // still news: the player preloads the next track on it.
+        let announced = self.heard_id == Some(id);
         let open = match self.decoding.take() {
             Some(d) if d.id == id => Ok(d),
             ahead => {
@@ -595,7 +599,7 @@ impl Player<'_> {
                 self.begin(open, from_ms);
                 self.paused = paused;
                 // Started again for the same track: not news.
-                self.heard_id = Some(id);
+                self.heard_id = announced.then_some(id);
             }
             Err(e) => {
                 self.stop();
@@ -1199,5 +1203,39 @@ mod tests {
             position > 300,
             "the position stands at {position} ms: still paused"
         );
+    }
+
+    /// A Play with a Seek right after it (taking up where the last run
+    /// left off) is still `Started`: without it the player preloaded
+    /// nothing and stopped at the track's end. `METALAMP_SAMPLE` as above.
+    #[test]
+    #[ignore = "needs METALAMP_SAMPLE and a sound device; plays a second"]
+    fn play_and_seek_is_started() {
+        use std::time::Instant;
+        let file = PathBuf::from(std::env::var("METALAMP_SAMPLE").expect("METALAMP_SAMPLE"));
+        let engine = Engine::start(
+            egui::Context::default(),
+            String::new(),
+            dsp::DspSettings::default(),
+        );
+        engine.set_gain(0.05);
+        engine.send(Cmd::Play {
+            id: 1,
+            path: file,
+            gain: 1.0,
+        });
+        engine.send(Cmd::Seek(10_000));
+        let until = Instant::now() + Duration::from_secs(5);
+        let mut started = false;
+        while !started && Instant::now() < until {
+            for e in engine.poll() {
+                println!("{e:?} at {} ms", engine.position_ms());
+                assert!(!matches!(e, Event::Failed { .. }), "{e:?}");
+                started |= matches!(e, Event::Started { id: 1 });
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        engine.send(Cmd::Stop);
+        assert!(started, "no Started for a play sought at once");
     }
 }
