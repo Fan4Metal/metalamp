@@ -14,6 +14,7 @@ mod audio;
 mod bench;
 mod caption;
 mod covers;
+mod dialog;
 mod filetypes;
 mod format;
 mod frameless;

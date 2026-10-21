@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use egui::{Key, Modifiers};
 
+use crate::dialog::{self, Ask};
 use crate::library::Library;
 use crate::library::scan::{Scan, ScanMsg, Wake};
 use crate::settings::{Settings, WindowLayout, WindowPlace};
@@ -88,6 +89,8 @@ pub struct App {
     info_request: Option<PathBuf>,
     /// The editor of the library's views.
     view_editor: crate::ui::view_editor::ViewEditor,
+    /// The file dialog open, on a thread of its own (`dialog.rs`).
+    dialogs: crate::dialog::Dialogs,
     /// The plays and ratings, and the clock of the track heard.
     pub(crate) stats: crate::stats::Stats,
     listening: crate::stats::Listening,
@@ -236,6 +239,7 @@ impl App {
             file_info: crate::ui::info::InfoView::default(),
             info_request: None,
             view_editor: crate::ui::view_editor::ViewEditor::default(),
+            dialogs: crate::dialog::Dialogs::default(),
             stats: crate::stats::Stats::load(),
             listening: crate::stats::Listening::default(),
             eq_window: crate::ui::eq_window::EqWindow::from_env(),
@@ -363,12 +367,12 @@ impl App {
         self.rescan();
     }
 
-    fn library_action(&mut self, action: crate::ui::library::LibraryAction, frame: &eframe::Frame) {
+    fn library_action(&mut self, action: crate::ui::library::LibraryAction, ctx: &egui::Context) {
         use crate::ui::library::LibraryAction;
         match action {
             LibraryAction::Rescan => self.rescan(),
             LibraryAction::ReadAll => self.read_all(),
-            LibraryAction::AddFolder => self.pick_folder(frame),
+            LibraryAction::AddFolder => self.pick_folder(ctx),
             LibraryAction::RemoveFolder(i) => {
                 if i < self.settings.library_folders.len() {
                     self.settings.library_folders.remove(i);
@@ -694,7 +698,6 @@ impl App {
         &mut self,
         actions: Vec<crate::ui::playlist::PlaylistAction>,
         ctx: &egui::Context,
-        frame: &mut eframe::Frame,
     ) {
         for action in actions {
             match action {
@@ -756,7 +759,7 @@ impl App {
                     self.playlist_view.list_playlists_again();
                     self.place_changed = Some(Instant::now());
                 }
-                crate::ui::playlist::PlaylistAction::Export => self.export_playlist(frame),
+                crate::ui::playlist::PlaylistAction::Export => self.export_playlist(ctx),
                 crate::ui::playlist::PlaylistAction::EditTags(indices) => {
                     let paths = self.playlist_paths(&indices);
                     self.file_info.open(ctx, paths, true);
@@ -778,7 +781,7 @@ impl App {
     }
 
     /// What a key of the keymap asks for.
-    fn run_key(&mut self, cmd: crate::keymap::Cmd, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    fn run_key(&mut self, cmd: crate::keymap::Cmd, ctx: &egui::Context) {
         use crate::keymap::Cmd;
         match cmd {
             Cmd::PlayPause => self.player.toggle_pause(),
@@ -872,8 +875,8 @@ impl App {
                 self.library_view.focus_search = true;
                 self.settings.mini = false;
             }
-            Cmd::Open => self.open_files(frame),
-            Cmd::AddFolder => self.pick_folder(frame),
+            Cmd::Open => self.open_files(ctx),
+            Cmd::AddFolder => self.pick_folder(ctx),
             Cmd::Rescan => self.rescan(),
             Cmd::Info => self.info_request = self.info_path(),
             // The selection of the playlist when it has the keys, else of
@@ -935,28 +938,56 @@ impl App {
         }
     }
 
-    /// Open files to play (Ctrl+O): they replace the playlist.
-    fn open_files(&mut self, frame: &eframe::Frame) {
-        let mut extensions: Vec<&str> = crate::filetypes::AUDIO_EXTENSIONS.to_vec();
-        extensions.extend(["m3u8", "m3u"]);
-        let dialog = rfd::FileDialog::new()
-            .set_title(tr!("Open files", "Открыть файлы"))
-            .add_filter(tr!("Audio and playlists", "Аудио и плейлисты"), &extensions)
-            .set_parent(frame);
-        if let Some(files) = dialog.pick_files() {
-            let files = expand_playlists(files);
-            self.player.play_paths(files, 0);
+    /// Show a file dialog (`dialog.rs`); its answer comes to
+    /// [`Self::answer`].
+    fn ask(
+        &mut self,
+        ctx: &egui::Context,
+        ask: Ask,
+        make: impl FnOnce() -> rfd::FileDialog + Send + 'static,
+        run: fn(rfd::FileDialog) -> Vec<PathBuf>,
+    ) {
+        self.dialogs.start(ctx, self.hwnd, ask, make, run);
+    }
+
+    /// What a file dialog's paths were chosen for.
+    fn answer(&mut self, answer: dialog::Answer) {
+        let Some(path) = answer.paths.first().cloned() else {
+            return;
+        };
+        match answer.ask {
+            Ask::Open => {
+                let files = expand_playlists(answer.paths);
+                self.player.play_paths(files, 0);
+            }
+            Ask::AddFolder => self.add_folder(path),
+            Ask::SavePlaylist => {
+                if let Err(e) = std::fs::write(&path, self.playlist_m3u8()) {
+                    log::warn!("cannot write {}: {e}", path.display());
+                }
+            }
+            Ask::ViewFolder(rule) => self.view_editor.set_folder(rule, &path),
         }
     }
 
+    /// Open files to play (Ctrl+O): they replace the playlist.
+    fn open_files(&mut self, ctx: &egui::Context) {
+        let make = || {
+            let mut extensions: Vec<&str> = crate::filetypes::AUDIO_EXTENSIONS.to_vec();
+            extensions.extend(["m3u8", "m3u"]);
+            rfd::FileDialog::new()
+                .set_title(tr!("Open files", "Открыть файлы"))
+                .add_filter(tr!("Audio and playlists", "Аудио и плейлисты"), &extensions)
+        };
+        self.ask(ctx, Ask::Open, make, dialog::pick_files);
+    }
+
     /// Ask for a folder to add (Ctrl+Shift+O).
-    fn pick_folder(&mut self, frame: &eframe::Frame) {
-        let dialog = rfd::FileDialog::new()
-            .set_title(tr!("Add a music folder", "Добавить папку с музыкой"))
-            .set_parent(frame);
-        if let Some(folder) = dialog.pick_folder() {
-            self.add_folder(folder);
-        }
+    fn pick_folder(&mut self, ctx: &egui::Context) {
+        let make = || {
+            rfd::FileDialog::new().set_title(tr!("Add a music folder", "Добавить папку с музыкой"))
+        };
+        self.ask(ctx, Ask::AddFolder, make, dialog::pick_folder);
     }
 
     /// Folders dropped on the window go into the library.
@@ -1118,17 +1149,14 @@ impl App {
     }
 
     /// The playlist saved to a file chosen in Windows' dialog.
-    fn export_playlist(&self, frame: &eframe::Frame) {
-        let dialog = rfd::FileDialog::new()
-            .set_title(tr!("Save the playlist", "Сохранить плейлист"))
-            .add_filter("M3U8", &["m3u8"])
-            .set_file_name(tr!("Playlist.m3u8", "Плейлист.m3u8"))
-            .set_parent(frame);
-        if let Some(path) = dialog.save_file()
-            && let Err(e) = std::fs::write(&path, self.playlist_m3u8())
-        {
-            log::warn!("cannot write {}: {e}", path.display());
-        }
+    fn export_playlist(&mut self, ctx: &egui::Context) {
+        let make = || {
+            rfd::FileDialog::new()
+                .set_title(tr!("Save the playlist", "Сохранить плейлист"))
+                .add_filter("M3U8", &["m3u8"])
+                .set_file_name(tr!("Playlist.m3u8", "Плейлист.m3u8"))
+        };
+        self.ask(ctx, Ask::SavePlaylist, make, dialog::save_file);
     }
 
     fn remember_playlist(&mut self, now: bool) {
@@ -1571,6 +1599,9 @@ impl eframe::App for App {
         }
         self.take_hooked(ctx);
         self.take_handed_over();
+        if let Some(answer) = self.dialogs.take() {
+            self.answer(answer);
+        }
         self.remember_playlist(false);
         if self.player.poll().track {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
@@ -1615,7 +1646,7 @@ impl eframe::App for App {
     // egui 0.36: `ui` with the root `Ui`, not `update(ctx)`; panels are
     // `egui::Panel::top/left/right/bottom(id).show(ui, …)` and
     // `CentralPanel::default()` / `CentralPanel::no_frame()`.
-    fn ui(&mut self, root_ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+    fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = root_ui.ctx().clone();
         self.uncloak(&ctx);
         // `METALAMP_INFO=<file>`: the file info at start (GUI checks).
@@ -1675,7 +1706,7 @@ impl eframe::App for App {
                     && !(naming && *chord == space)
             });
             for cmd in cmds {
-                self.run_key(cmd, &ctx, frame);
+                self.run_key(cmd, &ctx);
             }
             // Esc leaves the mini player.
             if self.settings.mini
@@ -1785,7 +1816,7 @@ impl eframe::App for App {
                 self.place_changed = Some(Instant::now());
             }
             self.playlist_view.focused = true;
-            self.playlist_actions(panel.inner, &ctx, frame);
+            self.playlist_actions(panel.inner, &ctx);
         // Also beside the start screen: files opened from Explorer, Ctrl+O
         // or dropped play without a library.
         } else if self.settings.playlist_visible && !mini {
@@ -1823,7 +1854,7 @@ impl eframe::App for App {
             {
                 self.playlist_view.focused = panel.response.rect.contains(p);
             }
-            self.playlist_actions(panel.inner, &ctx, frame);
+            self.playlist_actions(panel.inner, &ctx);
         } else {
             self.playlist_view.hidden();
         }
@@ -1856,7 +1887,7 @@ impl eframe::App for App {
                         self.place_changed = Some(Instant::now());
                     }
                     for action in actions {
-                        self.library_action(action, frame);
+                        self.library_action(action, &ctx);
                     }
                     return;
                 }
@@ -1890,7 +1921,7 @@ impl eframe::App for App {
             self.hwnd,
         );
         for cmd in std::mem::take(&mut self.eq_window.cmds) {
-            self.run_key(cmd, &ctx, frame);
+            self.run_key(cmd, &ctx);
         }
         if self.settings.dsp != before.0 {
             self.player.set_dsp(&self.settings.dsp);
@@ -1905,9 +1936,15 @@ impl eframe::App for App {
         self.about.show(&ctx);
         if self
             .view_editor
-            .show(&ctx, &mut self.settings, &self.library, &self.stats, frame)
+            .show(&ctx, &mut self.settings, &self.library, &self.stats)
         {
             self.place_changed = Some(Instant::now());
+        }
+        if let Some(rule) = self.view_editor.browse.take() {
+            let make = || {
+                rfd::FileDialog::new().set_title(tr!("Folder of the view", "Папка представления"))
+            };
+            self.ask(&ctx, Ask::ViewFolder(rule), make, dialog::pick_folder);
         }
         let changed =
             self.settings_dialog

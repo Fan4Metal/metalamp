@@ -39,6 +39,10 @@ pub struct ViewEditor {
     /// The counts, and the draft, statistics and library they were
     /// counted for.
     counted: Option<(Filter, u64, Shape, Counts)>,
+    /// The rule whose folder button was clicked: the app shows the
+    /// dialog (on a thread of its own, `dialog.rs`) and gives the folder
+    /// back through [`ViewEditor::set_folder`].
+    pub browse: Option<usize>,
 }
 
 /// The values the library holds, offered for a rule's value.
@@ -155,6 +159,16 @@ impl ViewEditor {
         self.editing = editing;
         self.suggestions = Suggestions::of(library, folders);
         self.counted = None;
+        self.browse = None;
+    }
+
+    /// The folder chosen for rule `rule`'s value.
+    pub fn set_folder(&mut self, rule: usize, folder: &std::path::Path) {
+        if self.open
+            && let Some(rule) = self.draft.rules.get_mut(rule)
+        {
+            rule.value = folder.to_string_lossy().into_owned();
+        }
     }
 
     /// The counts for the draft as it is, counted anew only when it
@@ -201,7 +215,6 @@ impl ViewEditor {
         settings: &mut Settings,
         library: &Library,
         stats: &Stats,
-        frame: &eframe::Frame,
     ) -> bool {
         if !self.open {
             return false;
@@ -319,8 +332,10 @@ impl ViewEditor {
                         let mut remove = None;
                         let several = self.draft.rules.len() > 1;
                         for (i, rule) in self.draft.rules.iter_mut().enumerate() {
-                            if rule_row(ui, i, rule, &self.suggestions, several, frame) {
-                                remove = Some(i);
+                            match rule_row(ui, i, rule, &self.suggestions, several) {
+                                RowClick::Remove => remove = Some(i),
+                                RowClick::Browse => self.browse = Some(i),
+                                RowClick::None => {}
                             }
                         }
                         if let Some(i) = remove {
@@ -465,17 +480,27 @@ impl ViewEditor {
     }
 }
 
+/// What was clicked in a rule's row.
+enum RowClick {
+    None,
+    /// The minus.
+    Remove,
+    /// The folder's browse button.
+    Browse,
+}
+
 /// One rule's row: the field, the operation, the value as the field
-/// takes it, and a minus that removes the row (true when clicked).
+/// takes it (a folder with a browse button), and a minus that removes
+/// the row.
 fn rule_row(
     ui: &mut Ui,
     i: usize,
     rule: &mut Rule,
     suggestions: &Suggestions,
     removable: bool,
-    frame: &eframe::Frame,
-) -> bool {
+) -> RowClick {
     let mut remove = false;
+    let mut browse = false;
     ui.horizontal(|ui| {
         let mut field = rule.field;
         egui::ComboBox::from_id_salt(("view_field", i))
@@ -512,8 +537,8 @@ fn rule_row(
         match kind {
             Kind::Text | Kind::Folder if rule.op.values() > 0 => {
                 let list = suggestions.for_field(rule.field);
-                let browse = kind == Kind::Folder;
-                let tools = usize::from(list.is_some()) + usize::from(browse);
+                let browse_button = kind == Kind::Folder;
+                let tools = usize::from(list.is_some()) + usize::from(browse_button);
                 let width = room - tools as f32 * (TOOL + spacing);
                 let hint = match kind {
                     Kind::Folder => tr!(r"D:\Music\Soundtracks", r"D:\Музыка\Саундтреки"),
@@ -527,20 +552,14 @@ fn rule_row(
                 if let Some(list) = list {
                     suggestion_menu(ui, i, &mut rule.value, list);
                 }
-                if browse
-                    && tool(
+                if browse_button {
+                    browse = tool(
                         ui,
                         tr!("Choose a folder…", "Выбрать папку…"),
                         true,
                         Icon::Folder,
                     )
-                    .clicked()
-                    && let Some(folder) = rfd::FileDialog::new()
-                        .set_title(tr!("Folder of the view", "Папка представления"))
-                        .set_parent(frame)
-                        .pick_folder()
-                {
-                    rule.value = folder.to_string_lossy().into_owned();
+                    .clicked();
                 }
             }
             Kind::Number => {
@@ -562,7 +581,13 @@ fn rule_row(
             .clicked();
         });
     });
-    remove
+    if remove {
+        RowClick::Remove
+    } else if browse {
+        RowClick::Browse
+    } else {
+        RowClick::None
+    }
 }
 
 /// One of the views' icons to choose: the chosen one in its `colour` on
