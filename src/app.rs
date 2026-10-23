@@ -105,6 +105,8 @@ pub struct App {
     /// without one.
     mini_cover: crate::ui::mini::Cover,
     mini_icon: Option<egui::TextureHandle>,
+    /// The file heard when the library does not hold it, read.
+    outside: crate::library::outside::Outside,
     /// Back from the mini player, the window not grown yet: the whole
     /// window's panels wait, else the playlist and the library's panes
     /// took the mini player's size as their own (at most 1 s).
@@ -248,6 +250,7 @@ impl App {
             applied_modes: None,
             layout_after_mini: false,
             mini_cover: Default::default(),
+            outside: Default::default(),
             mini_icon: None,
             growing: None,
             kept_for_the_end: Instant::now(),
@@ -443,9 +446,34 @@ impl App {
         self.library.track_at(path)
     }
 
+    /// The track heard, else the playlist's current one: the library's,
+    /// else the file's as read (`outside`) once it is.
+    fn shown_track(&self) -> Option<&crate::library::Track> {
+        let path = self
+            .player
+            .playing_path()
+            .or_else(|| self.player.queue.current_entry().map(|e| &e.path))?;
+        match self.library.track_at(path) {
+            Some(id) => self.library.tracks.get(id as usize),
+            None => self.outside.track(path),
+        }
+    }
+
+    /// Follows the file heard (or the playlist's current one) when the
+    /// library does not hold it.
+    fn follow_outside(&mut self, ctx: &egui::Context) {
+        let path = self
+            .player
+            .playing_path()
+            .or_else(|| self.player.queue.current_entry().map(|e| &e.path))
+            .filter(|p| self.library.track_at(p).is_none())
+            .cloned();
+        self.outside.follow(ctx, path.as_deref());
+    }
+
     /// The title and the second line of the player bar: the track heard,
-    /// else the playlist's current one; from the library, else the file's
-    /// name.
+    /// else the playlist's current one; from the library or the file's
+    /// tags, else the file's name.
     fn now_playing(&self) -> (String, String, Option<crate::library::TrackId>) {
         let path = self
             .player
@@ -454,9 +482,13 @@ impl App {
         let Some(path) = path else {
             return (String::new(), String::new(), None);
         };
-        match self.library.track_at(path) {
-            Some(id) => {
-                let t = &self.library.tracks[id as usize];
+        let id = self.library.track_at(path);
+        let track = match id {
+            Some(id) => self.library.tracks.get(id as usize),
+            None => self.outside.track(path),
+        };
+        match track {
+            Some(t) => {
                 let artist = if t.artist.is_empty() {
                     crate::library::unknown_artist().to_owned()
                 } else {
@@ -469,7 +501,7 @@ impl App {
                         second += &format!(" ({})", t.year);
                     }
                 }
-                (t.title.clone(), second, Some(id))
+                (t.title.clone(), second, id)
             }
             None => (
                 path.file_stem()
@@ -513,11 +545,13 @@ impl App {
             .cloned()
     }
 
-    /// The cover of the track heard (else of the playlist's current one),
-    /// when it is in the library.
+    /// The cover of the track heard (else of the playlist's current one):
+    /// the library's thumbnail, else the file's own as read.
     fn playing_cover(&mut self, ctx: &egui::Context) -> Option<egui::TextureHandle> {
         let (_, _, track) = self.now_playing();
-        let t = track?;
+        let Some(t) = track else {
+            return self.outside.cover();
+        };
         let album = &self.library.albums[self.library.album_of[t as usize] as usize];
         self.library_view.covers.get(ctx, &self.library, album)
     }
@@ -525,11 +559,11 @@ impl App {
     /// The mini player in the whole window.
     fn mini_player(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        let (title, artist, track) = self.now_playing();
+        let (title, artist, _) = self.now_playing();
         let path = self.playing_or_current_path();
         let cover = self.mini_cover.of(&ctx, path.as_deref());
         let icon = crate::ui::app_icon(&ctx, 128.0, &mut self.mini_icon);
-        let now = self.now_shown(&title, &artist, track, cover);
+        let now = self.now_shown(&title, &artist, cover);
         let cmds = crate::ui::mini::show(ui, &now, &icon);
         self.bar_commands(cmds);
     }
@@ -548,12 +582,11 @@ impl App {
         &self,
         title: &'a str,
         artist: &'a str,
-        track: Option<crate::library::TrackId>,
         cover: Option<egui::TextureHandle>,
     ) -> crate::ui::player_bar::NowPlaying<'a> {
-        let (bitrate, sample_rate, channels) = track
-            .and_then(|t| self.library.tracks.get(t as usize))
-            .map_or((0, 0, 0), |t| (t.bitrate, t.sample_rate, t.channels));
+        let track = self.shown_track();
+        let (bitrate, sample_rate, channels) =
+            track.map_or((0, 0, 0), |t| (t.bitrate, t.sample_rate, t.channels));
         // "N. Artist – Title", as the playlist has it (its template, its
         // number when it shows them).
         let number = self
@@ -562,7 +595,7 @@ impl App {
             .current()
             .filter(|_| self.settings.playlist_numbers)
             .map(|i| format!("{}. ", i + 1));
-        let heading = match track.and_then(|t| self.library.tracks.get(t as usize)) {
+        let heading = match track {
             Some(t) => crate::title_format::line(&self.settings.playlist_format, t),
             None => title.to_owned(),
         };
@@ -595,7 +628,7 @@ impl App {
     fn player_bar(&mut self, ui: &mut egui::Ui) {
         use crate::ui::player_bar;
         let ctx = ui.ctx().clone();
-        let (title, artist, track) = self.now_playing();
+        let (title, artist, _) = self.now_playing();
         let cover = self.playing_cover(&ctx);
         // The visualization: the samples heard now, for its display's size.
         let size = player_bar::visual_size(self.bar_layout(), ui.max_rect());
@@ -609,7 +642,7 @@ impl App {
             size,
         );
         self.heard = heard;
-        let now = self.now_shown(&title, &artist, track, cover);
+        let now = self.now_shown(&title, &artist, cover);
         let cmds = player_bar::show(ui, &now, &mut self.visual);
         self.bar_commands(cmds);
     }
@@ -902,12 +935,13 @@ impl App {
 
     /// The window's title: the track heard, then the program's name.
     fn window_title(&self) -> String {
-        let (title, _, track) = self.now_playing();
+        let (title, _, _) = self.now_playing();
         if self.player.status == crate::player::Status::Stopped || title.is_empty() {
             return crate::APP_NAME.to_owned();
         }
-        let artist = track
-            .map(|t| self.library.tracks[t as usize].artist.clone())
+        let artist = self
+            .shown_track()
+            .map(|t| t.artist.clone())
             .filter(|a| !a.is_empty());
         match artist {
             Some(a) => format!("{a} – {title} — {}", crate::APP_NAME),
@@ -1496,9 +1530,9 @@ impl App {
             Player::Paused => Status::Paused,
             Player::Playing => Status::Playing,
         };
-        let (title, _, track) = self.now_playing();
-        let artist = track
-            .and_then(|t| self.library.tracks.get(t as usize))
+        let (title, _, _) = self.now_playing();
+        let artist = self
+            .shown_track()
             .map(|t| t.artist.clone())
             .filter(|a| !a.is_empty());
         let shown = crate::smtc::Shown {
@@ -1638,6 +1672,7 @@ impl eframe::App for App {
             };
             ctx.request_repaint();
         }
+        self.follow_outside(ctx);
         self.show_on_taskbar();
         self.show_in_media_controls();
         self.remember_place();
@@ -1932,6 +1967,7 @@ impl eframe::App for App {
         if self.file_info.show(&ctx, self.hwnd, &self.settings.keys) {
             // The files written: their tags read again.
             self.rescan();
+            self.outside.read_again(&ctx);
         }
         self.about.show(&ctx);
         if self

@@ -10,6 +10,7 @@ pub mod details;
 pub mod edit;
 pub mod filter;
 pub mod index;
+pub mod outside;
 pub mod scan;
 pub mod tags;
 pub mod watch;
