@@ -1477,17 +1477,7 @@ fn cover_box(ui: &mut Ui, cover: Option<&TextureHandle>, side: f32) {
                 .corner_radius(8.0)
                 .paint_at(ui, r);
         }
-        None => {
-            painter.rect_filled(rect, 8.0, palette::card_bg());
-            crate::ui::icons::paint(
-                painter,
-                crate::ui::icons::Icon::File,
-                rect.center(),
-                side * 0.3,
-                palette::text_weak(),
-                palette::card_bg(),
-            );
-        }
+        None => crate::ui::no_cover(painter, rect, 8.0),
     }
 }
 

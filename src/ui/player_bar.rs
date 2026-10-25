@@ -624,9 +624,7 @@ fn cover_button(
                 Color32::WHITE,
             );
         }
-        None => {
-            painter.rect_filled(cover, 3.0, palette::card_bg());
-        }
+        None => super::no_cover(painter, cover, 3.0),
     }
 }
 

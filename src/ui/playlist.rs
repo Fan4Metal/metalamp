@@ -394,17 +394,7 @@ pub fn show(
                     .corner_radius(6.0)
                     .paint_at(ui, fit);
             }
-            None => {
-                painter.rect_filled(r, 6.0, palette::card_bg());
-                icons::paint(
-                    &painter,
-                    Icon::File,
-                    r.center(),
-                    side * 0.25,
-                    palette::line(),
-                    palette::card_bg(),
-                );
-            }
+            None => super::no_cover(&painter, r, 6.0),
         }
         let resp = ui.interact(r, egui::Id::new("playlist_cover"), Sense::click());
         if cover.is_some() {

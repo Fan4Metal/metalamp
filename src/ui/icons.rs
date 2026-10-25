@@ -150,6 +150,9 @@ pub enum Icon {
     Mini,
     /// A play triangle with lines of a list: the playlists (save, open).
     Playlists,
+    /// Two beamed notes, filled: a track without a cover, drawn large. Its
+    /// parts overlap, so `color` is to be opaque.
+    Notes,
 }
 
 impl Icon {
@@ -225,6 +228,7 @@ impl Icon {
         Icon::Pin,
         Icon::Mini,
         Icon::Playlists,
+        Icon::Notes,
     ];
 }
 
@@ -444,6 +448,7 @@ pub fn paint(painter: &Painter, icon: Icon, c: Pos2, size: f32, color: Color32, 
                 round_line(painter, vec![p(x0, y), p(6.5, y)], pen(1.6));
             }
         }
+        Icon::Notes => notes(painter, &p, color),
         Icon::Folder => {
             painter.add(closed(&[
                 (-6.5, -5.0),
@@ -940,6 +945,55 @@ fn rounded(points: &[Pos2], radius: &[f32]) -> Vec<Pos2> {
         }
     }
     out
+}
+
+/// The two beamed notes (`Icon::Notes`) through `p` (the grid to the
+/// screen): slanted oval heads, the stems up from their right, a thick beam
+/// rising to the right; all convex, so egui fills and smooths them.
+fn notes(painter: &Painter, p: &dyn Fn(f32, f32) -> Pos2, color: Color32) {
+    // The heads' middles, the stems' width and how far right of a head's
+    // middle its stem's right edge is, the beam's ends (its top, from the
+    // first stem's left edge to the second's right) and thickness.
+    const HEADS: [(f32, f32); 2] = [(-3.6, 4.4), (3.6, 3.0)];
+    const STEM: f32 = 1.3;
+    const STEM_AT: f32 = 2.15;
+    const BEAM: [(f32, f32); 2] = [(-2.75, -4.8), (5.75, -6.2)];
+    const THICK: f32 = 2.3;
+    let beam_top = |x: f32| {
+        let [(x0, y0), (x1, y1)] = BEAM;
+        y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+    };
+    let tilt = -0.4f32;
+    let (sin, cos) = tilt.sin_cos();
+    for (hx, hy) in HEADS {
+        let head: Vec<Pos2> = (0..32)
+            .map(|i| {
+                let a = TAU * i as f32 / 32.0;
+                let (x, y) = (2.5 * a.cos(), 1.75 * a.sin());
+                p(hx + x * cos - y * sin, hy + x * sin + y * cos)
+            })
+            .collect();
+        painter.add(Shape::convex_polygon(head, color, Stroke::NONE));
+        let right = hx + STEM_AT;
+        let top = beam_top(right) + 1.0;
+        let stem = [
+            (right - STEM, hy - 0.3),
+            (right, hy - 0.6),
+            (right, top),
+            (right - STEM, top),
+        ];
+        painter.add(Shape::convex_polygon(
+            stem.iter().map(|&(x, y)| p(x, y)).collect(),
+            color,
+            Stroke::NONE,
+        ));
+    }
+    let [(x0, y0), (x1, y1)] = BEAM;
+    painter.add(Shape::convex_polygon(
+        vec![p(x0, y0), p(x1, y1), p(x1, y1 + THICK), p(x0, y0 + THICK)],
+        color,
+        Stroke::NONE,
+    ));
 }
 
 /// An open line with round ends: egui ends a stroke flat.

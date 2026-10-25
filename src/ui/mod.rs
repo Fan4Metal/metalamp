@@ -182,6 +182,17 @@ pub fn modal_size(ctx: &egui::Context, wanted: egui::Vec2, margin: f32) -> egui:
     wanted.min(room).max(egui::vec2(200.0, 160.0))
 }
 
+/// The place of a cover the track has none of: the cover's ground with a
+/// faint pair of beamed notes, `radius` its corners.
+pub fn no_cover(painter: &egui::Painter, rect: egui::Rect, radius: f32) {
+    let ground = crate::palette::card_bg();
+    painter.rect_filled(rect, radius, ground);
+    // Opaque, mixed with the ground: the notes' parts overlap.
+    let mark = ground.lerp_to_gamma(crate::palette::text_weak(), 0.3);
+    let size = rect.width().min(rect.height()) * 0.5;
+    icons::paint(painter, Icon::Notes, rect.center(), size, mark, ground);
+}
+
 /// Tracks dragged from the library (egui's drag and drop payload), for
 /// the playlist to take where they are let go.
 pub struct DraggedTracks(pub Vec<std::path::PathBuf>);
