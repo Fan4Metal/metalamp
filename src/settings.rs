@@ -125,6 +125,8 @@ pub struct Settings {
     pub crossfade_in_albums: bool,
     /// When the media keys are the player's.
     pub media_keys: MediaKeys,
+    /// How large a cover put into tags may be (the file info window).
+    pub tag_cover_side: CoverSide,
     /// The keys as changed on the settings' Keys page (`keymap.rs`; only
     /// the changes are written).
     pub keys: crate::keymap::Keymap,
@@ -191,6 +193,41 @@ impl MediaKeys {
             MediaKeys::Always => tr!("Always", "Всегда"),
             MediaKeys::Window => tr!("While the player is active", "Когда активно окно плеера"),
             MediaKeys::Off => tr!("Never", "Никогда"),
+        }
+    }
+}
+
+/// How large a cover put into tags may be: a larger picture is made that
+/// large, as a JPEG (`covers::for_tag`), so an album's tracks do not each
+/// carry megabytes of it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CoverSide {
+    /// As it is.
+    #[serde(rename = "original")]
+    Original,
+    #[default]
+    #[serde(rename = "1000")]
+    Px1000,
+    #[serde(rename = "1500")]
+    Px1500,
+}
+
+impl CoverSide {
+    pub const ALL: [CoverSide; 3] = [CoverSide::Original, CoverSide::Px1000, CoverSide::Px1500];
+
+    /// The largest side in pixels; none: any.
+    pub fn pixels(self) -> Option<u32> {
+        match self {
+            CoverSide::Original => None,
+            CoverSide::Px1000 => Some(1000),
+            CoverSide::Px1500 => Some(1500),
+        }
+    }
+
+    pub fn label(self) -> String {
+        match self.pixels() {
+            None => tr!("As it is", "Как есть").to_owned(),
+            Some(px) => tr!(format!("Up to {px} px"), format!("До {px} пикс.")),
         }
     }
 }
@@ -360,6 +397,7 @@ impl Default for Settings {
             crossfade: 0,
             crossfade_in_albums: false,
             media_keys: MediaKeys::default(),
+            tag_cover_side: CoverSide::default(),
             keys: crate::keymap::Keymap::default(),
             tray: false,
             on_top: false,

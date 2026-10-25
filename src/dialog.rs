@@ -26,6 +26,8 @@ pub enum Ask {
     SavePlaylist,
     /// The folder of the view editor's rule at this index.
     ViewFolder(usize),
+    /// A picture for the file info's cover.
+    Cover,
 }
 
 impl Ask {
@@ -36,6 +38,7 @@ impl Ask {
             Ask::AddFolder => "a library folder",
             Ask::SavePlaylist => "the playlist",
             Ask::ViewFolder(_) => "a view's folder",
+            Ask::Cover => "a cover",
         }
     }
 }
@@ -109,6 +112,10 @@ impl Dialogs {
 /// The files chosen in an Open dialog.
 pub fn pick_files(dialog: rfd::FileDialog) -> Vec<PathBuf> {
     dialog.pick_files().unwrap_or_default()
+}
+
+pub fn pick_file(dialog: rfd::FileDialog) -> Vec<PathBuf> {
+    dialog.pick_file().into_iter().collect()
 }
 
 pub fn save_file(dialog: rfd::FileDialog) -> Vec<PathBuf> {

@@ -1001,6 +1001,7 @@ impl App {
                 }
             }
             Ask::ViewFolder(rule) => self.view_editor.set_folder(rule, &path),
+            Ask::Cover => self.file_info.cover_from(path),
         }
     }
 
@@ -1035,6 +1036,10 @@ impl App {
         });
         let mut files = Vec::new();
         for path in dropped {
+            // A picture dropped while the file info is open is its cover.
+            if self.file_info.open && crate::covers::is_picture(&path) {
+                continue;
+            }
             if path.is_dir() {
                 self.add_folder(path);
             } else {
@@ -1964,9 +1969,26 @@ impl eframe::App for App {
         if (&self.settings.dsp, &self.settings.eq_presets) != (&before.0, &before.1) {
             self.place_changed = Some(Instant::now());
         }
+        self.file_info.cover_side = self.settings.tag_cover_side.pixels();
         if self.file_info.show(&ctx, self.hwnd, &self.settings.keys) {
             // The files written: their tags read again.
             self.rescan();
+            self.outside.read_again(&ctx);
+        }
+        if std::mem::take(&mut self.file_info.pick_cover) {
+            let make = || {
+                rfd::FileDialog::new()
+                    .set_title(tr!("A picture for the cover", "Картинка для обложки"))
+                    .add_filter(tr!("Pictures", "Картинки"), &["jpg", "jpeg", "png"])
+            };
+            let owner = self.file_info.owner().or(self.hwnd);
+            self.dialogs
+                .start(&ctx, owner, Ask::Cover, make, dialog::pick_file);
+        }
+        if let Some(folder) = self.file_info.folder_saved.take() {
+            self.library_view
+                .covers
+                .look_again_in(&self.library, &folder);
             self.outside.read_again(&ctx);
         }
         self.about.show(&ctx);

@@ -5,7 +5,10 @@
 //! fields every tag has and the rest (`SplitTag`), the fields changed, and
 //! the two merged back (`MergeTag`) and written: frames lofty cannot map
 //! to the common fields (pictures stay too, private frames, ratings of
-//! other players) are kept. An ID3v2.3 tag is written as 2.3. MP3 and
+//! other players) are kept. The cover is changed among the pictures of the
+//! common fields (`CoverChange`): lofty moves an ID3v2's APIC frames, a
+//! FLAC's PICTURE blocks and an MP4's `covr` there and back. An ID3v2.3
+//! tag is written as 2.3. MP3 and
 //! WAV (ID3v2), FLAC (Vorbis comments) and M4A (iTunes atoms); WMA is
 //! read but not written by lofty.
 
@@ -18,6 +21,7 @@ use lofty::ogg::OggPictureStorage;
 use lofty::prelude::*;
 use lofty::TextEncoding;
 use lofty::id3::v2::{Frame, FrameId, Id3v2Tag, TextInformationFrame};
+use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::tag::items::Timestamp;
 use lofty::tag::{ItemKey, ItemValue, MergeTag, SplitTag, Tag, TagItem};
 
@@ -141,6 +145,19 @@ pub struct Changes {
     pub main: [Option<String>; MAIN],
     /// Other fields to put (values split at "; "; empty: removed).
     pub other: Vec<(ItemKey, String)>,
+    /// The cover put or removed, or `None` to leave it as it is.
+    pub cover: Option<CoverChange>,
+}
+
+/// What becomes of the tag's cover: the pictures shown as it (its front
+/// covers, else its first picture, as `details` and the thumbnails take
+/// it) replaced by a front cover, or removed; the other pictures (the
+/// back cover, the booklet) are kept.
+#[derive(Clone, Debug)]
+pub enum CoverChange {
+    /// A JPEG or a PNG, written as it is (`covers::for_tag` made it).
+    Set(std::sync::Arc<Vec<u8>>),
+    Remove,
 }
 
 /// The values of `path`'s tag (all empty when it has none).
@@ -480,7 +497,40 @@ fn apply(tag: &mut Tag, changes: &Changes) -> Result<(), String> {
             }
         }
     }
+    if let Some(change) = &changes.cover {
+        put_cover(tag, change);
+    }
     Ok(())
+}
+
+/// The cover changed as `change` says, the new one first.
+fn put_cover(tag: &mut Tag, change: &CoverChange) {
+    let mut pictures: Vec<Picture> = Vec::new();
+    while !tag.pictures().is_empty() {
+        pictures.push(tag.remove_picture(0));
+    }
+    if pictures
+        .iter()
+        .any(|p| p.pic_type() == PictureType::CoverFront)
+    {
+        pictures.retain(|p| p.pic_type() != PictureType::CoverFront);
+    } else if !pictures.is_empty() {
+        pictures.remove(0);
+    }
+    if let CoverChange::Set(data) = change {
+        let mime = match image::guess_format(data) {
+            Ok(image::ImageFormat::Png) => MimeType::Png,
+            _ => MimeType::Jpeg,
+        };
+        let cover = Picture::unchecked(data.to_vec())
+            .pic_type(PictureType::CoverFront)
+            .mime_type(mime)
+            .build();
+        pictures.insert(0, cover);
+    }
+    for p in pictures {
+        tag.push_picture(p);
+    }
 }
 
 /// Puts `value` as `key`'s values (split at "; ", as the window joined
@@ -533,10 +583,9 @@ mod tests {
         assert!(Key::ALL.iter().enumerate().all(|(i, k)| *k as usize == i));
     }
 
-    /// A FLAC with a cover keeps it when a field is written (lofty writes
-    /// only the pictures of the tag it is given).
-    #[test]
-    fn flac_keeps_its_cover() {
+    /// A FLAC of no samples with a front cover (a PNG's signature and some
+    /// bytes).
+    fn flac_with_cover() -> Vec<u8> {
         let block = |kind: u8, last: bool, body: &[u8]| {
             let len = body.len() as u32;
             let mut b = vec![kind | if last { 0x80 } else { 0 }];
@@ -563,11 +612,17 @@ mod tests {
         let mut bytes = b"fLaC".to_vec();
         bytes.extend(block(0, false, &info));
         bytes.extend(block(6, true, &picture));
+        bytes
+    }
 
+    /// A FLAC with a cover keeps it when a field is written (lofty writes
+    /// only the pictures of the tag it is given).
+    #[test]
+    fn flac_keeps_its_cover() {
         let dir = std::env::temp_dir().join(format!("metalamp_flac_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("cover.flac");
-        std::fs::write(&file, &bytes).unwrap();
+        std::fs::write(&file, flac_with_cover()).unwrap();
         let pictures = |path: &Path| {
             let mut f = std::fs::File::open(path).unwrap();
             let flac = lofty::flac::FlacFile::read_from(&mut f, ParseOptions::new()).unwrap();
@@ -591,6 +646,151 @@ mod tests {
         assert_eq!(comments.get("TRACKTOTAL"), Some("12"));
         drop(f);
         assert_eq!(pictures(&file), 1, "the cover is lost");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn picture(kind: PictureType, data: &[u8]) -> Picture {
+        Picture::unchecked(data.to_vec())
+            .pic_type(kind)
+            .mime_type(MimeType::Jpeg)
+            .build()
+    }
+
+    /// The cover is the front covers, else the first picture: those are
+    /// replaced (the new one first) or removed, the others kept.
+    #[test]
+    fn cover_replaced_or_removed() {
+        let set = CoverChange::Set(std::sync::Arc::new(b"\xFF\xD8new".to_vec()));
+        let kinds = |tag: &Tag| -> Vec<(PictureType, Vec<u8>)> {
+            tag.pictures()
+                .iter()
+                .map(|p| (p.pic_type(), p.data().to_vec()))
+                .collect()
+        };
+        // No front cover: the first picture is the cover.
+        let mut tag = Tag::new(lofty::tag::TagType::Id3v2);
+        tag.push_picture(picture(PictureType::Other, b"other"));
+        tag.push_picture(picture(PictureType::CoverBack, b"back"));
+        put_cover(&mut tag, &set);
+        assert_eq!(
+            kinds(&tag),
+            [
+                (PictureType::CoverFront, b"\xFF\xD8new".to_vec()),
+                (PictureType::CoverBack, b"back".to_vec())
+            ]
+        );
+        // Front covers wherever they are.
+        let mut tag = Tag::new(lofty::tag::TagType::Id3v2);
+        tag.push_picture(picture(PictureType::Artist, b"artist"));
+        tag.push_picture(picture(PictureType::CoverFront, b"front"));
+        put_cover(&mut tag, &CoverChange::Remove);
+        assert_eq!(kinds(&tag), [(PictureType::Artist, b"artist".to_vec())]);
+        let mut tag = Tag::new(lofty::tag::TagType::Id3v2);
+        put_cover(&mut tag, &CoverChange::Remove);
+        assert!(tag.pictures().is_empty());
+    }
+
+    /// A tiny JPEG, a real one.
+    fn jpeg() -> Vec<u8> {
+        let picture = image::DynamicImage::new_rgb8(4, 4);
+        let mut out = Vec::new();
+        picture
+            .write_to(
+                &mut std::io::Cursor::new(&mut out),
+                image::ImageFormat::Jpeg,
+            )
+            .unwrap();
+        out
+    }
+
+    /// A FLAC's cover replaced and removed: its PICTURE blocks, the
+    /// blocks' lengths still leading to the audio after them.
+    #[test]
+    fn flac_cover_written() {
+        let dir = std::env::temp_dir().join(format!("metalamp_flac_cover_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("cover.flac");
+        let audio = b"\xFF\xF8 the frames that follow".repeat(40);
+        let mut bytes = flac_with_cover();
+        bytes.extend_from_slice(&audio);
+        std::fs::write(&file, bytes).unwrap();
+        // The blocks (type, length) by their headers, and what follows.
+        let blocks = |path: &Path| {
+            let bytes = std::fs::read(path).unwrap();
+            let mut at = 4;
+            let mut found = Vec::new();
+            loop {
+                let head = &bytes[at..at + 4];
+                let len = u32::from_be_bytes([0, head[1], head[2], head[3]]) as usize;
+                found.push(head[0] & 0x7F);
+                at += 4 + len;
+                if head[0] & 0x80 != 0 {
+                    return (found, bytes[at..].to_vec());
+                }
+            }
+        };
+        let pictures = |path: &Path| {
+            let mut f = std::fs::File::open(path).unwrap();
+            let options = ParseOptions::new().read_properties(false);
+            let flac = lofty::flac::FlacFile::read_from(&mut f, options).unwrap();
+            flac.pictures()
+                .iter()
+                .map(|(p, _)| (p.pic_type(), p.data().to_vec()))
+                .collect::<Vec<_>>()
+        };
+        let data = jpeg();
+        let changes = Changes {
+            cover: Some(CoverChange::Set(std::sync::Arc::new(data.clone()))),
+            ..Default::default()
+        };
+        write(&file, &changes).unwrap();
+        let (kinds, after) = blocks(&file);
+        assert_eq!(after, audio, "{kinds:?}");
+        assert_eq!(pictures(&file), [(PictureType::CoverFront, data)]);
+        let changes = Changes {
+            cover: Some(CoverChange::Remove),
+            ..Default::default()
+        };
+        write(&file, &changes).unwrap();
+        let (kinds, after) = blocks(&file);
+        assert_eq!(after, audio, "{kinds:?}");
+        assert!(!kinds.contains(&6), "{kinds:?}");
+        assert!(pictures(&file).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// An MP3 without ID3v2 gets one with the cover (APIC) and a field.
+    #[test]
+    fn mp3_cover_written() {
+        let mut bytes = Vec::new();
+        for _ in 0..4 {
+            bytes.extend_from_slice(&[0xFF, 0xFB, 0x90, 0x64]);
+            bytes.extend_from_slice(&[0; 413]);
+        }
+        let dir = std::env::temp_dir().join(format!("metalamp_mp3_cover_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("plain.mp3");
+        std::fs::write(&file, &bytes).unwrap();
+        let data = jpeg();
+        let mut changes = Changes {
+            cover: Some(CoverChange::Set(std::sync::Arc::new(data.clone()))),
+            ..Default::default()
+        };
+        changes.main[Key::Album as usize] = Some("Album".into());
+        write(&file, &changes).unwrap();
+        let mut f = std::fs::File::open(&file).unwrap();
+        let mp3 = lofty::mpeg::MpegFile::read_from(&mut f, ParseOptions::new()).unwrap();
+        let tag = mp3.id3v2().unwrap();
+        let apic: Vec<_> = tag
+            .into_iter()
+            .filter_map(|frame| match frame {
+                Frame::Picture(p) => Some((p.picture.pic_type(), p.picture.data().to_vec())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(apic, [(PictureType::CoverFront, data)]);
+        assert_eq!(tag.album().as_deref(), Some("Album"));
+        drop(f);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -696,7 +896,40 @@ mod tests {
         changes.main[Key::AlbumArtist as usize] = Some("Various Artists".into());
         changes.main[Key::Track as usize] = Some("07/09".into());
         changes.other = vec![(ItemKey::Publisher, "Hansa; BMG".into())];
+        let cover = jpeg();
+        changes.cover = Some(CoverChange::Set(std::sync::Arc::new(cover.clone())));
+        let audio = |path: &Path| {
+            let bytes = std::fs::read(path).unwrap();
+            // The tag's size, synchsafe.
+            let size = bytes[6..10]
+                .iter()
+                .fold(0usize, |n, &b| n << 7 | usize::from(b));
+            let start = if &bytes[..3] == b"ID3" { 10 + size } else { 0 };
+            // lofty may leave padding: the audio starts at the first frame.
+            let first = bytes[start..]
+                .windows(2)
+                .position(|w| w[0] == 0xFF && w[1] & 0xE0 == 0xE0)
+                .unwrap();
+            bytes[start + first..].to_vec()
+        };
+        let audio_before = audio(&copy);
         write(&copy, &changes).unwrap();
+        assert!(audio(&copy) == audio_before, "the audio changed");
+        let mut f = std::fs::File::open(&copy).unwrap();
+        let mp3 = lofty::mpeg::MpegFile::read_from(&mut f, ParseOptions::new()).unwrap();
+        let front: Vec<Vec<u8>> = mp3
+            .id3v2()
+            .unwrap()
+            .into_iter()
+            .filter_map(|frame| match frame {
+                Frame::Picture(p) if p.picture.pic_type() == PictureType::CoverFront => {
+                    Some(p.picture.data().to_vec())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(front, [cover]);
+        drop(f);
         let read_back = read(&copy).unwrap();
         assert!(
             read_back

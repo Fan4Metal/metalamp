@@ -19,6 +19,13 @@
 //! up. Going to another file saves first. The library reads the files
 //! written again (`App`).
 //!
+//! The cover (a click or the right button opens its menu): a picture
+//! chosen in a dialog, the folder's picture or one dropped on the window
+//! becomes the files' front cover, or the cover is removed; written with
+//! the fields (`edit::CoverChange`), made smaller first when the setting
+//! says (`covers::for_tag`), and shown meanwhile. Not editing, these start
+//! it. "Save as folder.jpg" writes the cover shown into the folder at once.
+//!
 //! The cross, Esc, Enter or a click outside closes it; while editing only
 //! the cross (typing is not lost by a slip). When the program's window
 //! cannot hold it (the player and playlist layout), it is a window of its
@@ -26,7 +33,8 @@
 //! (`library::details`).
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::Arc;
+use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 
 use egui::{Key, RichText, TextureHandle, Ui, vec2};
 use lofty::picture::PictureType;
@@ -35,7 +43,7 @@ use lofty::prelude::ItemKey;
 use crate::format;
 use crate::keymap::{Action, Cmd, Keymap};
 use crate::library::details::{self, Details};
-use crate::library::edit::{self, Changes, Values};
+use crate::library::edit::{self, Changes, CoverChange, Values};
 use crate::palette;
 
 type Read = (PathBuf, Result<Details, String>);
@@ -107,6 +115,50 @@ pub struct InfoView {
     /// found.
     windowed: bool,
     window: super::OwnWindow,
+    /// The largest side of a cover put into the tags (the setting, set by
+    /// the app each frame).
+    pub cover_side: Option<u32>,
+    /// A picture is to be chosen for the cover: the app shows the dialog
+    /// and hands its answer to `cover_from`.
+    pub pick_cover: bool,
+    /// The picture chosen in that dialog, taken in `show`.
+    cover_file: Option<PathBuf>,
+    /// A `folder.jpg` was saved into this folder: the app makes its
+    /// albums' covers again.
+    pub folder_saved: Option<PathBuf>,
+    /// A picture made ready for the tags, or a `folder.jpg` saved, on a
+    /// thread.
+    cover_job: Option<Receiver<CoverDone>>,
+    /// What became of the last of them: a text and whether it is an error.
+    cover_note: Option<(String, bool)>,
+}
+
+/// What a cover's thread did.
+enum CoverDone {
+    /// The picture as it is to be written, and its preview.
+    Made(Result<(Vec<u8>, egui::ColorImage), String>),
+    /// The `folder.jpg` written.
+    Saved(Result<PathBuf, String>),
+}
+
+/// What the cover's menu (or a picture dropped) asks for.
+enum CoverAct {
+    /// A picture chosen in a dialog.
+    Choose,
+    /// This picture (the folder's, or one dropped).
+    File(PathBuf),
+    Remove,
+    /// The cover as it was (the change given up).
+    Keep,
+    /// The cover shown saved as the folder's `folder.jpg`.
+    SaveToFolder,
+}
+
+/// A change of the cover waiting to be written with the fields, and the
+/// new one's picture.
+struct NewCover {
+    change: CoverChange,
+    preview: Option<TextureHandle>,
 }
 
 /// What the window was asked to do this frame.
@@ -117,6 +169,7 @@ enum Act {
     Save,
     /// To a file, or to all of them.
     Go(Option<usize>),
+    Cover(CoverAct),
 }
 
 #[derive(Default, PartialEq)]
@@ -173,6 +226,8 @@ struct Form {
     errors: Vec<String>,
     /// The fields came while editing: the first one takes the keys.
     focus_first: bool,
+    /// The cover put or removed, written with the fields.
+    cover: Option<NewCover>,
 }
 
 /// What came to a form.
@@ -213,6 +268,7 @@ impl Form {
             other: Vec::new(),
             errors: Vec::new(),
             focus_first: false,
+            cover: None,
         }
     }
 
@@ -254,7 +310,7 @@ impl Form {
     }
 
     fn touched(&self) -> bool {
-        self.fields().any(|f| f.touched)
+        self.fields().any(|f| f.touched) || self.cover.is_some()
     }
 
     /// Every number typed in is one.
@@ -272,6 +328,7 @@ impl Form {
             f.value = f.shown.clone();
             f.touched = false;
         }
+        self.cover = None;
         self.errors.clear();
     }
 
@@ -289,6 +346,7 @@ impl Form {
             .filter(|(_, f)| f.touched)
             .map(|(k, f)| (*k, f.value.trim().to_owned()))
             .collect();
+        changes.cover = self.cover.as_ref().map(|c| c.change.clone());
         changes
     }
 
@@ -339,6 +397,7 @@ impl InfoView {
         self.fresh = true;
         self.editing = edit;
         self.then = None;
+        self.cover_note = None;
         let to = if edit && paths.len() > 1 {
             None
         } else {
@@ -554,6 +613,182 @@ impl InfoView {
             Act::Cancel => self.stop_editing(),
             Act::Save => self.save(ctx, None),
             Act::Go(to) => self.go(ctx, to),
+            Act::Cover(act) => self.cover_act(ctx, act),
+        }
+    }
+
+    /// The picture chosen in the dialog `pick_cover` asked for.
+    pub fn cover_from(&mut self, path: PathBuf) {
+        self.cover_file = Some(path);
+    }
+
+    /// The window of its own, for a dialog to be owned by; none: the
+    /// program's.
+    pub fn owner(&self) -> Option<isize> {
+        self.windowed.then(|| self.window.hwnd()).flatten()
+    }
+
+    /// A change of the cover, editing first (a change waits for Save);
+    /// saving it into the folder is done at once.
+    fn cover_act(&mut self, ctx: &egui::Context, act: CoverAct) {
+        self.cover_note = None;
+        if let CoverAct::SaveToFolder = act {
+            self.save_to_folder(ctx);
+            return;
+        }
+        if !self.editing {
+            self.start_editing(ctx);
+            if !self.editing {
+                return;
+            }
+        }
+        match act {
+            CoverAct::Choose => self.pick_cover = true,
+            CoverAct::File(path) => self.make_cover(ctx, path),
+            CoverAct::Remove | CoverAct::Keep => {
+                if let Some(form) = &mut self.form {
+                    form.cover = matches!(act, CoverAct::Remove).then_some(NewCover {
+                        change: CoverChange::Remove,
+                        preview: None,
+                    });
+                }
+            }
+            CoverAct::SaveToFolder => {}
+        }
+    }
+
+    /// The picture at `path` made ready for the tags on a thread.
+    fn make_cover(&mut self, ctx: &egui::Context, path: PathBuf) {
+        let side = self.cover_side;
+        self.cover_job = Some(spawn_cover(ctx, move || {
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            let made = crate::guard::catch(&path, || {
+                let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
+                if size > MAX_PICTURE {
+                    return Err(tr!("the picture is too large", "картинка слишком большая").into());
+                }
+                let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+                crate::covers::for_tag(bytes, side, details::COVER_SIDE)
+            })
+            .unwrap_or_else(|| Err(tr!("cannot be read", "не удалось прочитать").into()));
+            CoverDone::Made(made.map_err(|e| format!("{name}: {e}")))
+        }));
+    }
+
+    /// The cover shown (a new one, else the tag's) saved as its folder's
+    /// `folder.jpg`, on a thread.
+    fn save_to_folder(&mut self, ctx: &egui::Context) {
+        let Some((folder, bytes)) = self.folder_cover() else {
+            return;
+        };
+        self.cover_job = Some(spawn_cover(ctx, move || {
+            CoverDone::Saved(crate::covers::save_folder_jpg(&folder, &bytes))
+        }));
+    }
+
+    /// The folder of the files shown (all of them in one), and the cover
+    /// that would be saved into it: the new one, else the tag's.
+    fn folder_cover(&self) -> Option<(PathBuf, Arc<Vec<u8>>)> {
+        let folder = self.folder()?;
+        let new = self
+            .form
+            .as_ref()
+            .filter(|_| self.editing)
+            .and_then(|f| f.cover.as_ref());
+        let bytes = match new.map(|c| &c.change) {
+            Some(CoverChange::Set(data)) => Arc::clone(data),
+            Some(CoverChange::Remove) => return None,
+            None => match &self.shown {
+                Some((path, Ok(d))) if path.parent() == Some(&folder) => {
+                    Arc::new(d.tag_cover.clone()?)
+                }
+                _ => return None,
+            },
+        };
+        Some((folder, bytes))
+    }
+
+    /// The folder of the file shown, or of all the files when they are of
+    /// one.
+    fn folder(&self) -> Option<PathBuf> {
+        let mut paths = match self.at {
+            Some(i) => self.paths.get(i..=i)?.iter(),
+            None => self.paths.iter(),
+        };
+        let folder = paths.next()?.parent()?;
+        paths
+            .all(|p| p.parent() == Some(folder))
+            .then(|| folder.to_path_buf())
+    }
+
+    /// What came from the cover's thread.
+    fn poll_cover(&mut self, ctx: &egui::Context) {
+        let Some(rx) = &self.cover_job else { return };
+        let done = match rx.try_recv() {
+            Ok(done) => done,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => {
+                self.cover_job = None;
+                return;
+            }
+        };
+        self.cover_job = None;
+        match done {
+            CoverDone::Made(Ok((data, image))) => {
+                if let Some(form) = self.form.as_mut().filter(|_| self.editing) {
+                    let preview =
+                        ctx.load_texture("file_info_new_cover", image, Default::default());
+                    form.cover = Some(NewCover {
+                        change: CoverChange::Set(Arc::new(data)),
+                        preview: Some(preview),
+                    });
+                }
+            }
+            CoverDone::Saved(Ok(path)) => {
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                self.cover_note = Some((
+                    tr!(format!("Saved {name}"), format!("Сохранено: {name}")),
+                    false,
+                ));
+                self.folder_saved = path.parent().map(Path::to_path_buf);
+                // A file without a cover in its tag shows the folder's.
+                if let Some(wanted) = self.wanted.clone() {
+                    self.request(ctx, &wanted);
+                }
+            }
+            CoverDone::Made(Err(e)) | CoverDone::Saved(Err(e)) => {
+                self.cover_note = Some((e, true));
+            }
+        }
+    }
+
+    /// What the cover's menu offers now.
+    fn cover_menu(&self, dropping: bool) -> CoverMenu {
+        let new = self
+            .form
+            .as_ref()
+            .filter(|_| self.editing)
+            .and_then(|f| f.cover.as_ref());
+        let in_tag = match self.at {
+            Some(_) => self.shown.as_ref().is_some_and(|(p, d)| {
+                Some(p) == self.wanted.as_ref() && d.as_ref().is_ok_and(|d| d.tag_cover.is_some())
+            }),
+            // All the files: some of them may have one.
+            None => true,
+        };
+        CoverMenu {
+            writable: self.paths.iter().any(|p| edit::writable(p)),
+            folder: self.folder(),
+            changed: new.is_some(),
+            removable: match new.map(|c| &c.change) {
+                Some(CoverChange::Set(_)) => true,
+                Some(CoverChange::Remove) => false,
+                None => in_tag,
+            },
+            savable: self.folder_cover().is_some(),
+            dropping,
+            busy: self.cover_job.is_some(),
+            note: self.cover_note.clone(),
         }
     }
 
@@ -585,9 +820,13 @@ impl InfoView {
     /// library reads them again).
     pub fn show(&mut self, ctx: &egui::Context, owner: Option<isize>, keys: &Keymap) -> bool {
         self.poll(ctx);
+        self.poll_cover(ctx);
         let written = self.poll_form(ctx);
         if !self.open {
             return written;
+        }
+        if let Some(path) = self.cover_file.take() {
+            self.cover_act(ctx, CoverAct::File(path));
         }
         let fresh = std::mem::take(&mut self.fresh);
         if fresh {
@@ -715,7 +954,38 @@ impl InfoView {
         // All the files: their cover when they are of one folder.
         let one_folder = self.paths.windows(2).all(|w| w[0].parent() == w[1].parent());
         let cover = cover.filter(|_| self.at.is_some() || one_folder);
-        hero(ui, &top, cover.as_ref(), &nav, acts);
+        // A new cover waiting for Save is shown in its place (a removed
+        // one as none).
+        let new = self
+            .form
+            .as_ref()
+            .filter(|_| self.editing)
+            .and_then(|f| f.cover.as_ref());
+        let cover = match new {
+            Some(c) => c.preview.clone(),
+            None => cover,
+        };
+        // A picture dropped on the window becomes the cover.
+        let (dropped, dropping) = ui.ctx().input(|i| {
+            let dropped = i
+                .raw
+                .dropped_files
+                .iter()
+                .map(|f| f.path())
+                .find(|p| crate::covers::is_picture(p))
+                .map(Path::to_path_buf);
+            let dropping = i
+                .raw
+                .hovered_files
+                .iter()
+                .any(|f| f.path.as_deref().is_none_or(crate::covers::is_picture));
+            (dropped, dropping)
+        });
+        if let Some(path) = dropped {
+            acts.push(Act::Cover(CoverAct::File(path)));
+        }
+        let menu = self.cover_menu(dropping);
+        hero(ui, &top, cover.as_ref(), &menu, &nav, acts);
 
         let errors = self.form.as_ref().is_some_and(|f| !f.errors.is_empty());
         let footer = match (self.editing, errors) {
@@ -895,9 +1165,16 @@ struct Nav {
 /// The top of the window: the cover, the title, the artist, the album
 /// line and the chips; in the corner the cross and, for several files,
 /// "All" and the arrows.
-fn hero(ui: &mut Ui, top: &Top, cover: Option<&TextureHandle>, nav: &Nav, acts: &mut Vec<Act>) {
+fn hero(
+    ui: &mut Ui,
+    top: &Top,
+    cover: Option<&TextureHandle>,
+    menu: &CoverMenu,
+    nav: &Nav,
+    acts: &mut Vec<Act>,
+) {
     ui.horizontal_top(|ui| {
-        cover_box(ui, cover, COVER);
+        cover_button(ui, cover, menu, acts);
         ui.add_space(8.0);
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
@@ -946,6 +1223,15 @@ fn hero(ui: &mut Ui, top: &Top, cover: Option<&TextureHandle>, nav: &Nav, acts: 
                         chip(ui, text);
                     }
                 });
+            }
+            if let Some((text, error)) = &menu.note {
+                ui.add_space(8.0);
+                let colour = if *error {
+                    palette::error()
+                } else {
+                    palette::text_weak()
+                };
+                ui.add(egui::Label::new(RichText::new(text).size(12.0).color(colour)).wrap());
             }
         });
     });
@@ -1460,9 +1746,164 @@ fn shown_value(ui: &mut Ui, text: &str, wrap: bool) {
     }
 }
 
+/// What the cover's menu offers.
+struct CoverMenu {
+    /// Some of the files' tags can be written.
+    writable: bool,
+    /// The folder of the files shown, when they are of one.
+    folder: Option<PathBuf>,
+    /// A change waits for Save.
+    changed: bool,
+    /// There is a cover to remove (all the files at once: maybe).
+    removable: bool,
+    /// There is a cover to save as `folder.jpg`.
+    savable: bool,
+    /// Pictures are dragged over the window.
+    dropping: bool,
+    /// A picture is being read or saved.
+    busy: bool,
+    note: Option<(String, bool)>,
+}
+
+/// A picture file this large is not taken for a cover.
+const MAX_PICTURE: u64 = 64 << 20;
+
+/// `work` on a thread of its own, its answer woken for.
+fn spawn_cover(
+    ctx: &egui::Context,
+    work: impl FnOnce() -> CoverDone + Send + 'static,
+) -> Receiver<CoverDone> {
+    let (tx, rx) = channel();
+    let ctx = ctx.clone();
+    let spawned = std::thread::Builder::new()
+        .name("cover".into())
+        .spawn(move || {
+            let _ = tx.send(work());
+            ctx.request_repaint();
+        });
+    if let Err(e) = spawned {
+        log::warn!("no cover thread: {e}");
+    }
+    rx
+}
+
+/// The hero's cover, opening its menu on a click or the right button;
+/// darkened under the pointer, outlined in the accent while pictures are
+/// dragged over the window, with a spinner while one is read.
+fn cover_button(ui: &mut Ui, cover: Option<&TextureHandle>, menu: &CoverMenu, acts: &mut Vec<Act>) {
+    use crate::ui::icons::{self, Icon};
+    let resp = cover_box(ui, cover, COVER, egui::Sense::click());
+    let rect = resp.rect;
+    let shade = egui::Color32::from_black_alpha(110);
+    let painter = ui.painter();
+    if menu.busy {
+        painter.rect_filled(rect, 8.0, shade);
+        egui::Spinner::new().size(24.0).paint_at(
+            ui,
+            egui::Rect::from_center_size(rect.center(), vec2(24.0, 24.0)),
+        );
+    } else if (menu.dropping && menu.writable) || resp.hovered() {
+        painter.rect_filled(rect, 8.0, shade);
+        let mark = egui::Color32::from_white_alpha(230);
+        icons::paint(painter, Icon::Image, rect.center(), 32.0, mark, shade);
+        if menu.dropping {
+            painter.rect_stroke(
+                rect.shrink(1.0),
+                8.0,
+                egui::Stroke::new(2.0, palette::accent()),
+                egui::StrokeKind::Inside,
+            );
+        }
+    }
+    let resp = resp.on_hover_text(tr!(
+        "A click opens the cover's menu; a picture can be dropped here",
+        "Щелчок открывает меню обложки; сюда можно перетащить картинку"
+    ));
+    // One menu for both buttons: a context menu of its own would share its
+    // id and close it.
+    let toggle = resp.clicked() || resp.secondary_clicked();
+    egui::Popup::menu(&resp)
+        .open_memory(toggle.then_some(egui::containers::SetOpenCommand::Toggle))
+        .show(|ui| cover_items(ui, menu, acts));
+}
+
+/// The cover's menu: another picture (a file, the folder's), none, the one
+/// before; the cover saved as the folder's `folder.jpg`.
+fn cover_items(ui: &mut Ui, menu: &CoverMenu, acts: &mut Vec<Act>) {
+    ui.set_min_width(240.0);
+    let mut act = None;
+    ui.add_enabled_ui(menu.writable && !menu.busy, |ui| {
+        if ui
+            .button(tr!("Choose a picture…", "Выбрать картинку…"))
+            .clicked()
+        {
+            act = Some(CoverAct::Choose);
+        }
+        if let Some(found) = menu.folder.as_deref().and_then(crate::covers::in_folder) {
+            let name = found
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            let label = tr!(
+                format!("The folder's picture ({name})"),
+                format!("Картинка папки ({name})")
+            );
+            if ui.button(label).clicked() {
+                act = Some(CoverAct::File(found));
+            }
+        }
+        let remove = egui::Button::new(tr!("Remove the cover", "Удалить обложку"));
+        if ui.add_enabled(menu.removable, remove).clicked() {
+            act = Some(CoverAct::Remove);
+        }
+        if menu.changed
+            && ui
+                .button(tr!("The cover as it was", "Прежняя обложка"))
+                .clicked()
+        {
+            act = Some(CoverAct::Keep);
+        }
+    })
+    .response
+    .on_disabled_hover_text(tr!(
+        "Tags of this format cannot be written",
+        "Теги этого формата записать нельзя"
+    ));
+    if menu.savable
+        && let Some(folder) = &menu.folder
+    {
+        ui.separator();
+        let (_, exists) = crate::covers::folder_jpg(folder);
+        let label = if exists {
+            tr!("Replace folder.jpg", "Заменить folder.jpg")
+        } else {
+            tr!("Save as folder.jpg", "Сохранить как folder.jpg")
+        };
+        let saved = ui
+            .add_enabled(!menu.busy, egui::Button::new(label))
+            .on_hover_text(tr!(
+                "The cover shown into the files' folder, at once: the library's album grid shows a folder's picture first.",
+                "Показанная обложка сразу записывается в папку файлов: сетка альбомов библиотеки в первую очередь показывает картинку папки."
+            ));
+        if saved.clicked() {
+            act = Some(CoverAct::SaveToFolder);
+        }
+    }
+    if let Some(act) = act {
+        acts.push(Act::Cover(act));
+        ui.close();
+    }
+}
+
 /// The cover at `side` points with rounded corners, or a placeholder.
-fn cover_box(ui: &mut Ui, cover: Option<&TextureHandle>, side: f32) {
-    let (rect, _) = ui.allocate_exact_size(vec2(side, side), egui::Sense::hover());
+fn cover_box(
+    ui: &mut Ui,
+    cover: Option<&TextureHandle>,
+    side: f32,
+    sense: egui::Sense,
+) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(side, side), sense);
     let painter = ui.painter();
     match cover {
         Some(t) => {
@@ -1479,6 +1920,7 @@ fn cover_box(ui: &mut Ui, cover: Option<&TextureHandle>, side: f32) {
         }
         None => crate::ui::no_cover(painter, rect, 8.0),
     }
+    resp
 }
 
 /// A small rounded label with a fact (`320 kbps`).

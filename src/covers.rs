@@ -170,6 +170,16 @@ impl Covers {
         self.missing.clear();
     }
 
+    /// The covers of the albums in `folder` made again (a `folder.jpg`
+    /// was saved there): its time is newer than their thumbnails.
+    pub fn look_again_in(&mut self, library: &Library, folder: &Path) {
+        for album in library.albums.iter().filter(|a| a.folder == folder) {
+            let key = key_of(library, album);
+            self.textures.remove(&key);
+            self.missing.remove(&key);
+        }
+    }
+
     /// Whether `album` is known to have no cover.
     pub fn is_missing(&self, library: &Library, album: &Album) -> bool {
         self.missing.contains(&key_of(library, album))
@@ -352,6 +362,102 @@ pub fn large(path: &Path, side: u32) -> Option<egui::ColorImage> {
     Some(color_image(&picture))
 }
 
+/// A picture chosen for a tag's cover (`bytes`, a file's), as it is to be
+/// written: a JPEG or a PNG as it is, or, when a side is over `max_side`
+/// (the setting; none: as it is), made that large as a JPEG; with it the
+/// picture at most `preview` pixels a side, for the file info window.
+pub fn for_tag(
+    bytes: Vec<u8>,
+    max_side: Option<u32>,
+    preview: u32,
+) -> Result<(Vec<u8>, egui::ColorImage), String> {
+    let picture = decode(&bytes).ok_or_else(|| {
+        tr!(
+            "not a JPEG or PNG picture, or too large",
+            "это не картинка JPEG или PNG, или она слишком большая"
+        )
+        .to_owned()
+    })?;
+    let largest = picture.width().max(picture.height());
+    let picture = match max_side {
+        Some(side) if largest > side => {
+            let smaller = picture.resize(side, side, image::imageops::FilterType::Lanczos3);
+            return Ok((jpeg(&smaller, TAG_QUALITY)?, preview_of(&smaller, preview)));
+        }
+        _ => picture,
+    };
+    Ok((bytes, preview_of(&picture, preview)))
+}
+
+/// The quality of a cover made smaller for a tag or saved as `folder.jpg`.
+const TAG_QUALITY: u8 = 90;
+
+fn preview_of(picture: &image::DynamicImage, side: u32) -> egui::ColorImage {
+    if picture.width().max(picture.height()) > side {
+        color_image(&picture.resize(side, side, image::imageops::FilterType::Triangle))
+    } else {
+        color_image(picture)
+    }
+}
+
+fn jpeg(picture: &image::DynamicImage, quality: u8) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality)
+        .encode_image(&picture.to_rgb8())
+        .map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+/// A file that may be a cover by its extension (JPEG, PNG).
+pub fn is_picture(path: &Path) -> bool {
+    path.extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .is_some_and(|e| matches!(e.as_str(), "jpg" | "jpeg" | "png"))
+}
+
+/// Where a cover saved into `folder` goes: its `folder.jpg` (in whatever
+/// case it has), and whether there is one already.
+pub fn folder_jpg(folder: &Path) -> (PathBuf, bool) {
+    let existing = std::fs::read_dir(folder).ok().and_then(|entries| {
+        entries.filter_map(Result::ok).map(|e| e.path()).find(|p| {
+            let name = p.file_name().map(|n| n.to_string_lossy().to_lowercase());
+            matches!(name.as_deref(), Some("folder.jpg"))
+        })
+    });
+    match existing {
+        Some(path) => (path, true),
+        None => (folder.join("folder.jpg"), false),
+    }
+}
+
+/// Saves `bytes` (a tag's cover) as `folder`'s `folder.jpg`: a JPEG as
+/// it is, a PNG made a JPEG. Written aside and renamed, so the folder's
+/// time changes and its album's thumbnail is made again.
+pub fn save_folder_jpg(folder: &Path, bytes: &[u8]) -> Result<PathBuf, String> {
+    let data = match image::guess_format(bytes) {
+        Ok(image::ImageFormat::Jpeg) => bytes.to_vec(),
+        _ => {
+            let picture = decode(bytes).ok_or_else(|| {
+                tr!(
+                    "the picture cannot be read",
+                    "картинку не удалось прочитать"
+                )
+                .to_owned()
+            })?;
+            jpeg(&picture, TAG_QUALITY)?
+        }
+    };
+    let (path, _) = folder_jpg(folder);
+    let tmp = path.with_extension("jpg.tmp");
+    std::fs::write(&tmp, &data)
+        .and_then(|()| std::fs::rename(&tmp, &path))
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            e.to_string()
+        })?;
+    Ok(path)
+}
+
 pub(crate) fn color_image(picture: &image::DynamicImage) -> egui::ColorImage {
     let rgba = picture.to_rgba8();
     egui::ColorImage::from_rgba_unmultiplied(
@@ -443,6 +549,56 @@ mod tests {
         let mut h = Fnv::default();
         h.write(b"a");
         assert_eq!(h.0, 0xaf63_dc4c_8601_ec8c);
+    }
+
+    /// A picture for a tag: as it is within the side, else made that large
+    /// as a JPEG; not a picture, refused.
+    #[test]
+    fn pictures_for_tags() {
+        let png = |w, h| {
+            let mut out = Vec::new();
+            image::DynamicImage::new_rgb8(w, h)
+                .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+                .unwrap();
+            out
+        };
+        let small = png(600, 300);
+        let (data, preview) = for_tag(small.clone(), Some(1000), 400).unwrap();
+        assert_eq!(data, small);
+        assert_eq!(preview.size, [400, 200]);
+        let (data, _) = for_tag(png(2000, 1000), None, 400).unwrap();
+        assert_eq!(image::guess_format(&data).unwrap(), image::ImageFormat::Png);
+        let (data, preview) = for_tag(png(2000, 1000), Some(1000), 400).unwrap();
+        assert_eq!(
+            image::guess_format(&data).unwrap(),
+            image::ImageFormat::Jpeg
+        );
+        let made = decode(&data).unwrap();
+        assert_eq!((made.width(), made.height()), (1000, 500));
+        assert_eq!(preview.size, [400, 200]);
+        assert!(for_tag(b"GIF89a".to_vec(), None, 400).is_err());
+    }
+
+    #[test]
+    fn folder_jpg_saved_in_its_case() {
+        let dir = std::env::temp_dir().join(format!("metalamp_folder_jpg_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(folder_jpg(&dir), (dir.join("folder.jpg"), false));
+        std::fs::write(dir.join("Folder.JPG"), b"old").unwrap();
+        assert_eq!(folder_jpg(&dir), (dir.join("Folder.JPG"), true));
+        let mut png = Vec::new();
+        image::DynamicImage::new_rgb8(8, 8)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let saved = save_folder_jpg(&dir, &png).unwrap();
+        assert_eq!(saved, dir.join("Folder.JPG"));
+        let written = std::fs::read(&saved).unwrap();
+        assert_eq!(
+            image::guess_format(&written).unwrap(),
+            image::ImageFormat::Jpeg
+        );
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

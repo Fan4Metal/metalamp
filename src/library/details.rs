@@ -34,10 +34,12 @@ pub struct Details {
     /// The front cover of the tag (else its first picture, else the
     /// folder's), at most [`COVER_SIDE`] pixels a side.
     pub cover: Option<egui::ColorImage>,
+    /// The tag's picture that is the cover, as it is in the file.
+    pub tag_cover: Option<Vec<u8>>,
 }
 
 /// The largest side of [`Details::cover`].
-const COVER_SIDE: u32 = 400;
+pub const COVER_SIDE: u32 = 400;
 
 pub struct Picture {
     pub kind: PictureType,
@@ -92,15 +94,17 @@ pub fn read(path: &Path) -> Result<Details, String> {
         Some(tag) => (fields_of(tag), tag.pictures().iter().map(picture).collect()),
         None => (Vec::new(), Vec::new()),
     };
-    let tagged = main.and_then(|tag| {
+    let tag_cover = main.and_then(|tag| {
         let pictures = tag.pictures();
         pictures
             .iter()
             .find(|p| p.pic_type() == PictureType::CoverFront)
             .or_else(|| pictures.first())
-            .and_then(|p| crate::covers::decode(p.data()))
+            .map(|p| p.data().to_vec())
     });
-    let cover = tagged
+    let cover = tag_cover
+        .as_deref()
+        .and_then(crate::covers::decode)
         .or_else(|| {
             let found = crate::covers::in_folder(path.parent()?)?;
             crate::covers::decode(&std::fs::read(found).ok()?)
@@ -139,6 +143,7 @@ pub fn read(path: &Path) -> Result<Details, String> {
             .flatten()
             .map(|g| (g.delay, g.padding)),
         cover,
+        tag_cover,
     })
 }
 

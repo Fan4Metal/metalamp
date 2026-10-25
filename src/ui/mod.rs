@@ -70,6 +70,11 @@ impl OwnWindow {
         *self = OwnWindow::default();
     }
 
+    /// The window, once found.
+    pub fn hwnd(&self) -> Option<isize> {
+        self.hwnd.flatten()
+    }
+
     /// The builder of a window made hidden.
     pub fn builder(builder: egui::ViewportBuilder) -> egui::ViewportBuilder {
         builder.with_visible(false)
