@@ -62,8 +62,9 @@ pub struct Look {
 
 /// The visualization's colours, apart from the theme's: the accent's
 /// shades (the default), a rainbow across the frequencies, Winamp's green
-/// to red by the level, fire by the level, or the user's own colour's
-/// shades. Kept by name, `rainbow` or `#12AB9F`.
+/// to red by the level, fire by the level, the colours of the cover of the
+/// track playing (`set_cover`) across the frequencies, or the user's own
+/// colour's shades. Kept by name, `rainbow` or `#12AB9F`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub enum VisualColours {
@@ -72,6 +73,9 @@ pub enum VisualColours {
     Rainbow,
     Winamp,
     Fire,
+    /// Up to three colours of the cover heard, across the place as the
+    /// rainbow's; the accent's shades while there is no cover.
+    Cover,
     /// `0xRRGGBB`, its shades mixed as the accent's.
     Custom(u32),
 }
@@ -90,11 +94,12 @@ impl From<VisualColours> for String {
 
 impl VisualColours {
     /// The ready ones (not the user's own).
-    pub const ALL: [VisualColours; 4] = [
+    pub const ALL: [VisualColours; 5] = [
         VisualColours::Accent,
         VisualColours::Rainbow,
         VisualColours::Winamp,
         VisualColours::Fire,
+        VisualColours::Cover,
     ];
 
     pub fn name(self) -> String {
@@ -103,6 +108,7 @@ impl VisualColours {
             VisualColours::Rainbow => "rainbow",
             VisualColours::Winamp => "winamp",
             VisualColours::Fire => "fire",
+            VisualColours::Cover => "cover",
             VisualColours::Custom(c) => return format!("#{:06X}", c & 0xffffff),
         };
         name.to_owned()
@@ -121,6 +127,7 @@ impl VisualColours {
             VisualColours::Rainbow => tr!("Rainbow", "Радуга"),
             VisualColours::Winamp => tr!("Winamp", "Как в Winamp"),
             VisualColours::Fire => tr!("Fire", "Огонь"),
+            VisualColours::Cover => tr!("Of the cover", "Из обложки"),
             VisualColours::Custom(_) => tr!("Your own colour", "Свой цвет"),
         }
     }
@@ -143,6 +150,9 @@ pub struct VisualPalette {
     peak: Color32,
     dark: bool,
     text: Color32,
+    /// The cover's colours made readable on the ground (`Cover`; none: no
+    /// cover, the accent's shades).
+    cover: Option<[Color32; 3]>,
 }
 
 impl VisualPalette {
@@ -169,6 +179,17 @@ impl VisualPalette {
             }
             VisualColours::Winamp => along(&WINAMP_STOPS, level),
             VisualColours::Fire => along(&FIRE_STOPS, level),
+            VisualColours::Cover => match self.cover {
+                Some(colours) => {
+                    let hue = across(colours, place);
+                    mix(
+                        mix(hue, Color32::BLACK, 0.3),
+                        mix(hue, Color32::WHITE, 0.2),
+                        level,
+                    )
+                }
+                None => mix(self.low, self.high, level),
+            },
         }
     }
 
@@ -176,6 +197,11 @@ impl VisualPalette {
     pub fn peak(self, place: f32) -> Color32 {
         match self.colours {
             VisualColours::Accent | VisualColours::Custom(_) => self.peak,
+            VisualColours::Cover => match self.cover {
+                Some(colours) if self.dark => mix(across(colours, place), Color32::WHITE, 0.55),
+                Some(colours) => mix(across(colours, place), Color32::BLACK, 0.35),
+                None => self.peak,
+            },
             VisualColours::Rainbow if self.dark => mix(rainbow(place), Color32::WHITE, 0.55),
             VisualColours::Rainbow => mix(rainbow(place), Color32::BLACK, 0.35),
             VisualColours::Winamp if self.dark => hex(0xd8d8d8),
@@ -205,6 +231,16 @@ fn rainbow(place: f32) -> Color32 {
     rgb(to(r), to(g), to(b))
 }
 
+/// The colour at `place` (0 to 1) of a gradient through `colours`.
+fn across(colours: [Color32; 3], place: f32) -> Color32 {
+    let place = place.clamp(0.0, 1.0);
+    if place <= 0.5 {
+        mix(colours[0], colours[1], place * 2.0)
+    } else {
+        mix(colours[1], colours[2], place * 2.0 - 1.0)
+    }
+}
+
 /// The colour at `t` (0 to 1) of a gradient of `stops`.
 fn along(stops: &[(f32, u32)], t: f32) -> Color32 {
     let i = stops
@@ -225,9 +261,202 @@ pub fn icon_colour(own: Option<Accent>) -> Color32 {
     }
 }
 
-/// The visualization's colours in use.
+/// The visualization's colours in use: the cover's (`set_cover`) when
+/// they are chosen.
 pub fn visual() -> VisualPalette {
-    current().visual
+    let mut v = current().visual;
+    if v.colours == VisualColours::Cover {
+        v.cover = cover().map(|c| c.map(|c| readable(c, v.dark)));
+    }
+    v
+}
+
+/// The cover's colours as `visual` would show them, for the settings'
+/// swatch: with no cover heard, a sample of three.
+pub fn with_cover(mut v: VisualPalette) -> VisualPalette {
+    const SAMPLE: [Color32; 3] = [hex(0xd0487a), hex(0x7a5cf0), hex(0x2fb2c4)];
+    v.cover = Some(cover().unwrap_or(SAMPLE).map(|c| readable(c, v.dark)));
+    v
+}
+
+/// The colours of the cover heard, as `cover_colours` found them (none:
+/// no cover).
+static COVER: RwLock<Option<[Color32; 3]>> = RwLock::new(None);
+
+/// The cover heard has these colours from now on (`CoverFade` moves them).
+pub fn set_cover(colours: Option<[Color32; 3]>) {
+    if let Ok(mut cover) = COVER.write() {
+        *cover = colours;
+    }
+}
+
+fn cover() -> Option<[Color32; 3]> {
+    COVER.read().ok().and_then(|c| *c)
+}
+
+/// `c` lightened or darkened until its luminance is within what reads on
+/// the visualization's ground: a dark cover on a dark theme, a pale one on
+/// a light theme are brought into it.
+fn readable(c: Color32, dark: bool) -> Color32 {
+    let (lo, hi) = if dark { (0.16, 0.55) } else { (0.06, 0.22) };
+    let l = luminance(c);
+    let (towards, bound) = if l < lo {
+        (Color32::WHITE, lo)
+    } else if l > hi {
+        (Color32::BLACK, hi)
+    } else {
+        return c;
+    };
+    // The least mix that reaches the bound.
+    let (mut a, mut b) = (0.0f32, 1.0f32);
+    for _ in 0..14 {
+        let t = (a + b) / 2.0;
+        let m = luminance(mix(c, towards, t));
+        let reached = if towards == Color32::WHITE {
+            m >= bound
+        } else {
+            m <= bound
+        };
+        if reached {
+            b = t;
+        } else {
+            a = t;
+        }
+    }
+    mix(c, towards, b)
+}
+
+/// Up to three colours that stand for a cover of `pixels`, the one that
+/// stands out most first: the pixels (about 4096 of them) counted in
+/// buckets of 4 bits a channel, each bucket's mean weighed by its count,
+/// its saturation and how far it is from black and white, and the best
+/// ones taken that differ from those taken before. Two found: their mix
+/// between them; one: it three times; none (a transparent picture): none.
+pub fn cover_colours(pixels: &[Color32]) -> Option<[Color32; 3]> {
+    const SAMPLES: usize = 4096;
+    // How far apart (a weighted RGB distance) two colours taken must be,
+    // and the least share of the picture a colour after the first needs.
+    const APART: f32 = 90.0;
+    const LEAST_SHARE: f32 = 0.01;
+    let step = (pixels.len() / SAMPLES).max(1);
+    let mut buckets = vec![[0u32; 4]; 4096];
+    let mut counted = 0u32;
+    for p in pixels.iter().step_by(step).filter(|p| p.a() >= 128) {
+        let (r, g, b) = (p.r(), p.g(), p.b());
+        let i = (usize::from(r >> 4) << 8) | (usize::from(g >> 4) << 4) | usize::from(b >> 4);
+        let bucket = &mut buckets[i];
+        bucket[0] += 1;
+        bucket[1] += u32::from(r);
+        bucket[2] += u32::from(g);
+        bucket[3] += u32::from(b);
+        counted += 1;
+    }
+    let mut weighed: Vec<(f32, u32, Color32)> = buckets
+        .iter()
+        .filter(|b| b[0] > 0)
+        .map(|b| {
+            let n = b[0];
+            let c = rgb((b[1] / n) as u8, (b[2] / n) as u8, (b[3] / n) as u8);
+            let (saturation, lightness) = saturation_lightness(c);
+            let mid = (1.0 - (2.0 * lightness - 1.0).powi(2)).max(0.05);
+            (n as f32 * (0.15 + saturation).powi(2) * mid, n, c)
+        })
+        .collect();
+    weighed.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let mut taken: Vec<Color32> = Vec::with_capacity(3);
+    for &(_, n, c) in &weighed {
+        if !taken.is_empty() && (n as f32) < counted as f32 * LEAST_SHARE {
+            continue;
+        }
+        if taken.iter().all(|&t| distance(t, c) > APART) {
+            taken.push(c);
+            if taken.len() == 3 {
+                break;
+            }
+        }
+    }
+    match taken[..] {
+        [] => None,
+        [a] => Some([a, a, a]),
+        [a, b] => Some([a, mix(a, b, 0.5), b]),
+        [a, b, c, ..] => Some([a, b, c]),
+    }
+}
+
+/// HSL's saturation and lightness of `c`, 0 to 1.
+fn saturation_lightness(c: Color32) -> (f32, f32) {
+    let [r, g, b] = [c.r(), c.g(), c.b()].map(|v| f32::from(v) / 255.0);
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let lightness = (max + min) / 2.0;
+    let saturation = if max == min {
+        0.0
+    } else {
+        (max - min) / (1.0 - (2.0 * lightness - 1.0).abs()).max(1e-6)
+    };
+    (saturation.min(1.0), lightness)
+}
+
+/// How far apart two colours look: RGB weighed by the red's mean
+/// (redmean), 0 to about 765.
+fn distance(a: Color32, b: Color32) -> f32 {
+    let mean = (f32::from(a.r()) + f32::from(b.r())) / 2.0;
+    let d = |x: u8, y: u8| f32::from(x) - f32::from(y);
+    let (dr, dg, db) = (d(a.r(), b.r()), d(a.g(), b.g()), d(a.b(), b.b()));
+    ((2.0 + mean / 256.0) * dr * dr + 4.0 * dg * dg + (2.0 + (255.0 - mean) / 256.0) * db * db)
+        .sqrt()
+}
+
+/// The cover's colours moving to the next cover's over `FADE_S`, rather
+/// than at once, and to the accent's when a track has none.
+pub struct CoverFade {
+    from: [Color32; 3],
+    to: Option<[Color32; 3]>,
+    shown: Option<[Color32; 3]>,
+    since: std::time::Instant,
+}
+
+impl Default for CoverFade {
+    fn default() -> Self {
+        CoverFade {
+            from: [accent(); 3],
+            to: None,
+            shown: None,
+            // At rest: no way under way.
+            since: std::time::Instant::now()
+                .checked_sub(std::time::Duration::from_secs(1))
+                .unwrap_or_else(std::time::Instant::now),
+        }
+    }
+}
+
+impl CoverFade {
+    const FADE_S: f32 = 0.6;
+
+    /// Moves on towards `target` (`Some(None)`: no cover; `None`: not
+    /// known yet, the way goes on as it was) and hands the colours to
+    /// `set_cover`; true while they are still moving.
+    pub fn follow(&mut self, target: Option<Option<[Color32; 3]>>) -> bool {
+        if let Some(target) = target
+            && target != self.to
+        {
+            self.from = self.shown.unwrap_or([accent(); 3]);
+            self.to = target;
+            self.since = std::time::Instant::now();
+        }
+        let t = (self.since.elapsed().as_secs_f32() / Self::FADE_S).min(1.0);
+        let shown = if t >= 1.0 {
+            self.to
+        } else {
+            let ease = t * t * (3.0 - 2.0 * t);
+            let to = self.to.unwrap_or([accent(); 3]);
+            Some(std::array::from_fn(|i| mix(self.from[i], to[i], ease)))
+        };
+        if shown != self.shown {
+            self.shown = shown;
+            set_cover(shown);
+        }
+        t < 1.0
+    }
 }
 
 /// The base of the look.
@@ -939,6 +1168,7 @@ impl Palette {
             peak,
             dark: p.dark,
             text: p.text,
+            cover: None,
         };
         p.on_accent = if luminance(p.accent) > 0.32 {
             hex(0x1a1b1f)
@@ -1019,6 +1249,7 @@ impl Palette {
             peak: Color32::BLACK,
             dark: true,
             text: Color32::WHITE,
+            cover: None,
         },
     };
 }
@@ -1164,6 +1395,76 @@ mod tests {
         let own = of(VisualColours::Custom(0x2f7cf0));
         let blue = own.at(1.0, 0.5);
         assert!(blue.b() > blue.r(), "{blue:?}");
+        // The cover's: the accent's shades without a cover, its colours
+        // across the place with one.
+        let mut cover = of(VisualColours::Cover);
+        assert_eq!(cover.at(1.0, 0.5), p.spectrum_high);
+        cover.cover = Some([hex(0xc03030), hex(0x30c030), hex(0x3030c0)]);
+        let (bass, top) = (cover.at(1.0, 0.0), cover.at(1.0, 1.0));
+        assert!(bass.r() > bass.b() && top.b() > top.r(), "{bass:?} {top:?}");
+        assert!(!cover.by_level());
+    }
+
+    /// A cover's colours: the vivid ones first, apart from one another,
+    /// over a larger dull ground; a grey cover grey; a transparent one
+    /// none.
+    #[test]
+    fn colours_of_a_cover() {
+        let mut pixels = vec![hex(0x202020); 60 * 100];
+        pixels.extend(vec![hex(0xd02020); 25 * 100]);
+        pixels.extend(vec![hex(0x2050e0); 15 * 100]);
+        let [a, b, c] = cover_colours(&pixels).unwrap();
+        assert!(a.r() > 180 && a.g() < 60, "{a:?}");
+        assert!(b.b() > 180 && b.r() < 60, "{b:?}");
+        assert!(distance(c, a) > 90.0 && distance(c, b) > 90.0, "{c:?}");
+        let grey = cover_colours(&vec![hex(0x808080); 1000]).unwrap();
+        assert_eq!(grey, [hex(0x808080); 3]);
+        // Two: their mix between them.
+        let mut two = vec![hex(0xd02020); 500];
+        two.extend(vec![hex(0x2050e0); 500]);
+        let [a, m, b] = cover_colours(&two).unwrap();
+        assert_eq!(m, mix(a, b, 0.5));
+        assert_eq!(cover_colours(&vec![Color32::TRANSPARENT; 100]), None);
+        assert_eq!(cover_colours(&[]), None);
+    }
+
+    /// Whatever the cover, its colours are brought to what reads on the
+    /// ground: lighter on a dark theme, deeper on a light one.
+    #[test]
+    fn cover_colours_read_on_every_theme() {
+        for theme in Theme::ALL {
+            let p = Palette::of(Look {
+                theme,
+                ..Look::default()
+            });
+            for c in [0x000000, 0xffffff, 0xffff40, 0x101060, 0x808080, 0xe03030] {
+                let r = readable(hex(c), p.dark);
+                let l = luminance(r);
+                let (lo, hi) = if p.dark { (0.16, 0.55) } else { (0.06, 0.22) };
+                assert!(l >= lo - 0.01 && l <= hi + 0.01, "{theme:?} #{c:06x}: {l}");
+                assert!(contrast(r, p.list_bg) >= 2.5, "{theme:?} #{c:06x}");
+            }
+            // One already within is kept.
+            let fine = if p.dark { hex(0x4080d0) } else { hex(0x305080) };
+            assert_eq!(readable(fine, p.dark), fine);
+        }
+    }
+
+    #[test]
+    fn cover_fade_moves_to_the_next_cover() {
+        let mut fade = CoverFade::default();
+        let red = [hex(0xd02020); 3];
+        // Not known yet: nothing to move to.
+        assert!(!fade.follow(None));
+        assert!(fade.follow(Some(Some(red))));
+        fade.since -= std::time::Duration::from_secs(1);
+        assert!(!fade.follow(Some(Some(red))));
+        assert_eq!(fade.shown, Some(red));
+        // A track without a cover: back to the accent's, then none.
+        assert!(fade.follow(Some(None)));
+        fade.since -= std::time::Duration::from_secs(1);
+        assert!(!fade.follow(None));
+        assert_eq!(fade.shown, None);
     }
 
     #[test]

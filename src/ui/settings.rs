@@ -1162,8 +1162,8 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
             ui,
             tr!("Visualization's colours", "Цвета визуализации"),
             Some(tr!(
-                "Apart from the theme: the accent's shades, a rainbow across the frequencies, Winamp's green to red or fire by the level, or one's own colour's shades.",
-                "Отдельно от темы: оттенки акцента, радуга по частотам, зелёный-жёлтый-красный как в Winamp или огонь по уровню, либо оттенки своего цвета."
+                "Apart from the theme: the accent's shades, a rainbow across the frequencies, Winamp's green to red or fire by the level, the colours of the cover of the track playing across the frequencies (the accent's shades for a track without one), or one's own colour's shades.",
+                "Отдельно от темы: оттенки акцента, радуга по частотам, зелёный-жёлтый-красный как в Winamp или огонь по уровню, цвета обложки играющего трека по частотам (для трека без обложки — оттенки акцента), либо оттенки своего цвета."
             )),
             ACCENTS_WIDTH,
             |ui| {
@@ -2061,7 +2061,10 @@ fn visual_colours(ui: &mut Ui, colours: &mut VisualColours, look: palette::Look)
     for &c in VisualColours::ALL.iter().rev() {
         let (rect, response) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
         let response = response.on_hover_text(c.label());
-        let shades = Palette::of(palette::Look { visual: c, ..look }).visual;
+        let mut shades = Palette::of(palette::Look { visual: c, ..look }).visual;
+        if c == VisualColours::Cover {
+            shades = palette::with_cover(shades);
+        }
         swatch(ui, rect, *colours == c, response.hovered(), |p, centre, r| {
             gradient_disc(p, centre, r, shades);
         });

@@ -48,7 +48,7 @@ struct Queue {
 }
 
 enum Found {
-    Image(CoverKey, egui::ColorImage),
+    Image(CoverKey, egui::ColorImage, Option<[egui::Color32; 3]>),
     Missing(CoverKey),
 }
 
@@ -56,6 +56,9 @@ pub struct Covers {
     queue: Arc<Queue>,
     rx: Receiver<Found>,
     textures: HashMap<CoverKey, (egui::TextureHandle, u64)>,
+    /// The covers' colours (`palette::cover_colours`), kept when their
+    /// textures are dropped: a few bytes each.
+    colours: HashMap<CoverKey, [egui::Color32; 3]>,
     /// Asked for and not answered yet.
     asked: HashSet<CoverKey>,
     /// Albums without a cover.
@@ -82,6 +85,7 @@ impl Covers {
             queue,
             rx,
             textures: HashMap::new(),
+            colours: HashMap::new(),
             asked: HashSet::new(),
             missing: HashSet::new(),
         }
@@ -95,8 +99,12 @@ impl Covers {
         let frame = ctx.cumulative_frame_nr();
         for found in self.rx.try_iter() {
             match found {
-                Found::Image(key, image) => {
+                Found::Image(key, image, colours) => {
                     self.asked.remove(&key);
+                    match colours {
+                        Some(c) => self.colours.insert(key, c),
+                        None => self.colours.remove(&key),
+                    };
                     let texture = ctx.load_texture(
                         format!("cover {key:x}"),
                         image,
@@ -164,6 +172,20 @@ impl Covers {
         None
     }
 
+    /// The colours of the cover of `album`: `Some(None)` when it has none
+    /// (or no colours: a transparent picture), `None` while not known yet
+    /// (asked for by `get`).
+    pub fn colours(&self, library: &Library, album: &Album) -> Option<Option<[egui::Color32; 3]>> {
+        let key = key_of(library, album);
+        if let Some(c) = self.colours.get(&key) {
+            Some(Some(*c))
+        } else if self.missing.contains(&key) || self.textures.contains_key(&key) {
+            Some(None)
+        } else {
+            None
+        }
+    }
+
     /// The albums without a cover asked for again (after a scan: a
     /// picture may have been put into a folder).
     pub fn look_again(&mut self) {
@@ -176,6 +198,7 @@ impl Covers {
         for album in library.albums.iter().filter(|a| a.folder == folder) {
             let key = key_of(library, album);
             self.textures.remove(&key);
+            self.colours.remove(&key);
             self.missing.remove(&key);
         }
     }
@@ -278,7 +301,10 @@ fn work(queue: &Queue, tx: &Sender<Found>, dir: Option<&Path>, ctx: &egui::Conte
         };
         let source = job.tagged.as_deref().unwrap_or(&job.folder);
         let found = match crate::guard::catch(source, || cover(&job, dir)).flatten() {
-            Some(image) => Found::Image(job.key, image),
+            Some(image) => {
+                let colours = crate::palette::cover_colours(&image.pixels);
+                Found::Image(job.key, image, colours)
+            }
             None => Found::Missing(job.key),
         };
         if tx.send(found).is_err() {

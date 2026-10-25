@@ -15,8 +15,12 @@ use super::{Track, tags};
 /// up to 360 points wide.
 const COVER_PX: u32 = 512;
 
-/// What was read of a file.
-type Read = (Option<Track>, Option<egui::ColorImage>);
+/// What was read of a file: its track, its cover and the cover's colours.
+type Read = (
+    Option<Track>,
+    Option<egui::ColorImage>,
+    Option<[egui::Color32; 3]>,
+);
 
 #[derive(Default)]
 pub struct Outside {
@@ -27,6 +31,8 @@ pub struct Outside {
     /// Its cover once read; the one before meanwhile (the next file of a
     /// folder shows no gap).
     cover: Option<TextureHandle>,
+    /// The cover's colours (`palette::cover_colours`), kept as the cover.
+    colours: Option<[egui::Color32; 3]>,
     rx: Option<Receiver<Read>>,
 }
 
@@ -35,10 +41,11 @@ impl Outside {
     /// none, or one it holds): a new one is read on a thread.
     pub fn follow(&mut self, ctx: &egui::Context, path: Option<&Path>) {
         if let Some(rx) = &self.rx
-            && let Ok((track, image)) = rx.try_recv()
+            && let Ok((track, image, colours)) = rx.try_recv()
         {
             self.rx = None;
             self.track = track;
+            self.colours = colours;
             self.cover =
                 image.map(|i| ctx.load_texture("outside_cover", i, TextureOptions::LINEAR));
         }
@@ -50,6 +57,7 @@ impl Outside {
         self.rx = None;
         let Some(path) = path else {
             self.cover = None;
+            self.colours = None;
             return;
         };
         let (tx, rx) = channel();
@@ -59,7 +67,11 @@ impl Outside {
             .name("outside".into())
             .spawn(move || {
                 let read = crate::guard::catch(&path, || {
-                    (read_track(&path), crate::covers::large(&path, COVER_PX))
+                    let cover = crate::covers::large(&path, COVER_PX);
+                    let colours = cover
+                        .as_ref()
+                        .and_then(|c| crate::palette::cover_colours(&c.pixels));
+                    (read_track(&path), cover, colours)
                 })
                 .unwrap_or_default();
                 let _ = tx.send(read);
@@ -78,6 +90,12 @@ impl Outside {
     /// The cover of the file followed.
     pub fn cover(&self) -> Option<TextureHandle> {
         self.cover.clone()
+    }
+
+    /// The colours of the cover of the file followed (the one before's
+    /// while it is read).
+    pub fn colours(&self) -> Option<[egui::Color32; 3]> {
+        self.colours
     }
 
     /// Reads the file followed again (its tags were written).

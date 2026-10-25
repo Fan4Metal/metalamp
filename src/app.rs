@@ -33,6 +33,9 @@ pub struct App {
     /// The player bar's visualization and the samples it is fed.
     visual: crate::ui::visual::Visualizer,
     heard: Vec<f32>,
+    /// The visualization's colours of the cover heard, moving to the next
+    /// cover's.
+    cover_fade: palette::CoverFade,
     /// The title row and the player bar, as the frame before laid them
     /// out: with the pointer there the arrows seek and set the volume
     /// (the keys are read before the panels are laid out).
@@ -212,6 +215,7 @@ impl App {
             settings,
             settings_dialog: SettingsDialog::from_env(),
             visual: crate::ui::visual::Visualizer::new(),
+            cover_fade: palette::CoverFade::default(),
             heard: Vec::new(),
             player_area: egui::Rect::NOTHING,
             about,
@@ -556,6 +560,20 @@ impl App {
         self.library_view.covers.get(ctx, &self.library, album)
     }
 
+    /// The colours of the cover `playing_cover` shows: `Some(None)` when
+    /// it has none, `None` while its thumbnail is not made yet.
+    fn playing_cover_colours(&self) -> Option<Option<[egui::Color32; 3]>> {
+        let (_, _, track) = self.now_playing();
+        match track {
+            Some(t) => {
+                let album = &self.library.albums[self.library.album_of[t as usize] as usize];
+                self.library_view.covers.colours(&self.library, album)
+            }
+            None if self.playing_or_current_path().is_some() => Some(self.outside.colours()),
+            None => Some(None),
+        }
+    }
+
     /// The mini player in the whole window.
     fn mini_player(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
@@ -630,6 +648,12 @@ impl App {
         let ctx = ui.ctx().clone();
         let (title, artist, _) = self.now_playing();
         let cover = self.playing_cover(&ctx);
+        if self.settings.visual_colours == palette::VisualColours::Cover {
+            let target = self.playing_cover_colours();
+            if self.cover_fade.follow(target) {
+                ctx.request_repaint();
+            }
+        }
         // The visualization: the samples heard now, for its display's size.
         let size = player_bar::visual_size(self.bar_layout(), ui.max_rect());
         let mut heard = std::mem::take(&mut self.heard);
