@@ -17,7 +17,7 @@ use crate::i18n::LangChoice;
 use crate::keymap::{Action, Chord, Group, Keymap};
 use crate::palette;
 use crate::palette::{Accent, Palette, Theme, Tint, VisualColours};
-use crate::settings::{BarLayout, CoverSide, EqPreset, MediaKeys, Settings, Visual, WindowLayout};
+use crate::settings::{BarLayout, EqPreset, MediaKeys, Settings, Visual, WindowLayout};
 use crate::ui::icons::{self, Icon};
 use crate::update::{Status, Updates, release_url, version_of};
 
@@ -1202,27 +1202,6 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
             )),
             50.0,
             |ui| switch(ui, &mut settings.tray),
-        );
-    });
-    section(ui, tr!("Tags", "Теги"), |ui| {
-        row(
-            ui,
-            tr!("Covers put into tags", "Обложки в тегах"),
-            Some(tr!(
-                "A picture put into the tags in the file info window: a larger one is made this large, as a JPEG, so each track of an album does not carry megabytes of it. A JPEG or PNG within it is written as it is.",
-                "Картинка, которую окно сведений о файле записывает в теги: картинка крупнее уменьшается до этого размера и пишется в JPEG, чтобы каждый трек альбома не нёс по нескольку мегабайт. JPEG или PNG в этих пределах пишется как есть."
-            )),
-            CONTROL,
-            |ui| {
-                egui::ComboBox::from_id_salt("settings_tag_cover_side")
-                    .selected_text(settings.tag_cover_side.label())
-                    .width(CONTROL - 10.0)
-                    .show_ui(ui, |ui| {
-                        for c in CoverSide::ALL {
-                            ui.selectable_value(&mut settings.tag_cover_side, c, c.label());
-                        }
-                    });
-            },
         );
     });
 }
@@ -2430,7 +2409,6 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     settings.selection = d.selection;
     settings.playing = d.playing;
     settings.media_keys = d.media_keys;
-    settings.tag_cover_side = d.tag_cover_side;
     settings.keys = d.keys;
     settings.output_device = d.output_device;
     settings.output_device_name = d.output_device_name;

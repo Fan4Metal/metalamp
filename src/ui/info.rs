@@ -46,6 +46,7 @@ use crate::keymap::{Action, Cmd, Keymap};
 use crate::library::details::{self, Details};
 use crate::library::edit::{self, Changes, CoverChange, Values};
 use crate::palette;
+use crate::settings::CoverSide;
 
 type Read = (PathBuf, Result<Details, String>);
 
@@ -118,9 +119,10 @@ pub struct InfoView {
     window: super::OwnWindow,
     /// Has the player close the files written meanwhile (`new`).
     releaser: Option<Releaser>,
-    /// The largest side of a cover put into the tags (the setting, set by
-    /// the app each frame).
-    pub cover_side: Option<u32>,
+    /// The largest side of a cover put into the tags: the setting, set by
+    /// the app each frame and chosen in the cover's menu, which the app
+    /// keeps.
+    pub cover_side: CoverSide,
     /// A picture is to be chosen for the cover: the app shows the dialog
     /// and hands its answer to `cover_from`.
     pub pick_cover: bool,
@@ -138,8 +140,9 @@ pub struct InfoView {
 
 /// What a cover's thread did.
 enum CoverDone {
-    /// The picture as it is to be written, and its preview.
-    Made(Result<(Vec<u8>, egui::ColorImage), String>),
+    /// The picture (from its file) as it is to be written, its preview
+    /// and sizes.
+    Made(PathBuf, Result<crate::covers::ForTag, String>),
     /// The `folder.jpg` written.
     Saved(Result<PathBuf, String>),
 }
@@ -155,6 +158,9 @@ enum CoverAct {
     Keep,
     /// The cover shown saved as the folder's `folder.jpg`.
     SaveToFolder,
+    /// The largest side of a cover put into tags; a new one waiting is
+    /// made again for it.
+    Side(CoverSide),
 }
 
 /// A change of the cover waiting to be written with the fields, and the
@@ -162,6 +168,8 @@ enum CoverAct {
 struct NewCover {
     change: CoverChange,
     preview: Option<TextureHandle>,
+    /// The file it was made from.
+    source: Option<PathBuf>,
 }
 
 /// What the window was asked to do this frame.
@@ -648,9 +656,25 @@ impl InfoView {
     /// saving it into the folder is done at once.
     fn cover_act(&mut self, ctx: &egui::Context, act: CoverAct) {
         self.cover_note = None;
-        if let CoverAct::SaveToFolder = act {
-            self.save_to_folder(ctx);
-            return;
+        match act {
+            CoverAct::SaveToFolder => {
+                self.save_to_folder(ctx);
+                return;
+            }
+            CoverAct::Side(side) => {
+                self.cover_side = side;
+                let source = self
+                    .form
+                    .as_ref()
+                    .filter(|_| self.editing)
+                    .and_then(|f| f.cover.as_ref())
+                    .and_then(|c| c.source.clone());
+                if let Some(source) = source {
+                    self.make_cover(ctx, source);
+                }
+                return;
+            }
+            _ => {}
         }
         if !self.editing {
             self.start_editing(ctx);
@@ -666,16 +690,17 @@ impl InfoView {
                     form.cover = matches!(act, CoverAct::Remove).then_some(NewCover {
                         change: CoverChange::Remove,
                         preview: None,
+                        source: None,
                     });
                 }
             }
-            CoverAct::SaveToFolder => {}
+            CoverAct::SaveToFolder | CoverAct::Side(_) => {}
         }
     }
 
     /// The picture at `path` made ready for the tags on a thread.
     fn make_cover(&mut self, ctx: &egui::Context, path: PathBuf) {
-        let side = self.cover_side;
+        let side = self.cover_side.pixels();
         self.cover_job = Some(spawn_cover(ctx, move || {
             let name = path.file_name().unwrap_or_default().to_string_lossy();
             let made = crate::guard::catch(&path, || {
@@ -687,7 +712,8 @@ impl InfoView {
                 crate::covers::for_tag(bytes, side, details::COVER_SIDE)
             })
             .unwrap_or_else(|| Err(tr!("cannot be read", "не удалось прочитать").into()));
-            CoverDone::Made(made.map_err(|e| format!("{name}: {e}")))
+            let made = made.map_err(|e| format!("{name}: {e}"));
+            CoverDone::Made(path, made)
         }));
     }
 
@@ -750,13 +776,15 @@ impl InfoView {
         };
         self.cover_job = None;
         match done {
-            CoverDone::Made(Ok((data, image))) => {
+            CoverDone::Made(source, Ok(made)) => {
                 if let Some(form) = self.form.as_mut().filter(|_| self.editing) {
+                    self.cover_note = Some((made_note(&made), false));
                     let preview =
-                        ctx.load_texture("file_info_new_cover", image, Default::default());
+                        ctx.load_texture("file_info_new_cover", made.preview, Default::default());
                     form.cover = Some(NewCover {
-                        change: CoverChange::Set(Arc::new(data)),
+                        change: CoverChange::Set(Arc::new(made.data)),
                         preview: Some(preview),
+                        source: Some(source),
                     });
                 }
             }
@@ -772,7 +800,7 @@ impl InfoView {
                     self.request(ctx, &wanted);
                 }
             }
-            CoverDone::Made(Err(e)) | CoverDone::Saved(Err(e)) => {
+            CoverDone::Made(_, Err(e)) | CoverDone::Saved(Err(e)) => {
                 self.cover_note = Some((e, true));
             }
         }
@@ -802,6 +830,7 @@ impl InfoView {
                 None => in_tag,
             },
             savable: self.folder_cover().is_some(),
+            side: self.cover_side,
             dropping,
             busy: self.cover_job.is_some(),
             note: self.cover_note.clone(),
@@ -1779,6 +1808,25 @@ struct CoverMenu {
     /// A picture is being read or saved.
     busy: bool,
     note: Option<(String, bool)>,
+    /// The largest side of a cover put into tags.
+    side: CoverSide,
+}
+
+/// What became of a picture made ready: its size, and the size written.
+fn made_note(made: &crate::covers::ForTag) -> String {
+    let ((w, h), (tw, th)) = (made.from, made.to);
+    let size = format::size(made.data.len() as u64);
+    if made.from == made.to {
+        tr!(
+            format!("{w}×{h}, written as it is ({size})"),
+            format!("{w}×{h}, запишется как есть ({size})")
+        )
+    } else {
+        tr!(
+            format!("{w}×{h}, made {tw}×{th} (JPEG, {size})"),
+            format!("{w}×{h}, уменьшена до {tw}×{th} (JPEG, {size})")
+        )
+    }
 }
 
 /// A picture file this large is not taken for a cover.
@@ -1840,6 +1888,9 @@ fn cover_button(ui: &mut Ui, cover: Option<&TextureHandle>, menu: &CoverMenu, ac
     let toggle = resp.clicked() || resp.secondary_clicked();
     egui::Popup::menu(&resp)
         .open_memory(toggle.then_some(egui::containers::SetOpenCommand::Toggle))
+        // The size is chosen with the menu kept open; the other items
+        // close it.
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| cover_items(ui, menu, acts));
 }
 
@@ -1886,6 +1937,32 @@ fn cover_items(ui: &mut Ui, menu: &CoverMenu, acts: &mut Vec<Act>) {
         "Tags of this format cannot be written",
         "Теги этого формата записать нельзя"
     ));
+    ui.separator();
+    ui.label(
+        RichText::new(tr!(
+            "The largest side in the tag, pixels",
+            "Наибольшая сторона в теге, пикс."
+        ))
+        .size(12.0)
+        .color(palette::text_weak()),
+    )
+    .on_hover_text(tr!(
+        "A larger picture is made this large and written as a JPEG, so each track of an album does not carry megabytes of it; a JPEG or PNG within it is written as it is.",
+        "Картинка крупнее уменьшается до этого размера и пишется в JPEG, чтобы каждый трек альбома не нёс по нескольку мегабайт; JPEG или PNG в этих пределах пишется как есть."
+    ));
+    ui.add_enabled_ui(!menu.busy, |ui| {
+        ui.horizontal(|ui| {
+            for side in CoverSide::ALL {
+                if ui
+                    .selectable_label(menu.side == side, side.label())
+                    .clicked()
+                    && menu.side != side
+                {
+                    acts.push(Act::Cover(CoverAct::Side(side)));
+                }
+            }
+        });
+    });
     if menu.savable
         && let Some(folder) = &menu.folder
     {

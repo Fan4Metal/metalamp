@@ -1969,11 +1969,16 @@ impl eframe::App for App {
         if (&self.settings.dsp, &self.settings.eq_presets) != (&before.0, &before.1) {
             self.place_changed = Some(Instant::now());
         }
-        self.file_info.cover_side = self.settings.tag_cover_side.pixels();
+        self.file_info.cover_side = self.settings.tag_cover_side;
         if self.file_info.show(&ctx, self.hwnd, &self.settings.keys) {
             // The files written: their tags read again.
             self.rescan();
             self.outside.read_again(&ctx);
+        }
+        // The size chosen in the cover's menu is kept.
+        if self.file_info.cover_side != self.settings.tag_cover_side {
+            self.settings.tag_cover_side = self.file_info.cover_side;
+            self.place_changed = Some(Instant::now());
         }
         if std::mem::take(&mut self.file_info.pick_cover) {
             let make = || {

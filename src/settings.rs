@@ -205,6 +205,8 @@ pub enum CoverSide {
     /// As it is.
     #[serde(rename = "original")]
     Original,
+    #[serde(rename = "500")]
+    Px500,
     #[default]
     #[serde(rename = "1000")]
     Px1000,
@@ -213,21 +215,28 @@ pub enum CoverSide {
 }
 
 impl CoverSide {
-    pub const ALL: [CoverSide; 3] = [CoverSide::Original, CoverSide::Px1000, CoverSide::Px1500];
+    pub const ALL: [CoverSide; 4] = [
+        CoverSide::Original,
+        CoverSide::Px500,
+        CoverSide::Px1000,
+        CoverSide::Px1500,
+    ];
 
     /// The largest side in pixels; none: any.
     pub fn pixels(self) -> Option<u32> {
         match self {
             CoverSide::Original => None,
+            CoverSide::Px500 => Some(500),
             CoverSide::Px1000 => Some(1000),
             CoverSide::Px1500 => Some(1500),
         }
     }
 
+    /// As the cover's menu offers it: "As it is", or the pixels.
     pub fn label(self) -> String {
         match self.pixels() {
             None => tr!("As it is", "Как есть").to_owned(),
-            Some(px) => tr!(format!("Up to {px} px"), format!("До {px} пикс.")),
+            Some(px) => px.to_string(),
         }
     }
 }

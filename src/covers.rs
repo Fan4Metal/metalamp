@@ -362,15 +362,22 @@ pub fn large(path: &Path, side: u32) -> Option<egui::ColorImage> {
     Some(color_image(&picture))
 }
 
+/// A picture made ready for a tag (`for_tag`).
+pub struct ForTag {
+    /// As it is to be written.
+    pub data: Vec<u8>,
+    /// At most the preview's side, for the file info window.
+    pub preview: egui::ColorImage,
+    /// The picture's size in pixels, and the size written.
+    pub from: (u32, u32),
+    pub to: (u32, u32),
+}
+
 /// A picture chosen for a tag's cover (`bytes`, a file's), as it is to be
 /// written: a JPEG or a PNG as it is, or, when a side is over `max_side`
 /// (the setting; none: as it is), made that large as a JPEG; with it the
 /// picture at most `preview` pixels a side, for the file info window.
-pub fn for_tag(
-    bytes: Vec<u8>,
-    max_side: Option<u32>,
-    preview: u32,
-) -> Result<(Vec<u8>, egui::ColorImage), String> {
+pub fn for_tag(bytes: Vec<u8>, max_side: Option<u32>, preview: u32) -> Result<ForTag, String> {
     let picture = decode(&bytes).ok_or_else(|| {
         tr!(
             "not a JPEG or PNG picture, or too large",
@@ -378,15 +385,24 @@ pub fn for_tag(
         )
         .to_owned()
     })?;
-    let largest = picture.width().max(picture.height());
-    let picture = match max_side {
-        Some(side) if largest > side => {
+    let from = (picture.width(), picture.height());
+    match max_side {
+        Some(side) if from.0.max(from.1) > side => {
             let smaller = picture.resize(side, side, image::imageops::FilterType::Lanczos3);
-            return Ok((jpeg(&smaller, TAG_QUALITY)?, preview_of(&smaller, preview)));
+            Ok(ForTag {
+                data: jpeg(&smaller, TAG_QUALITY)?,
+                preview: preview_of(&smaller, preview),
+                from,
+                to: (smaller.width(), smaller.height()),
+            })
         }
-        _ => picture,
-    };
-    Ok((bytes, preview_of(&picture, preview)))
+        _ => Ok(ForTag {
+            preview: preview_of(&picture, preview),
+            data: bytes,
+            from,
+            to: from,
+        }),
+    }
 }
 
 /// The quality of a cover made smaller for a tag or saved as `folder.jpg`.
@@ -563,19 +579,24 @@ mod tests {
             out
         };
         let small = png(600, 300);
-        let (data, preview) = for_tag(small.clone(), Some(1000), 400).unwrap();
-        assert_eq!(data, small);
-        assert_eq!(preview.size, [400, 200]);
-        let (data, _) = for_tag(png(2000, 1000), None, 400).unwrap();
-        assert_eq!(image::guess_format(&data).unwrap(), image::ImageFormat::Png);
-        let (data, preview) = for_tag(png(2000, 1000), Some(1000), 400).unwrap();
+        let made = for_tag(small.clone(), Some(1000), 400).unwrap();
+        assert_eq!(made.data, small);
+        assert_eq!((made.from, made.to), ((600, 300), (600, 300)));
+        assert_eq!(made.preview.size, [400, 200]);
+        let made = for_tag(png(2000, 1000), None, 400).unwrap();
         assert_eq!(
-            image::guess_format(&data).unwrap(),
+            image::guess_format(&made.data).unwrap(),
+            image::ImageFormat::Png
+        );
+        let made = for_tag(png(2000, 1000), Some(500), 400).unwrap();
+        assert_eq!(
+            image::guess_format(&made.data).unwrap(),
             image::ImageFormat::Jpeg
         );
-        let made = decode(&data).unwrap();
-        assert_eq!((made.width(), made.height()), (1000, 500));
-        assert_eq!(preview.size, [400, 200]);
+        let decoded = decode(&made.data).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (500, 250));
+        assert_eq!((made.from, made.to), ((2000, 1000), (500, 250)));
+        assert_eq!(made.preview.size, [400, 200]);
         assert!(for_tag(b"GIF89a".to_vec(), None, 400).is_err());
     }
 
