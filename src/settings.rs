@@ -321,12 +321,17 @@ pub enum Visual {
     Curve,
     /// The spectrum's bars up and down from the middle line.
     Mirror,
-    /// The spectrum's bars around the cover, the bass at the top.
-    Radial,
     /// The spectra of the last moments as lines one behind the other.
     Ridges,
     /// The spectrum's bands as colours rolling from the right.
     Spectrogram,
+    /// A flight over a grid with mountains of the spectrum, a sun over
+    /// the horizon.
+    Synthwave,
+    /// Bolts from a core in the middle, striking on the beats (the radial
+    /// spectrum's place, which it takes in older settings).
+    #[serde(alias = "radial")]
+    Lightning,
     /// The sound's peaks rolling from the right.
     Waveform,
     /// The wave itself.
@@ -341,14 +346,15 @@ pub enum Visual {
 
 impl Visual {
     /// As the display's menu and the settings list them, "none" last.
-    pub const ALL: [Visual; 12] = [
+    pub const ALL: [Visual; 13] = [
         Visual::Spectrum,
         Visual::Led,
         Visual::Curve,
         Visual::Mirror,
-        Visual::Radial,
         Visual::Ridges,
         Visual::Spectrogram,
+        Visual::Synthwave,
+        Visual::Lightning,
         Visual::Waveform,
         Visual::Scope,
         Visual::Chroma,
@@ -362,9 +368,10 @@ impl Visual {
             Visual::Led => tr!("LED spectrum", "Светодиодный спектр"),
             Visual::Curve => tr!("Spectrum curve", "Спектр-кривая"),
             Visual::Mirror => tr!("Mirrored spectrum", "Зеркальный спектр"),
-            Visual::Radial => tr!("Radial spectrum", "Круговой спектр"),
             Visual::Ridges => tr!("Ridges", "Хребты"),
             Visual::Spectrogram => tr!("Spectrogram", "Спектрограмма"),
+            Visual::Synthwave => tr!("Synthwave", "Синтвейв"),
+            Visual::Lightning => tr!("Lightning", "Молнии"),
             Visual::Waveform => tr!("Waveform", "Волна"),
             Visual::Scope => tr!("Oscilloscope", "Осциллограф"),
             Visual::Chroma => tr!("Notes", "Ноты"),
@@ -374,11 +381,11 @@ impl Visual {
     }
 
     /// The first of a group in the menus (a line over it): the spectrum's
-    /// histories, the wave, the notes, none.
+    /// histories, the scenes, the wave, the notes, none.
     pub fn starts_group(self) -> bool {
         matches!(
             self,
-            Visual::Ridges | Visual::Waveform | Visual::Chroma | Visual::Off
+            Visual::Ridges | Visual::Synthwave | Visual::Waveform | Visual::Chroma | Visual::Off
         )
     }
 
@@ -712,6 +719,15 @@ mod tests {
         ] {
             assert_eq!(serde_json::to_string(&v).unwrap(), format!("\"{name}\""));
         }
+        // The radial spectrum gave way to the lightning.
+        assert_eq!(
+            serde_json::from_str::<Visual>("\"radial\"").unwrap(),
+            Visual::Lightning
+        );
+        assert_eq!(
+            serde_json::to_string(&Visual::Synthwave).unwrap(),
+            "\"synthwave\""
+        );
     }
 
     #[test]

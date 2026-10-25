@@ -2,8 +2,8 @@
 //! setting), chosen by the right button on it, the next one by a click.
 //! All of them are fed the samples heard at this moment (`audio::vis::Tap`,
 //! mono): the spectrum analyzer (`spectrum`) painted as bars, as LED
-//! segments, as a smooth curve, mirrored about the middle line or around
-//! the cover; ridges (the analyzer's levels across the display every
+//! segments, as a smooth curve or mirrored about the middle line; ridges
+//! (the analyzer's levels across the display every
 //! 50 ms, the newest line in front at the bottom and the older ones
 //! behind it, higher, narrower and fainter, each hiding what is behind
 //! it, as the cover of "Unknown Pleasures"); a waveform rolling from the
@@ -11,7 +11,9 @@
 //! an editor draws a track), an oscilloscope (25 ms of the wave, started
 //! at a rising zero crossing so a steady tone stands still), a
 //! spectrogram (the analyzer's bands as a column of colours every 20 ms,
-//! rolling from the right: the loud ones bright), and the notes
+//! rolling from the right: the loud ones bright), two scenes of the
+//! analyzer's levels: a synthwave flight (`synthwave`) and lightning
+//! striking on the beats (`lightning`), and the notes
 //! (`notes`): the twelve pitch classes as bars (a chromagram) or a
 //! piano's keys lit by their notes with a bar over each. The waveform,
 //! the ridges and the spectrogram count the frames heard since the frame
@@ -26,15 +28,17 @@ use std::time::Instant;
 
 use egui::epaint::PathStroke;
 use egui::{
-    Align2, Color32, ColorImage, FontId, Mesh, Painter, Pos2, Rect, Shape, Stroke, TextureHandle,
-    TextureOptions, Vec2, pos2,
+    Align2, Color32, ColorImage, FontId, Mesh, Painter, Pos2, Rect, Shape, Stroke, TextureOptions,
+    Vec2, pos2,
 };
 
 use crate::audio::vis::Heard;
 use crate::palette;
 use crate::settings::Visual;
+use crate::ui::lightning::{self, Lightning};
 use crate::ui::notes::{self, Notes};
 use crate::ui::spectrum::{self, Analyzer};
+use crate::ui::synthwave::{self, Synthwave};
 
 /// The frames asked of the tap each frame: the analyzer's window, and
 /// what is heard between two frames at 50 frames a second up to 192 kHz.
@@ -80,6 +84,8 @@ const PIANO_LIGHT_SPAN: f32 = 0.4;
 pub struct Visualizer {
     analyzer: Analyzer,
     notes: Notes,
+    lightning: Lightning,
+    synthwave: Synthwave,
     /// The ridges' lines, oldest first: the levels across, the lowest
     /// band first.
     ridges: VecDeque<Vec<f32>>,
@@ -122,6 +128,8 @@ impl Visualizer {
         Visualizer {
             analyzer: Analyzer::new(),
             notes: Notes::new(),
+            lightning: Lightning::new(),
+            synthwave: Synthwave::new(),
             ridges: VecDeque::new(),
             ridges_due: 0.0,
             wave: VecDeque::new(),
@@ -168,15 +176,30 @@ impl Visualizer {
         };
         let rate = heard.map_or(0, |(_, h)| h.rate);
         match visual {
-            Visual::Spectrum | Visual::Led | Visual::Curve | Visual::Mirror | Visual::Radial => {
+            Visual::Spectrum | Visual::Led | Visual::Curve | Visual::Mirror => {
                 let window = heard.map(|(s, _)| &s[s.len() - spectrum::N..]);
                 let bands = match visual {
                     Visual::Led => Analyzer::bands_for(size.x, spectrum::LED_PITCH),
                     Visual::Curve => Analyzer::bands_for(size.x, spectrum::CURVE_PITCH),
-                    Visual::Radial => spectrum::radial_bands(size),
                     _ => Analyzer::bands_for(size.x, spectrum::BAR_PITCH),
                 };
                 self.analyzer.feed(window, rate, bands);
+            }
+            Visual::Lightning => {
+                let levels = heard.map(|(s, h)| {
+                    self.analyzer
+                        .levels(&s[s.len() - spectrum::N..], h.rate, lightning::BANDS)
+                });
+                self.lightning.feed(levels.as_deref(), dt, size);
+            }
+            Visual::Synthwave => {
+                let row = heard.map(|(s, h)| {
+                    let levels =
+                        self.analyzer
+                            .levels(&s[s.len() - spectrum::N..], h.rate, synthwave::BANDS);
+                    (smoothed(&levels), new as f32 / h.rate as f32)
+                });
+                self.synthwave.feed(row, dt);
             }
             Visual::Chroma | Visual::Piano => {
                 let window = heard
@@ -325,9 +348,11 @@ impl Visualizer {
     /// Something still shows: keep repainting.
     pub fn active(&self) -> bool {
         match self.shown {
-            Visual::Spectrum | Visual::Led | Visual::Curve | Visual::Mirror | Visual::Radial => {
+            Visual::Spectrum | Visual::Led | Visual::Curve | Visual::Mirror => {
                 self.analyzer.active()
             }
+            Visual::Lightning => self.lightning.active(),
+            Visual::Synthwave => self.synthwave.active(),
             Visual::Ridges => !self.ridges.is_empty(),
             Visual::Chroma | Visual::Piano => self.notes.active(),
             Visual::Waveform => !self.wave.is_empty(),
@@ -337,15 +362,15 @@ impl Visualizer {
         }
     }
 
-    /// Paints the visualization in `rect`; `cover`, the track's, is in
-    /// the middle of the radial spectrum.
-    pub fn paint(&mut self, painter: &Painter, rect: Rect, cover: Option<&TextureHandle>) {
+    /// Paints the visualization in `rect`.
+    pub fn paint(&mut self, painter: &Painter, rect: Rect) {
         match self.shown {
             Visual::Spectrum => self.analyzer.paint(painter, rect),
             Visual::Led => self.analyzer.paint_led(painter, rect),
             Visual::Curve => self.analyzer.paint_curve(painter, rect),
             Visual::Mirror => self.analyzer.paint_mirror(painter, rect),
-            Visual::Radial => self.analyzer.paint_radial(painter, rect, cover),
+            Visual::Lightning => self.lightning.paint(painter, rect),
+            Visual::Synthwave => self.synthwave.paint(painter, rect),
             Visual::Ridges => self.paint_ridges(painter, rect),
             Visual::Chroma => self.paint_chroma(painter, rect),
             Visual::Piano => self.paint_piano(painter, rect),

@@ -6,11 +6,11 @@
 //! pink: without the tilt the right half would lie flat), over
 //! `RANGE_DB`.
 
-use std::f32::consts::{PI, TAU};
+use std::f32::consts::PI;
 use std::time::Instant;
 
 use egui::epaint::PathStroke;
-use egui::{Color32, Mesh, Painter, Pos2, Rect, Shape, TextureHandle, pos2};
+use egui::{Color32, Mesh, Painter, Pos2, Rect, Shape, pos2};
 
 use crate::palette;
 
@@ -43,11 +43,6 @@ const LED_GAP: f32 = 1.0;
 const LED_UNLIT: f32 = 0.09;
 /// Points per band of the curve.
 pub const CURVE_PITCH: f32 = 4.0;
-/// The radial spectrum: the bars' start as a share of the radius, their
-/// share of their angle, and how much the bass swells the cover.
-const RADIAL_INNER: f32 = 0.4;
-const RADIAL_FILL: f32 = 0.6;
-const RADIAL_SWELL: f32 = 0.1;
 
 pub struct Analyzer {
     window: Vec<f32>,
@@ -360,139 +355,6 @@ impl Analyzer {
             PathStroke::new_uv(1.6, move |_, p| colours.at(level(p).max(0.6), place(p))),
         ));
     }
-
-    /// How loud the bass is now, 0 to 1: the lowest sixth of the bars.
-    fn bass(&self) -> f32 {
-        let n = (self.bars.len() / 6).max(1).min(self.bars.len());
-        if n == 0 {
-            return 0.0;
-        }
-        self.bars[..n].iter().sum::<f32>() / n as f32
-    }
-
-    /// Paints the bars around a circle in the middle of `rect`, the bass
-    /// at the top and the treble down both sides, `cover` (else a disc of
-    /// the colours) in it swelling with the bass, over a glow of it.
-    pub fn paint_radial(&self, painter: &Painter, rect: Rect, cover: Option<&TextureHandle>) {
-        let bands = self.bars.len();
-        if bands == 0 {
-            return;
-        }
-        let painter = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
-        let centre = rect.center();
-        let radius = (rect.height().min(rect.width()) / 2.0 - 1.0).max(4.0);
-        let inner = radius * RADIAL_INNER;
-        let room = (radius - inner - PEAK_HEIGHT - 1.0).max(1.0);
-        let colours = palette::visual();
-        let bass = self.bass();
-        let polar = |angle: f32, r: f32| centre + egui::vec2(angle.cos(), angle.sin()) * r;
-
-        // The glow, brighter with the bass: from behind the circle out to
-        // the display's ends, as the logo's.
-        let glow = colours.at(1.0, 0.0).gamma_multiply(0.04 + 0.16 * bass);
-        let clear = Color32::TRANSPARENT;
-        let mut mesh = Mesh::default();
-        let (left, right) = (rect.left(), rect.right());
-        for (x0, x1, c0, c1) in [
-            (left, centre.x, clear, glow),
-            (centre.x, right, glow, clear),
-        ] {
-            quad(
-                &mut mesh,
-                [
-                    pos2(x0, rect.top()),
-                    pos2(x1, rect.top()),
-                    pos2(x1, rect.bottom()),
-                    pos2(x0, rect.bottom()),
-                ],
-                [c0, c1, c1, c0],
-            );
-        }
-        painter.add(mesh);
-        const STEPS: u32 = 48;
-
-        let pitch = PI / bands as f32;
-        let half = pitch * RADIAL_FILL / 2.0;
-        let mut mesh = Mesh::default();
-        for (b, (&h, &(peak, _))) in self.bars.iter().zip(&self.peaks).enumerate() {
-            let place = b as f32 / (bands - 1).max(1) as f32;
-            let along = (b as f32 + 0.5) * pitch;
-            for side in [1.0, -1.0] {
-                let angle = -PI / 2.0 + side * along;
-                let (a0, a1) = (angle - half, angle + half);
-                if h > 0.0 {
-                    let tip = inner + room * h;
-                    let (top, base) = (colours.at(h, place), colours.at(0.0, place));
-                    quad(
-                        &mut mesh,
-                        [
-                            polar(a0, tip),
-                            polar(a1, tip),
-                            polar(a1, inner),
-                            polar(a0, inner),
-                        ],
-                        [top, top, base, base],
-                    );
-                }
-                if peak > 0.0 {
-                    let (r0, r1) = (
-                        inner + room * peak + 1.0,
-                        inner + room * peak + 1.0 + PEAK_HEIGHT,
-                    );
-                    let c = colours.peak(place);
-                    quad(
-                        &mut mesh,
-                        [polar(a0, r1), polar(a1, r1), polar(a1, r0), polar(a0, r0)],
-                        [c; 4],
-                    );
-                }
-            }
-        }
-        painter.add(mesh);
-
-        let r = ((inner - 3.0) * (1.0 - RADIAL_SWELL + RADIAL_SWELL * bass)).max(1.0);
-        match cover {
-            Some(texture) => {
-                // The middle square of a cover not square.
-                let [w, h] = texture.size().map(|s| s.max(1) as f32);
-                let (su, sv) = (h.min(w) / w, h.min(w) / h);
-                let mut mesh = Mesh::with_texture(texture.id());
-                mesh.vertices.push(egui::epaint::Vertex {
-                    pos: centre,
-                    uv: pos2(0.5, 0.5),
-                    color: Color32::WHITE,
-                });
-                for i in 0..=STEPS {
-                    let a = i as f32 / STEPS as f32 * TAU;
-                    let (cos, sin) = (a.cos(), a.sin());
-                    mesh.vertices.push(egui::epaint::Vertex {
-                        pos: centre + egui::vec2(cos, sin) * r,
-                        uv: pos2(0.5 + 0.5 * cos * su, 0.5 + 0.5 * sin * sv),
-                        color: Color32::WHITE,
-                    });
-                    if i > 0 {
-                        mesh.add_triangle(0, i, i + 1);
-                    }
-                }
-                painter.add(mesh);
-            }
-            None => {
-                painter.circle_filled(centre, r, colours.at(0.0, 0.0).gamma_multiply(0.35));
-            }
-        }
-        painter.circle_stroke(
-            centre,
-            r + 0.5,
-            egui::Stroke::new(1.5, colours.at(bass, 0.0)),
-        );
-    }
-}
-
-/// How many bars each half of the radial spectrum has in a display of
-/// `size`: about 5 points of its outer edge each.
-pub fn radial_bands(size: egui::Vec2) -> usize {
-    let radius = size.x.min(size.y) / 2.0;
-    ((PI * radius / 5.0) as usize).clamp(12, 64)
 }
 
 /// A quad of `corners` (clockwise) in `colours`.

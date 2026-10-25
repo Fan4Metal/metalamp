@@ -304,12 +304,12 @@ fn visual_display(
     // room), and no click and no menu.
     if !now.visual_enabled {
         if logo {
-            visual.paint(painter, inner, now.cover.as_ref());
+            visual.paint(painter, inner);
         }
         return;
     }
     if logo || now.visual != Visual::Off {
-        visual.paint(painter, inner, now.cover.as_ref());
+        visual.paint(painter, inner);
     }
     let how = if now.visual_click {
         tr!(
