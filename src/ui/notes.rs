@@ -27,7 +27,7 @@ const TILT_DB_PER_OCTAVE: f32 = 3.0;
 const TILT_REF_HZ: f32 = 500.0;
 /// The chromagram: the decibels shown under the loudest class, and the
 /// loudest class's level under which it is taken for silence.
-const CHROMA_RANGE_DB: f32 = 18.0;
+const CHROMA_RANGE_DB: f32 = 12.0;
 const CHROMA_GATE_DB: f32 = -60.0;
 /// A key's level falls the whole way in this many seconds; a class's
 /// slower, so a chord stays readable between its strokes.

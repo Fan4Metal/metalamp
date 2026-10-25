@@ -45,7 +45,7 @@ const LED_UNLIT: f32 = 0.09;
 pub const CURVE_PITCH: f32 = 4.0;
 /// The radial spectrum: the bars' start as a share of the radius, their
 /// share of their angle, and how much the bass swells the cover.
-const RADIAL_INNER: f32 = 0.44;
+const RADIAL_INNER: f32 = 0.4;
 const RADIAL_FILL: f32 = 0.6;
 const RADIAL_SWELL: f32 = 0.1;
 
@@ -387,19 +387,29 @@ impl Analyzer {
         let bass = self.bass();
         let polar = |angle: f32, r: f32| centre + egui::vec2(angle.cos(), angle.sin()) * r;
 
-        // The glow, brighter with the bass.
+        // The glow, brighter with the bass: from behind the circle out to
+        // the display's ends, as the logo's.
         let glow = colours.at(1.0, 0.0).gamma_multiply(0.04 + 0.16 * bass);
+        let clear = Color32::TRANSPARENT;
         let mut mesh = Mesh::default();
-        mesh.colored_vertex(centre, glow);
-        const STEPS: u32 = 48;
-        for i in 0..=STEPS {
-            let a = i as f32 / STEPS as f32 * TAU;
-            mesh.colored_vertex(polar(a, radius * 2.2), Color32::TRANSPARENT);
-            if i > 0 {
-                mesh.add_triangle(0, i, i + 1);
-            }
+        let (left, right) = (rect.left(), rect.right());
+        for (x0, x1, c0, c1) in [
+            (left, centre.x, clear, glow),
+            (centre.x, right, glow, clear),
+        ] {
+            quad(
+                &mut mesh,
+                [
+                    pos2(x0, rect.top()),
+                    pos2(x1, rect.top()),
+                    pos2(x1, rect.bottom()),
+                    pos2(x0, rect.bottom()),
+                ],
+                [c0, c1, c1, c0],
+            );
         }
         painter.add(mesh);
+        const STEPS: u32 = 48;
 
         let pitch = PI / bands as f32;
         let half = pitch * RADIAL_FILL / 2.0;

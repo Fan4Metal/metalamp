@@ -74,8 +74,8 @@ const PIANO_WHITE: f32 = 9.0;
 const PIANO_KEYS: f32 = 0.5;
 const PIANO_BLACK_WIDTH: f32 = 0.6;
 const PIANO_BLACK_LENGTH: f32 = 0.62;
-const PIANO_LIGHT_FROM: f32 = 0.45;
-const PIANO_LIGHT_SPAN: f32 = 0.45;
+const PIANO_LIGHT_FROM: f32 = 0.35;
+const PIANO_LIGHT_SPAN: f32 = 0.4;
 
 pub struct Visualizer {
     analyzer: Analyzer,
@@ -208,10 +208,11 @@ impl Visualizer {
                 };
                 if due > 0 {
                     let line = match heard {
-                        Some((s, h)) => {
-                            self.analyzer
-                                .levels(&s[s.len() - spectrum::N..], h.rate, points)
-                        }
+                        Some((s, h)) => smoothed(&self.analyzer.levels(
+                            &s[s.len() - spectrum::N..],
+                            h.rate,
+                            points,
+                        )),
                         None => vec![0.0; points],
                     };
                     for _ in 0..due.min(cap) {
@@ -497,7 +498,7 @@ impl Visualizer {
                 .clamp(0.0, 1.0)
                 .powf(1.5)
         };
-        let white_key = palette::list_bg().lerp_to_gamma(palette::text_weak(), 0.45);
+        let white_key = palette::list_bg().lerp_to_gamma(palette::text_weak(), 0.28);
         let black_key = palette::list_bg().lerp_to_gamma(Color32::BLACK, 0.35);
         // Each note's key: its rect and whether it is black.
         let keys: Vec<(u8, Rect, bool)> = {
@@ -747,6 +748,26 @@ impl Visualizer {
     }
 }
 
+/// `levels` each averaged with its neighbours (1 2 3 2 1), so a ridge
+/// is a range of hills, not a saw.
+fn smoothed(levels: &[f32]) -> Vec<f32> {
+    const KERNEL: [f32; 5] = [1.0, 2.0, 3.0, 2.0, 1.0];
+    let n = levels.len() as isize;
+    (0..n)
+        .map(|i| {
+            let (mut sum, mut weight) = (0.0, 0.0);
+            for (k, w) in KERNEL.iter().enumerate() {
+                let j = i + k as isize - 2;
+                if (0..n).contains(&j) {
+                    sum += levels[j as usize] * w;
+                    weight += w;
+                }
+            }
+            sum / weight
+        })
+        .collect()
+}
+
 /// How many ridges a display `height` points high shows.
 fn ridge_lines(height: f32) -> usize {
     ((height / RIDGE_SPACING) as usize).clamp(6, 32)
@@ -837,7 +858,8 @@ mod tests {
             size,
         );
         assert!(v.ridges.is_empty());
-        // 100 ms: two lines of 100 points, the band of 1 kHz loudest.
+        // 100 ms: two lines of 100 points, the band of 1 kHz loudest (its
+        // neighbours averaged in).
         v.feed(
             Visual::Ridges,
             Some((&s, Heard { rate, end: 14_800 })),
@@ -845,7 +867,7 @@ mod tests {
         );
         assert_eq!(v.ridges.len(), 2);
         assert_eq!(v.ridges[0].len(), 100);
-        assert!(v.ridges[0].iter().any(|&l| l > 0.9));
+        assert!(v.ridges[0].iter().any(|&l| l > 0.5));
         // Never more than the display holds.
         for i in 1..20 {
             let end = 14_800 + i * 8000;
