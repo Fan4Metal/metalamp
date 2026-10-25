@@ -66,6 +66,16 @@ pub enum Cmd {
     Seek(u64),
     /// Play on this device (its id; empty: the default) from now on.
     Device(String),
+    /// The files at these paths closed where they are being decoded (the
+    /// track heard, the next one, the one a fade leaves), their tags to be
+    /// written; `done` is told whether any was. What is in the ring goes
+    /// on being heard.
+    Release {
+        paths: Vec<PathBuf>,
+        done: Sender<bool>,
+    },
+    /// The files released opened again, each from where it was.
+    Reacquire,
 }
 
 /// What the audio thread tells the UI.
@@ -151,6 +161,46 @@ impl Engine {
     pub fn set_gain(&self, gain: f32) {
         self.shared.gain.store(gain.to_bits(), Relaxed);
     }
+
+    /// For another thread to have files closed while it writes them.
+    pub fn releaser(&self) -> Releaser {
+        Releaser(self.tx.clone())
+    }
+}
+
+/// Has the audio thread close the files being decoded while their tags
+/// are written: the decoder holds them open for reading only, and Windows
+/// refuses the write. The ring, about a second deep, covers the time.
+#[derive(Clone)]
+pub struct Releaser(Sender<Cmd>);
+
+impl Releaser {
+    /// The files at `paths` closed while the guard lives, opened again
+    /// when it is dropped; none when none of them was open. Without an
+    /// answer within a second the guard is given anyway: the thread may
+    /// release them later, and the commands come in order.
+    pub fn hold(&self, paths: Vec<PathBuf>) -> Option<Held> {
+        let (done, answer) = channel();
+        self.0.send(Cmd::Release { paths, done }).ok()?;
+        match answer.recv_timeout(Duration::from_secs(1)) {
+            Ok(false) => None,
+            _ => Some(Held(self.0.clone())),
+        }
+    }
+}
+
+/// Files released (`Releaser::hold`), opened again on drop.
+pub struct Held(Sender<Cmd>);
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        let _ = self.0.send(Cmd::Reacquire);
+    }
+}
+
+/// The same file, its path's case aside, as Windows has it.
+fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
 }
 
 impl Drop for Engine {
@@ -273,6 +323,10 @@ struct Player<'a> {
     dsp: dsp::DspSettings,
     /// The processing for the output's format, made with it.
     chain: Option<dsp::Chain>,
+    /// Files are released (`Cmd::Release`): the device is written as far
+    /// ahead as its buffer goes, so opening them again (300 ms for an
+    /// AAC, `Decoder::reacquire`) is not heard as a gap.
+    holding: bool,
 }
 
 fn run(
@@ -315,6 +369,7 @@ fn run(
         device,
         dsp,
         chain: None,
+        holding: false,
     };
     loop {
         let busy = p.decoding.is_some() && !p.paused;
@@ -471,6 +526,84 @@ impl Player<'_> {
                     }
                 }
             }
+            Cmd::Release { paths, done } => {
+                let mut any = false;
+                for open in self.opens() {
+                    if !open.decoder.released() && paths.iter().any(|p| same_file(p, &open.path)) {
+                        log::debug!("audio: {} released", open.path.display());
+                        open.decoder.release();
+                        any = true;
+                    }
+                }
+                self.holding |= any;
+                let _ = done.send(any);
+            }
+            Cmd::Reacquire => self.reacquire(),
+        }
+    }
+
+    /// The tracks open: the one decoding, the next one, the one a fade
+    /// leaves.
+    fn opens(&mut self) -> impl Iterator<Item = &mut Open> {
+        self.decoding
+            .iter_mut()
+            .chain(self.next.iter_mut())
+            .chain(self.fade.iter_mut().map(|f| &mut f.from))
+    }
+
+    /// A decoder released (`Cmd::Release`) waits: nothing more is decoded
+    /// meanwhile.
+    fn waiting(&self) -> bool {
+        self.decoding.as_ref().is_some_and(|d| d.decoder.released())
+            || self
+                .fade
+                .as_ref()
+                .is_some_and(|f| !f.a_ended && f.from.decoder.released())
+    }
+
+    /// The files released opened again, each going on from the frame it
+    /// had decoded. One that cannot be (removed, or now another format)
+    /// ends there: the track decoding as at its end, the next one as a
+    /// failed preload, the one a fade leaves in silence.
+    fn reacquire(&mut self) {
+        self.holding = false;
+        let mut failed = (false, None, false);
+        for (slot, open) in self
+            .decoding
+            .iter_mut()
+            .map(|o| (0, o))
+            .chain(self.next.iter_mut().map(|o| (1, o)))
+            .chain(self.fade.iter_mut().map(|f| (2, &mut f.from)))
+        {
+            if !open.decoder.released() {
+                continue;
+            }
+            if let Err(e) = open.decoder.reacquire(&open.path, open.decoded) {
+                log::warn!(
+                    "cannot open {} again: {}",
+                    open.path.display(),
+                    mf::describe(&e)
+                );
+                match slot {
+                    0 => failed.0 = true,
+                    1 => failed.1 = Some((open.id, mf::describe(&e))),
+                    _ => failed.2 = true,
+                }
+            }
+        }
+        if failed.2
+            && let Some(fade) = &mut self.fade
+        {
+            fade.a_ended = true;
+        }
+        if let Some((id, message)) = failed.1 {
+            self.next = None;
+            self.send(Event::Failed { id, message });
+        }
+        if failed.0 {
+            self.decoding = None;
+            self.fade = None;
+            self.track_decoded();
         }
     }
 
@@ -623,6 +756,11 @@ impl Player<'_> {
         if !self.paused {
             let target = out.buffer_frames() as usize * 2 * channels;
             while self.ring.len() < target && !self.eos && !self.format_change {
+                // A file released while its tag is written: the ring
+                // plays on until it is opened again.
+                if self.waiting() {
+                    break;
+                }
                 if self.fade.is_some() {
                     self.fade_step(channels);
                     continue;
@@ -653,7 +791,11 @@ impl Player<'_> {
             // Only `WRITE_AHEAD` of the device's buffer is kept filled.
             let room = out.room()? as usize;
             let held = (out.buffer_frames() as usize).saturating_sub(room);
-            let ahead = (self.format.0 as f32 * WRITE_AHEAD) as usize;
+            let ahead = if self.holding {
+                out.buffer_frames() as usize
+            } else {
+                (self.format.0 as f32 * WRITE_AHEAD) as usize
+            };
             let frames = room
                 .min(ahead.saturating_sub(held))
                 .min(self.ring.len() / channels);
@@ -815,7 +957,11 @@ impl Player<'_> {
         };
         while fade.a.len() < CHUNK * channels && !fade.a_ended {
             match fade.from.decoder.next() {
-                Ok(Some(block)) => fade.a.extend(block),
+                Ok(Some(block)) => {
+                    // Where it would be opened again (`reacquire`).
+                    fade.from.decoded += (block.len() / channels) as u64;
+                    fade.a.extend(block);
+                }
                 // Its end (or a damaged end): silence for the rest.
                 _ => fade.a_ended = true,
             }
@@ -974,6 +1120,126 @@ mod tests {
         assert!(!block.is_empty());
         d.seek(10 * SECOND).unwrap();
         assert!(d.next().unwrap().is_some());
+    }
+
+    /// A decoder released and opened again gives the samples it would have
+    /// given: none lost or repeated where it was (`METALAMP_SAMPLE`).
+    #[test]
+    #[ignore = "needs METALAMP_SAMPLE, an audio file"]
+    fn decoder_reacquires_where_it_was() {
+        let path = PathBuf::from(std::env::var("METALAMP_SAMPLE").expect("METALAMP_SAMPLE"));
+        let _com = mf::com_init_mta();
+        let _mf = mf::Mf::start().unwrap();
+        let read = |d: &mut Decoder, frames: usize| {
+            let channels = usize::from(d.channels);
+            let mut out = Vec::new();
+            while out.len() < frames * channels {
+                match d.next().unwrap() {
+                    Some(block) => out.extend(block),
+                    None => break,
+                }
+            }
+            out
+        };
+        let mut whole = Decoder::open(&path).unwrap();
+        let rate = whole.rate as usize;
+        let expected = read(&mut whole, rate * 12);
+        let channels = usize::from(whole.channels);
+        let mut d = Decoder::open(&path).unwrap();
+        let mut got = read(&mut d, rate * 5);
+        // Up to a block past 5 s: where it stopped.
+        let frames = (got.len() / channels) as u64;
+        d.release();
+        assert!(d.released());
+        let started = std::time::Instant::now();
+        d.reacquire(&path, frames).unwrap();
+        println!("opened again in {:?}", started.elapsed());
+        got.extend(read(&mut d, rate * 5));
+        let n = got.len().min(expected.len());
+        assert!(n > (frames as usize + rate) * channels, "it went on");
+        let at = frames as usize * channels;
+        // An AAC decoder gives samples about 1 % off after a seek: there,
+        // the second after the place close to what it would have been.
+        let aac = path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("m4a") || e.eq_ignore_ascii_case("aac"));
+        if aac {
+            let to = (at + rate * channels).min(n);
+            let error: f32 = (at..to).map(|i| (got[i] - expected[i]).powi(2)).sum();
+            let energy: f32 = (at..to).map(|i| expected[i].powi(2)).sum();
+            println!("error {:.4} of the energy", error / energy);
+            assert!(error < 0.05 * energy, "released after {frames} frames");
+        } else {
+            let first_wrong = (0..n).find(|&i| (got[i] - expected[i]).abs() > 1e-6);
+            assert_eq!(first_wrong, None, "released after {frames} frames");
+        }
+    }
+
+    /// A copy of `METALAMP_SAMPLE` playing (silent, gain 0) is released:
+    /// it can then be opened for writing with no sharing at all, the
+    /// position goes on from the ring meanwhile, and once it is opened
+    /// again it plays on, without a failure or an end.
+    #[test]
+    #[ignore = "needs METALAMP_SAMPLE and a sound device; plays a few seconds silently"]
+    fn engine_releases_a_file_written() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let sample = PathBuf::from(std::env::var("METALAMP_SAMPLE").expect("METALAMP_SAMPLE"));
+        let dir = std::env::temp_dir().join(format!("metalamp_release_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let copy = dir.join(sample.file_name().unwrap());
+        std::fs::copy(&sample, &copy).unwrap();
+        let engine = Engine::start(
+            egui::Context::default(),
+            String::new(),
+            dsp::DspSettings::default(),
+        );
+        engine.set_gain(0.0);
+        engine.send(Cmd::Play {
+            id: 1,
+            path: copy.clone(),
+            gain: 1.0,
+        });
+        let events = |ms: u64| {
+            let mut seen = Vec::new();
+            let until = std::time::Instant::now() + Duration::from_millis(ms);
+            while std::time::Instant::now() < until {
+                seen.extend(engine.poll());
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            seen
+        };
+        let started = events(1500);
+        assert!(matches!(started.as_slice(), [Event::Started { id: 1 }]), "{started:?}");
+        let exclusive = || {
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .share_mode(0)
+                .open(&copy)
+        };
+        assert!(exclusive().is_err(), "the decoder holds the file");
+        let releaser = engine.releaser();
+        // Its name in another case, as a playlist may spell it.
+        let upper = PathBuf::from(copy.to_string_lossy().to_uppercase());
+        let held = releaser.hold(vec![upper]).expect("released");
+        let before = engine.position_ms();
+        drop(exclusive().expect("open for writing once released"));
+        // Written meanwhile: the tag grows by 20 KB, the audio moves on in
+        // the file.
+        let mut changes = crate::library::edit::Changes::default();
+        changes.main[crate::library::edit::Key::Comment as usize] = Some("x".repeat(20_000));
+        crate::library::edit::write(&copy, &changes).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        let during = engine.position_ms();
+        assert!(during > before, "the ring plays on: {before} → {during}");
+        drop(held);
+        let after = events(1500);
+        assert!(after.is_empty(), "{after:?}");
+        let end = engine.position_ms();
+        assert!(end > during + 1000, "it plays on: {during} → {end}");
+        assert!(releaser.hold(vec![dir.join("other.mp3")]).is_none());
+        drop(engine);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// The engine on the default device, quietly: the end of one track

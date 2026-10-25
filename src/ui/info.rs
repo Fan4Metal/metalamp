@@ -40,6 +40,7 @@ use egui::{Key, RichText, TextureHandle, Ui, vec2};
 use lofty::picture::PictureType;
 use lofty::prelude::ItemKey;
 
+use crate::audio::Releaser;
 use crate::format;
 use crate::keymap::{Action, Cmd, Keymap};
 use crate::library::details::{self, Details};
@@ -115,6 +116,8 @@ pub struct InfoView {
     /// found.
     windowed: bool,
     window: super::OwnWindow,
+    /// Has the player close the files written meanwhile (`new`).
+    releaser: Option<Releaser>,
     /// The largest side of a cover put into the tags (the setting, set by
     /// the app each frame).
     pub cover_side: Option<u32>,
@@ -350,7 +353,9 @@ impl Form {
         changes
     }
 
-    fn save(&mut self, ctx: &egui::Context) {
+    /// The fields typed in written on a thread; the player lets go of each
+    /// file while it is written (`releaser`: the track playing, the next).
+    fn save(&mut self, ctx: &egui::Context, releaser: Option<Releaser>) {
         let changes = self.changes();
         let paths = self.paths.clone();
         let (tx, rx) = channel();
@@ -359,11 +364,14 @@ impl Form {
             let mut written = 0;
             let mut errors = Vec::new();
             for p in &paths {
-                match crate::guard::catch(p, || edit::write(p, &changes))
+                // One file at a time: the ring covers a second.
+                let held = releaser.as_ref().and_then(|r| r.hold(vec![p.clone()]));
+                let result = crate::guard::catch(p, || edit::write(p, &changes))
                     .unwrap_or_else(|| {
                         Err(tr!("cannot be written", "не удалось записать").to_owned())
-                    })
-                {
+                    });
+                drop(held);
+                match result {
                     Ok(()) => written += 1,
                     Err(e) => errors.push(format!("{}: {e}", p.display())),
                 }
@@ -386,6 +394,14 @@ impl Form {
 }
 
 impl InfoView {
+    /// The window, writing with the player's `releaser`.
+    pub fn new(releaser: Releaser) -> InfoView {
+        InfoView {
+            releaser: Some(releaser),
+            ..Default::default()
+        }
+    }
+
     /// Opens the window for `paths` (the first of them, or, editing
     /// several, all of them at once), editing when `edit`; the files are
     /// read again (the tags may have been changed since).
@@ -547,7 +563,7 @@ impl InfoView {
     fn save(&mut self, ctx: &egui::Context, then: Option<Option<usize>>) {
         let Some(form) = &mut self.form else { return };
         if self.editing && form.state == State::Ready && form.touched() && form.valid() {
-            form.save(ctx);
+            form.save(ctx, self.releaser.clone());
             self.then = then;
         }
     }

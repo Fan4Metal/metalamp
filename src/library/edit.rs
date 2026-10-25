@@ -346,12 +346,13 @@ fn described(error: &dyn std::error::Error) -> String {
 }
 
 /// Windows' "used by another process" (a sharing violation, os error
-/// 32) said plainly: the track playing is held open by the player.
+/// 32) said plainly: the player lets go of its own files while they are
+/// written (`audio::Releaser`), so another program holds it.
 fn in_use(error: &str) -> String {
     if error.contains("os error 32") {
         tr!(
-            "the file is in use (the track playing? Stop it and save again)",
-            "файл занят (играющий трек? Остановите его и сохраните снова)"
+            "the file is in use by another program",
+            "файл занят другой программой"
         )
         .to_owned()
     } else {

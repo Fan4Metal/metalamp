@@ -386,6 +386,11 @@ impl Player {
         self.engine.duration_ms()
     }
 
+    /// Closes the files the engine decodes while their tags are written.
+    pub fn releaser(&self) -> crate::audio::Releaser {
+        self.engine.releaser()
+    }
+
     pub fn set_volume(&mut self, volume: u8) {
         self.volume = volume.min(100);
         if self.volume > 0 {
