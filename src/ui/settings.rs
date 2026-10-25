@@ -1130,6 +1130,9 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
                         .width(CONTROL - 70.0)
                         .show_ui(ui, |ui| {
                             for v in Visual::ALL {
+                                if v.starts_group() {
+                                    ui.separator();
+                                }
                                 ui.selectable_value(settings.visual_mut(), v, v.label());
                             }
                         });

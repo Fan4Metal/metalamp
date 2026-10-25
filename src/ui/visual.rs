@@ -1,27 +1,39 @@
 //! The player bar's display: one of the visualizations (`Visual`, a
 //! setting), chosen by the right button on it, the next one by a click.
 //! All of them are fed the samples heard at this moment (`audio::vis::Tap`,
-//! mono): the spectrum analyzer (`spectrum`), a waveform rolling from the
+//! mono): the spectrum analyzer (`spectrum`) painted as bars, as LED
+//! segments, as a smooth curve, mirrored about the middle line or around
+//! the cover; ridges (the analyzer's levels across the display every
+//! 50 ms, the newest line in front at the bottom and the older ones
+//! behind it, higher, narrower and fainter, each hiding what is behind
+//! it, as the cover of "Unknown Pleasures"); a waveform rolling from the
 //! right (each column 20 ms of sound: its peak, and its RMS inside it, as
 //! an editor draws a track), an oscilloscope (25 ms of the wave, started
-//! at a rising zero crossing so a steady tone stands still) and a
+//! at a rising zero crossing so a steady tone stands still), a
 //! spectrogram (the analyzer's bands as a column of colours every 20 ms,
-//! rolling from the right: the loud ones bright). The waveform and the
-//! spectrogram count the frames heard since the frame before (the tap's
-//! `end`), so they roll with the sound, whatever the frame rate; paused,
-//! they stand; stopped, they roll silence until they are empty. None
-//! ("No visualization"), the display shows the app icon and the name, and
-//! the app repaints only as the time needs; switched off in the settings,
-//! nothing is painted (`player_bar::visual_display`).
+//! rolling from the right: the loud ones bright), and the notes
+//! (`notes`): the twelve pitch classes as bars (a chromagram) or a
+//! piano's keys lit by their notes with a bar over each. The waveform,
+//! the ridges and the spectrogram count the frames heard since the frame
+//! before (the tap's `end`), so they roll with the sound, whatever the
+//! frame rate; paused, they stand; stopped, they roll silence until they
+//! are empty. None ("No visualization"), the display shows the app icon
+//! and the name, and the app repaints only as the time needs; switched
+//! off in the settings, nothing is painted (`player_bar::visual_display`).
 
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use egui::{Color32, ColorImage, Mesh, Painter, Rect, Shape, Stroke, TextureOptions, Vec2, pos2};
+use egui::epaint::PathStroke;
+use egui::{
+    Align2, Color32, ColorImage, FontId, Mesh, Painter, Pos2, Rect, Shape, Stroke, TextureHandle,
+    TextureOptions, Vec2, pos2,
+};
 
 use crate::audio::vis::Heard;
 use crate::palette;
 use crate::settings::Visual;
+use crate::ui::notes::{self, Notes};
 use crate::ui::spectrum::{self, Analyzer};
 
 /// The frames asked of the tap each frame: the analyzer's window, and
@@ -39,9 +51,40 @@ const TRIGGER_S: f32 = 0.02;
 /// analyzer's foot, its top and its peaks.
 const GRAM_STOPS: [f32; 4] = [0.0, 0.4, 0.75, 1.0];
 const GRAM_CONTRAST: f32 = 2.2;
+/// The ridges: a line every `RIDGE_S`, points across every `RIDGE_PITCH`,
+/// a line every `RIDGE_SPACING` points of height; the front line's height
+/// as a share of the display's, the levels raised to `RIDGE_POWER` (music
+/// fills the upper half of the analyzer's range), the share of the width
+/// at each end that slopes down to the base line, and how much narrower,
+/// lower and fainter the line furthest back is.
+const RIDGE_S: f32 = 0.05;
+const RIDGE_PITCH: f32 = 4.0;
+const RIDGE_SPACING: f32 = 4.5;
+const RIDGE_HEIGHT: f32 = 0.5;
+const RIDGE_POWER: f32 = 2.0;
+const RIDGE_EDGE: f32 = 0.12;
+const RIDGE_NARROWER: f32 = 0.3;
+const RIDGE_LOWER: f32 = 0.35;
+const RIDGE_FAINTER: f32 = 0.75;
+/// The piano's white keys are at least this wide; the keys take this
+/// share of the height, under the bars; a black key's width and length
+/// as shares of a white one's; a key's level from which it starts to
+/// light, and over which share of the scale it lights fully.
+const PIANO_WHITE: f32 = 9.0;
+const PIANO_KEYS: f32 = 0.5;
+const PIANO_BLACK_WIDTH: f32 = 0.6;
+const PIANO_BLACK_LENGTH: f32 = 0.62;
+const PIANO_LIGHT_FROM: f32 = 0.45;
+const PIANO_LIGHT_SPAN: f32 = 0.45;
 
 pub struct Visualizer {
     analyzer: Analyzer,
+    notes: Notes,
+    /// The ridges' lines, oldest first: the levels across, the lowest
+    /// band first.
+    ridges: VecDeque<Vec<f32>>,
+    /// Lines owed to the ridges (fractions carried on).
+    ridges_due: f32,
     /// The waveform's columns, oldest first: peak and RMS, 0 to 1.
     wave: VecDeque<[f32; 2]>,
     /// The column being gathered: its peak, sum of squares and frames.
@@ -78,6 +121,9 @@ impl Visualizer {
     pub fn new() -> Visualizer {
         Visualizer {
             analyzer: Analyzer::new(),
+            notes: Notes::new(),
+            ridges: VecDeque::new(),
+            ridges_due: 0.0,
             wave: VecDeque::new(),
             gathering: (0.0, 0.0, 0),
             gram: VecDeque::new(),
@@ -120,12 +166,61 @@ impl Visualizer {
         let Some(size) = size else {
             return;
         };
+        let rate = heard.map_or(0, |(_, h)| h.rate);
         match visual {
-            Visual::Spectrum => {
+            Visual::Spectrum | Visual::Led | Visual::Curve | Visual::Mirror | Visual::Radial => {
                 let window = heard.map(|(s, _)| &s[s.len() - spectrum::N..]);
-                let rate = heard.map_or(0, |(_, h)| h.rate);
-                self.analyzer
-                    .feed(window, rate, Analyzer::bands_for(size.x));
+                let bands = match visual {
+                    Visual::Led => Analyzer::bands_for(size.x, spectrum::LED_PITCH),
+                    Visual::Curve => Analyzer::bands_for(size.x, spectrum::CURVE_PITCH),
+                    Visual::Radial => spectrum::radial_bands(size),
+                    _ => Analyzer::bands_for(size.x, spectrum::BAR_PITCH),
+                };
+                self.analyzer.feed(window, rate, bands);
+            }
+            Visual::Chroma | Visual::Piano => {
+                let window = heard
+                    .filter(|(s, _)| s.len() >= notes::N)
+                    .map(|(s, _)| &s[s.len() - notes::N..]);
+                self.notes.feed(window, rate);
+            }
+            Visual::Ridges => {
+                let cap = ridge_lines(size.y);
+                let points = ((size.x / RIDGE_PITCH) as usize).clamp(24, 160);
+                if self.ridges.front().is_some_and(|l| l.len() != points) {
+                    self.ridges.clear();
+                }
+                let due = match heard {
+                    Some((_, h)) => {
+                        self.idle = 0.0;
+                        self.ridges_due += new as f32 / (h.rate as f32 * RIDGE_S);
+                        let due = self.ridges_due as usize;
+                        self.ridges_due -= due as f32;
+                        due
+                    }
+                    None if self.ridges.iter().any(|l| l.iter().any(|&v| v > 0.0)) => {
+                        self.idle_lines(dt, RIDGE_S)
+                    }
+                    None => {
+                        self.ridges.clear();
+                        0
+                    }
+                };
+                if due > 0 {
+                    let line = match heard {
+                        Some((s, h)) => {
+                            self.analyzer
+                                .levels(&s[s.len() - spectrum::N..], h.rate, points)
+                        }
+                        None => vec![0.0; points],
+                    };
+                    for _ in 0..due.min(cap) {
+                        self.ridges.push_back(line.clone());
+                    }
+                }
+                while self.ridges.len() > cap {
+                    self.ridges.pop_front();
+                }
             }
             Visual::Waveform => {
                 let cap = columns(size.x, WAVE_PITCH);
@@ -146,7 +241,7 @@ impl Visualizer {
                         self.idle = 0.0;
                     }
                     None if self.wave.iter().any(|c| c[0] > 0.0) => {
-                        for _ in 0..self.idle_columns(dt) {
+                        for _ in 0..self.idle_lines(dt, COLUMN_S) {
                             self.wave.push_back([0.0; 2]);
                         }
                     }
@@ -171,7 +266,7 @@ impl Visualizer {
                         due
                     }
                     None if self.gram.iter().any(|c| c.iter().any(|&l| l > 0.0)) => {
-                        self.idle_columns(dt)
+                        self.idle_lines(dt, COLUMN_S)
                     }
                     None => {
                         self.gram.clear();
@@ -217,9 +312,10 @@ impl Visualizer {
         }
     }
 
-    /// Silent columns owed for `dt` seconds of nothing heard.
-    fn idle_columns(&mut self, dt: f32) -> usize {
-        self.idle += dt / COLUMN_S;
+    /// Silent columns (or lines) of `period` seconds owed for `dt` seconds
+    /// of nothing heard.
+    fn idle_lines(&mut self, dt: f32, period: f32) -> usize {
+        self.idle += dt / period;
         let due = self.idle as usize;
         self.idle -= due as f32;
         due
@@ -228,7 +324,11 @@ impl Visualizer {
     /// Something still shows: keep repainting.
     pub fn active(&self) -> bool {
         match self.shown {
-            Visual::Spectrum => self.analyzer.active(),
+            Visual::Spectrum | Visual::Led | Visual::Curve | Visual::Mirror | Visual::Radial => {
+                self.analyzer.active()
+            }
+            Visual::Ridges => !self.ridges.is_empty(),
+            Visual::Chroma | Visual::Piano => self.notes.active(),
             Visual::Waveform => !self.wave.is_empty(),
             Visual::Spectrogram => !self.gram.is_empty(),
             Visual::Scope => !self.scope.is_empty(),
@@ -236,15 +336,220 @@ impl Visualizer {
         }
     }
 
-    /// Paints the visualization in `rect`.
-    pub fn paint(&mut self, painter: &Painter, rect: Rect) {
+    /// Paints the visualization in `rect`; `cover`, the track's, is in
+    /// the middle of the radial spectrum.
+    pub fn paint(&mut self, painter: &Painter, rect: Rect, cover: Option<&TextureHandle>) {
         match self.shown {
             Visual::Spectrum => self.analyzer.paint(painter, rect),
+            Visual::Led => self.analyzer.paint_led(painter, rect),
+            Visual::Curve => self.analyzer.paint_curve(painter, rect),
+            Visual::Mirror => self.analyzer.paint_mirror(painter, rect),
+            Visual::Radial => self.analyzer.paint_radial(painter, rect, cover),
+            Visual::Ridges => self.paint_ridges(painter, rect),
+            Visual::Chroma => self.paint_chroma(painter, rect),
+            Visual::Piano => self.paint_piano(painter, rect),
             Visual::Waveform => self.paint_wave(painter, rect),
             Visual::Spectrogram => self.paint_gram(painter, rect),
             Visual::Scope => self.paint_scope(painter, rect),
             Visual::Off => self.paint_logo(painter, rect),
         }
+    }
+
+    /// The ridges, the oldest line first: each fills the room down to its
+    /// base line with the display's ground, hiding the lines behind it,
+    /// then draws its line.
+    fn paint_ridges(&self, painter: &Painter, rect: Rect) {
+        let Some(points) = self.ridges.back().map(Vec::len) else {
+            return;
+        };
+        if points < 2 {
+            return;
+        }
+        let lines = ridge_lines(rect.height());
+        let n = self.ridges.len();
+        let height = rect.height() * RIDGE_HEIGHT;
+        let spacing = (rect.height() - height - 2.0) / (lines - 1).max(1) as f32;
+        let ground = palette::list_bg();
+        let colours = palette::visual();
+        let cx = rect.center().x;
+        for (i, line) in self.ridges.iter().enumerate() {
+            let age = n - 1 - i;
+            let depth = age as f32 / (lines - 1).max(1) as f32;
+            let base = rect.bottom() - 1.0 - spacing * age as f32;
+            let width = rect.width() * (1.0 - RIDGE_NARROWER * depth);
+            let tall = height * (1.0 - RIDGE_LOWER * depth);
+            let shown: Vec<Pos2> = line
+                .iter()
+                .enumerate()
+                .map(|(j, &level)| {
+                    let u = j as f32 / (points - 1) as f32;
+                    let edge = (u.min(1.0 - u) / RIDGE_EDGE).min(1.0);
+                    let taper = edge * edge * (3.0 - 2.0 * edge);
+                    let h = level.clamp(0.0, 1.0).powf(RIDGE_POWER) * taper;
+                    pos2(cx + (u - 0.5) * width, base - tall * h)
+                })
+                .collect();
+            let mut mesh = Mesh::default();
+            for w in shown.windows(2) {
+                let (a, b) = (w[0], w[1]);
+                let i = mesh.vertices.len() as u32;
+                // A point under the base line: the line behind does not
+                // show through the seam.
+                for p in [a, b, pos2(b.x, base + 1.0), pos2(a.x, base + 1.0)] {
+                    mesh.colored_vertex(p, ground);
+                }
+                mesh.add_triangle(i, i + 1, i + 2);
+                mesh.add_triangle(i, i + 2, i + 3);
+            }
+            painter.add(mesh);
+            let fade = 1.0 - RIDGE_FAINTER * depth;
+            let left = cx - width / 2.0;
+            painter.add(Shape::line(
+                shown,
+                PathStroke::new_uv(1.2, move |_, p| {
+                    let level = ((base - p.y) / tall.max(1.0)).clamp(0.0, 1.0).sqrt();
+                    let place = ((p.x - left) / width).clamp(0.0, 1.0);
+                    colours.at(level.max(0.3), place).gamma_multiply(fade)
+                }),
+            ));
+        }
+    }
+
+    /// The twelve pitch classes as bars, C on the left, each named under
+    /// it, the loudest one's name bright.
+    fn paint_chroma(&self, painter: &Painter, rect: Rect) {
+        let labels = rect.height() >= 40.0;
+        let font = FontId::proportional(10.5);
+        let label_h = if labels { 14.0 } else { 0.0 };
+        let floor = rect.bottom() - label_h;
+        let room = floor - rect.top() - 1.0;
+        let pitch = rect.width() / 12.0;
+        let bar_w = (pitch * 0.62).clamp(2.0, 36.0);
+        let colours = palette::visual();
+        let loudest = self
+            .notes
+            .chroma
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| **l > 0.0)
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .map(|(c, _)| c);
+        let mut mesh = Mesh::default();
+        for (c, &level) in self.notes.chroma.iter().enumerate() {
+            let x = rect.left() + pitch * (c as f32 + 0.5);
+            let place = c as f32 / 11.0;
+            if level > 0.0 {
+                let top = floor - room * level;
+                let (tip, foot) = (colours.at(level, place), colours.at(0.0, place));
+                let i = mesh.vertices.len() as u32;
+                mesh.colored_vertex(pos2(x - bar_w / 2.0, top), tip);
+                mesh.colored_vertex(pos2(x + bar_w / 2.0, top), tip);
+                mesh.colored_vertex(pos2(x + bar_w / 2.0, floor), foot);
+                mesh.colored_vertex(pos2(x - bar_w / 2.0, floor), foot);
+                mesh.add_triangle(i, i + 1, i + 2);
+                mesh.add_triangle(i, i + 2, i + 3);
+            }
+        }
+        painter.add(mesh);
+        if labels {
+            for (c, name) in notes::NAMES.iter().enumerate() {
+                let x = rect.left() + pitch * (c as f32 + 0.5);
+                let colour = if loudest == Some(c) {
+                    palette::text_bright()
+                } else if notes::is_black(c) {
+                    palette::text_weak().gamma_multiply(0.7)
+                } else {
+                    palette::text_weak()
+                };
+                painter.text(
+                    pos2(x, rect.bottom() - label_h / 2.0),
+                    Align2::CENTER_CENTER,
+                    *name,
+                    font.clone(),
+                    colour,
+                );
+            }
+        }
+    }
+
+    /// A piano's keys at the bottom, lit by their notes' levels, and a bar
+    /// over each key; as many octaves about middle C as fit.
+    fn paint_piano(&self, painter: &Painter, rect: Rect) {
+        let octaves = ((rect.width() / (7.0 * PIANO_WHITE)) as u8).clamp(2, 7);
+        let lowest = 60 - 12 * (octaves / 2);
+        let highest = lowest + 12 * octaves;
+        let whites = 7 * usize::from(octaves) + 1;
+        let white_w = rect.width() / whites as f32;
+        let keys_top = rect.bottom() - (rect.height() * PIANO_KEYS).max(8.0);
+        let floor = keys_top - 2.0;
+        let room = (floor - rect.top()).max(1.0);
+        let colours = palette::visual();
+        let level = |m: u8| {
+            self.notes
+                .keys
+                .get(usize::from(m.saturating_sub(notes::LOWEST)))
+                .copied()
+                .unwrap_or(0.0)
+        };
+        let place = |m: u8| f32::from(m - lowest) / f32::from(highest - lowest);
+        let light = |l: f32| {
+            ((l - PIANO_LIGHT_FROM) / PIANO_LIGHT_SPAN)
+                .clamp(0.0, 1.0)
+                .powf(1.5)
+        };
+        let white_key = palette::list_bg().lerp_to_gamma(palette::text_weak(), 0.45);
+        let black_key = palette::list_bg().lerp_to_gamma(Color32::BLACK, 0.35);
+        // Each note's key: its rect and whether it is black.
+        let keys: Vec<(u8, Rect, bool)> = {
+            let mut white = 0usize;
+            (lowest..=highest)
+                .map(|m| {
+                    let black = notes::is_black(usize::from(m % 12));
+                    let r = if black {
+                        let x = rect.left() + white_w * white as f32;
+                        let w = white_w * PIANO_BLACK_WIDTH;
+                        let bottom = keys_top + (rect.bottom() - keys_top) * PIANO_BLACK_LENGTH;
+                        Rect::from_min_max(pos2(x - w / 2.0, keys_top), pos2(x + w / 2.0, bottom))
+                    } else {
+                        let x = rect.left() + white_w * white as f32;
+                        white += 1;
+                        Rect::from_min_max(
+                            pos2(x + 0.5, keys_top),
+                            pos2(x + white_w - 0.5, rect.bottom()),
+                        )
+                    };
+                    (m, r, black)
+                })
+                .collect()
+        };
+        let mut mesh = Mesh::default();
+        // The bars, at the keys' middles.
+        let bar_w = (white_w * 0.4).max(1.0);
+        for &(m, r, _) in &keys {
+            let l = level(m);
+            if l <= 0.0 {
+                continue;
+            }
+            let x = r.center().x;
+            let top = floor - room * l;
+            let (tip, foot) = (colours.at(l, place(m)), colours.at(0.0, place(m)));
+            let i = mesh.vertices.len() as u32;
+            mesh.colored_vertex(pos2(x - bar_w / 2.0, top), tip);
+            mesh.colored_vertex(pos2(x + bar_w / 2.0, top), tip);
+            mesh.colored_vertex(pos2(x + bar_w / 2.0, floor), foot);
+            mesh.colored_vertex(pos2(x - bar_w / 2.0, floor), foot);
+            mesh.add_triangle(i, i + 1, i + 2);
+            mesh.add_triangle(i, i + 2, i + 3);
+        }
+        // The white keys, then the black ones over them.
+        for black in [false, true] {
+            for &(m, r, is_black) in keys.iter().filter(|k| k.2 == black) {
+                let base = if is_black { black_key } else { white_key };
+                let lit = colours.at(1.0, place(m));
+                mesh.add_colored_rect(r, base.lerp_to_gamma(lit, light(level(m))));
+            }
+        }
+        painter.add(mesh);
     }
 
     /// Off: the app icon and the name in the middle of the display,
@@ -442,6 +747,11 @@ impl Visualizer {
     }
 }
 
+/// How many ridges a display `height` points high shows.
+fn ridge_lines(height: f32) -> usize {
+    ((height / RIDGE_SPACING) as usize).clamp(6, 32)
+}
+
 /// How many columns of `pitch` points fit in `width`.
 fn columns(width: f32, pitch: f32) -> usize {
     ((width / pitch) as usize).clamp(8, 2048)
@@ -513,6 +823,41 @@ mod tests {
         // Another visualization starts afresh.
         v.feed(Visual::Spectrum, None, size);
         assert!(v.wave.is_empty());
+    }
+
+    #[test]
+    fn the_ridges_add_a_line_every_50_ms_and_roll_out_when_stopped() {
+        let mut v = Visualizer::new();
+        let rate = 48000;
+        let size = Some(Vec2::new(400.0, 90.0));
+        let s = sine(1000.0, rate, FETCH, 0);
+        v.feed(
+            Visual::Ridges,
+            Some((&s, Heard { rate, end: 10_000 })),
+            size,
+        );
+        assert!(v.ridges.is_empty());
+        // 100 ms: two lines of 100 points, the band of 1 kHz loudest.
+        v.feed(
+            Visual::Ridges,
+            Some((&s, Heard { rate, end: 14_800 })),
+            size,
+        );
+        assert_eq!(v.ridges.len(), 2);
+        assert_eq!(v.ridges[0].len(), 100);
+        assert!(v.ridges[0].iter().any(|&l| l > 0.9));
+        // Never more than the display holds.
+        for i in 1..20 {
+            let end = 14_800 + i * 8000;
+            v.feed(Visual::Ridges, Some((&s, Heard { rate, end })), size);
+        }
+        assert_eq!(v.ridges.len(), ridge_lines(90.0));
+        // Stopped: silent lines push the sound out, then nothing is left.
+        for _ in 0..ridge_lines(90.0) + 2 {
+            v.idle = 1.0;
+            v.feed(Visual::Ridges, None, size);
+        }
+        assert!(!v.active());
     }
 
     #[test]

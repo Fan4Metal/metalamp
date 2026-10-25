@@ -315,34 +315,71 @@ pub enum Visual {
     /// Bars over log-spaced bands with falling peaks.
     #[default]
     Spectrum,
+    /// The spectrum's bars in lit segments, as a hi-fi's LEDs.
+    Led,
+    /// The spectrum as a smooth line, filled under it.
+    Curve,
+    /// The spectrum's bars up and down from the middle line.
+    Mirror,
+    /// The spectrum's bars around the cover, the bass at the top.
+    Radial,
+    /// The spectra of the last moments as lines one behind the other.
+    Ridges,
+    /// The spectrum's bands as colours rolling from the right.
+    Spectrogram,
     /// The sound's peaks rolling from the right.
     Waveform,
     /// The wave itself.
     Scope,
-    /// The spectrum's bands as colours rolling from the right.
-    Spectrogram,
+    /// The twelve notes' loudness, the octaves added up.
+    Chroma,
+    /// The notes on a piano's keys, and a bar over each.
+    Piano,
     /// An empty display, and no frames drawn for it.
     Off,
 }
 
 impl Visual {
     /// As the display's menu and the settings list them, "none" last.
-    pub const ALL: [Visual; 5] = [
+    pub const ALL: [Visual; 12] = [
         Visual::Spectrum,
+        Visual::Led,
+        Visual::Curve,
+        Visual::Mirror,
+        Visual::Radial,
+        Visual::Ridges,
+        Visual::Spectrogram,
         Visual::Waveform,
         Visual::Scope,
-        Visual::Spectrogram,
+        Visual::Chroma,
+        Visual::Piano,
         Visual::Off,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
             Visual::Spectrum => tr!("Spectrum", "Спектр"),
+            Visual::Led => tr!("LED spectrum", "Светодиодный спектр"),
+            Visual::Curve => tr!("Spectrum curve", "Спектр-кривая"),
+            Visual::Mirror => tr!("Mirrored spectrum", "Зеркальный спектр"),
+            Visual::Radial => tr!("Radial spectrum", "Круговой спектр"),
+            Visual::Ridges => tr!("Ridges", "Хребты"),
+            Visual::Spectrogram => tr!("Spectrogram", "Спектрограмма"),
             Visual::Waveform => tr!("Waveform", "Волна"),
             Visual::Scope => tr!("Oscilloscope", "Осциллограф"),
-            Visual::Spectrogram => tr!("Spectrogram", "Спектрограмма"),
+            Visual::Chroma => tr!("Notes", "Ноты"),
+            Visual::Piano => tr!("Piano", "Клавиатура"),
             Visual::Off => tr!("No visualization", "Без визуализации"),
         }
+    }
+
+    /// The first of a group in the menus (a line over it): the spectrum's
+    /// histories, the wave, the notes, none.
+    pub fn starts_group(self) -> bool {
+        matches!(
+            self,
+            Visual::Ridges | Visual::Waveform | Visual::Chroma | Visual::Off
+        )
     }
 
     /// The one a click on the display goes on to.
@@ -664,8 +701,17 @@ mod tests {
         s.window_layout = WindowLayout::Library;
         assert_eq!(s.visual_shown(), Visual::Scope);
         // A click goes through "none" too.
-        assert_eq!(Visual::Spectrogram.next(), Visual::Off);
+        assert_eq!(Visual::Piano.next(), Visual::Off);
         assert_eq!(Visual::Off.next(), Visual::Spectrum);
+        assert_eq!(Visual::Spectrum.next(), Visual::Led);
+        // Kept by their names.
+        for (v, name) in [
+            (Visual::Led, "led"),
+            (Visual::Ridges, "ridges"),
+            (Visual::Chroma, "chroma"),
+        ] {
+            assert_eq!(serde_json::to_string(&v).unwrap(), format!("\"{name}\""));
+        }
     }
 
     #[test]

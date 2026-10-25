@@ -304,12 +304,12 @@ fn visual_display(
     // room), and no click and no menu.
     if !now.visual_enabled {
         if logo {
-            visual.paint(painter, inner);
+            visual.paint(painter, inner, now.cover.as_ref());
         }
         return;
     }
     if logo || now.visual != Visual::Off {
-        visual.paint(painter, inner);
+        visual.paint(painter, inner, now.cover.as_ref());
     }
     let how = if now.visual_click {
         tr!(
@@ -328,7 +328,7 @@ fn visual_display(
     egui::Popup::context_menu(&response).show(|ui| {
         ui.set_min_width(160.0);
         for v in Visual::ALL {
-            if v == Visual::Off {
+            if v.starts_group() {
                 ui.separator();
             }
             if ui.selectable_label(v == now.visual, v.label()).clicked() {
