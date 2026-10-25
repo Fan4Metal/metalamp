@@ -206,7 +206,7 @@ fn with_tag<R>(
     let (view, file_type) = super::tags::first_tag_view(path).map_err(|e| e.to_string())?;
     let mut reader = BufReader::new(view);
     let options = ParseOptions::new().read_properties(false);
-    let err = |e: lofty::error::FileParseError| e.to_string();
+    let err = |e: lofty::error::FileParseError| described(&e);
     let write = WriteOptions::default().use_id3v23(is_id3v23(path));
     match file_type {
         Some(FileType::Mpeg) => {
@@ -302,7 +302,7 @@ where
         fix(&mut merged);
         merged
             .save_to_path(path, write)
-            .map_err(|e| in_use(&e.to_string()))?;
+            .map_err(|e| in_use(&described(&e)))?;
     }
     Ok(out)
 }
@@ -328,6 +328,21 @@ fn keep_numbers(tag: &mut Id3v2Tag, changes: &Changes) {
             text,
         )));
     }
+}
+
+/// An error with its causes: lofty's errors say only "failed to write to
+/// file" and keep the reason (an I/O error, os error 32) as their source.
+fn described(error: &dyn std::error::Error) -> String {
+    let mut text = error.to_string();
+    let mut cause = error.source();
+    while let Some(e) = cause {
+        let more = e.to_string();
+        if !text.contains(&more) {
+            text = format!("{text}: {more}");
+        }
+        cause = e.source();
+    }
+    text
 }
 
 /// Windows' "used by another process" (a sharing violation, os error
@@ -756,6 +771,29 @@ mod tests {
         assert_eq!(after, audio, "{kinds:?}");
         assert!(!kinds.contains(&6), "{kinds:?}");
         assert!(pictures(&file).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A file held open for reading only (the track playing) is named in
+    /// use: lofty's error keeps the sharing violation as its source.
+    #[test]
+    fn a_file_in_use_is_said_so() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = std::env::temp_dir().join(format!("metalamp_in_use_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("held.flac");
+        std::fs::write(&file, flac_with_cover()).unwrap();
+        // FILE_SHARE_READ, as Media Foundation opens a file it plays.
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&file)
+            .unwrap();
+        let mut changes: Changes = Default::default();
+        changes.main[Key::Genre as usize] = Some("Metal".into());
+        assert_eq!(write(&file, &changes), Err(in_use("os error 32")));
+        drop(held);
+        write(&file, &changes).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
