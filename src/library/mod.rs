@@ -9,6 +9,7 @@
 pub mod details;
 pub mod edit;
 pub mod filter;
+mod id3v1;
 pub mod index;
 pub mod outside;
 pub mod scan;

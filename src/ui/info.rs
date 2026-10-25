@@ -123,6 +123,9 @@ pub struct InfoView {
     /// the app each frame and chosen in the cover's menu, which the app
     /// keeps.
     pub cover_side: CoverSide,
+    /// How an MP3's tags are written: the settings', set by the app each
+    /// frame.
+    pub write_tags: edit::WriteTags,
     /// A picture is to be chosen for the cover: the app shows the dialog
     /// and hands its answer to `cover_from`.
     pub pick_cover: bool,
@@ -363,7 +366,7 @@ impl Form {
 
     /// The fields typed in written on a thread; the player lets go of each
     /// file while it is written (`releaser`: the track playing, the next).
-    fn save(&mut self, ctx: &egui::Context, releaser: Option<Releaser>) {
+    fn save(&mut self, ctx: &egui::Context, releaser: Option<Releaser>, how: edit::WriteTags) {
         let changes = self.changes();
         let paths = self.paths.clone();
         let (tx, rx) = channel();
@@ -374,7 +377,7 @@ impl Form {
             for p in &paths {
                 // One file at a time: the ring covers a second.
                 let held = releaser.as_ref().and_then(|r| r.hold(vec![p.clone()]));
-                let result = crate::guard::catch(p, || edit::write(p, &changes))
+                let result = crate::guard::catch(p, || edit::write(p, &changes, how))
                     .unwrap_or_else(|| {
                         Err(tr!("cannot be written", "не удалось записать").to_owned())
                     });
@@ -571,7 +574,7 @@ impl InfoView {
     fn save(&mut self, ctx: &egui::Context, then: Option<Option<usize>>) {
         let Some(form) = &mut self.form else { return };
         if self.editing && form.state == State::Ready && form.touched() && form.valid() {
-            form.save(ctx, self.releaser.clone());
+            form.save(ctx, self.releaser.clone(), self.write_tags);
             self.then = then;
         }
     }

@@ -1209,7 +1209,10 @@ mod tests {
             seen
         };
         let started = events(1500);
-        assert!(matches!(started.as_slice(), [Event::Started { id: 1 }]), "{started:?}");
+        assert!(
+            matches!(started.as_slice(), [Event::Started { id: 1 }]),
+            "{started:?}"
+        );
         let exclusive = || {
             std::fs::OpenOptions::new()
                 .read(true)
@@ -1228,7 +1231,7 @@ mod tests {
         // the file.
         let mut changes = crate::library::edit::Changes::default();
         changes.main[crate::library::edit::Key::Comment as usize] = Some("x".repeat(20_000));
-        crate::library::edit::write(&copy, &changes).unwrap();
+        crate::library::edit::write(&copy, &changes, Default::default()).unwrap();
         std::thread::sleep(Duration::from_millis(300));
         let during = engine.position_ms();
         assert!(during > before, "the ring plays on: {before} → {during}");

@@ -1994,6 +1994,11 @@ impl eframe::App for App {
             self.place_changed = Some(Instant::now());
         }
         self.file_info.cover_side = self.settings.tag_cover_side;
+        self.file_info.write_tags = crate::library::edit::WriteTags {
+            id3v2: self.settings.id3v2_version,
+            id3v1: self.settings.id3v1,
+            ape: self.settings.ape,
+        };
         if self.file_info.show(&ctx, self.hwnd, &self.settings.keys) {
             // The files written: their tags read again.
             self.rescan();

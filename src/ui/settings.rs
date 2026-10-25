@@ -17,7 +17,9 @@ use crate::i18n::LangChoice;
 use crate::keymap::{Action, Chord, Group, Keymap};
 use crate::palette;
 use crate::palette::{Accent, Palette, Theme, Tint, VisualColours};
-use crate::settings::{BarLayout, EqPreset, MediaKeys, Settings, Visual, WindowLayout};
+use crate::settings::{
+    ApeTag, BarLayout, EqPreset, Id3Version, Id3v1Tag, MediaKeys, Settings, Visual, WindowLayout,
+};
 use crate::ui::icons::{self, Icon};
 use crate::update::{Status, Updates, release_url, version_of};
 
@@ -54,8 +56,8 @@ impl Page {
     fn summary(self) -> &'static str {
         match self {
             Page::General => tr!(
-                "The language, the theme and colour, the layout of the player bar and the media keys.",
-                "Язык, тема и цвет, вид панели плеера и медиаклавиши."
+                "The language, the theme and colour, the layout of the player bar, the media keys and how tags are written.",
+                "Язык, тема и цвет, вид панели плеера, медиаклавиши и запись тегов."
             ),
             Page::Sound => tr!(
                 "The device the sound goes to; one loudness for every track, the limiter, the equalizer, the crossfade and the enhancer.",
@@ -1207,6 +1209,71 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
             |ui| switch(ui, &mut settings.tray),
         );
     });
+    section(ui, tr!("Tags", "Теги"), |ui| tag_rows(ui, settings));
+}
+
+/// How the file info writes an MP3's tags: the ID3v2 version, its ID3v1
+/// and APE tags.
+fn tag_rows(ui: &mut Ui, settings: &mut Settings) {
+    row(
+        ui,
+        tr!("ID3v2 version of MP3", "Версия ID3v2 в MP3"),
+        Some(tr!(
+            "The version an MP3's tag is written in when its tags are edited. 2.3 is read by every program and device, Windows Explorer and car stereos among them; 2.4 keeps text in UTF-8 and full dates, but some devices do not read it. \"As in the file\" keeps a file's version and gives a file without a tag the one named.",
+            "Версия, в которой пишется тег MP3 при правке тегов. 2.3 читают все программы и устройства, в том числе Проводник Windows и магнитолы; 2.4 хранит текст в UTF-8 и полные даты, но часть устройств его не читает. «Как в файле» сохраняет версию файла, а файлу без тега даёт указанную."
+        )),
+        CONTROL,
+        |ui| {
+            egui::ComboBox::from_id_salt("settings_id3v2")
+                .selected_text(settings.id3v2_version.label())
+                .width(CONTROL - 10.0)
+                .show_ui(ui, |ui| {
+                    for v in Id3Version::ALL {
+                        ui.selectable_value(&mut settings.id3v2_version, v, v.label());
+                    }
+                });
+        },
+    );
+    divider(ui);
+    row(
+        ui,
+        tr!("ID3v1 of MP3", "ID3v1 в MP3"),
+        Some(tr!(
+            "The short tag at an MP3's end that old players and car stereos read (30 letters a field, in the code page of Windows: Cyrillic as Windows-1251). Left as it was, it keeps the values from before an edit.",
+            "Короткий тег в конце MP3, который читают старые плееры и магнитолы (30 букв в поле, в кодировке Windows: кириллица в Windows-1251). Если его не трогать, в нём останутся значения до правки."
+        )),
+        CONTROL,
+        |ui| {
+            egui::ComboBox::from_id_salt("settings_id3v1")
+                .selected_text(settings.id3v1.label())
+                .width(CONTROL - 10.0)
+                .show_ui(ui, |ui| {
+                    for v in Id3v1Tag::ALL {
+                        ui.selectable_value(&mut settings.id3v1, v, v.label());
+                    }
+                });
+        },
+    );
+    divider(ui);
+    row(
+        ui,
+        tr!("APE of MP3", "APE в MP3"),
+        Some(tr!(
+            "The tag foobar2000 and MP3Gain leave at an MP3's end. Updated, it gets the fields changed and keeps the rest (MP3Gain's ReplayGain among it); removed, that goes too.",
+            "Тег, который оставляют в конце MP3 foobar2000 и MP3Gain. При обновлении в него пишутся изменённые поля, а остальное (в том числе ReplayGain от MP3Gain) сохраняется; при удалении пропадает и оно."
+        )),
+        CONTROL,
+        |ui| {
+            egui::ComboBox::from_id_salt("settings_ape")
+                .selected_text(settings.ape.label())
+                .width(CONTROL - 10.0)
+                .show_ui(ui, |ui| {
+                    for v in ApeTag::ALL {
+                        ui.selectable_value(&mut settings.ape, v, v.label());
+                    }
+                });
+        },
+    );
 }
 
 fn sound(ui: &mut Ui, settings: &mut Settings, devices: &[Device], naming: &mut Option<String>) {
@@ -2415,6 +2482,9 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     settings.selection = d.selection;
     settings.playing = d.playing;
     settings.media_keys = d.media_keys;
+    settings.id3v2_version = d.id3v2_version;
+    settings.id3v1 = d.id3v1;
+    settings.ape = d.ape;
     settings.keys = d.keys;
     settings.output_device = d.output_device;
     settings.output_device_name = d.output_device_name;

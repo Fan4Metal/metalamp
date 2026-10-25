@@ -7,10 +7,13 @@
 //! to the common fields (pictures stay too, private frames, ratings of
 //! other players) are kept. The cover is changed among the pictures of the
 //! common fields (`CoverChange`): lofty moves an ID3v2's APIC frames, a
-//! FLAC's PICTURE blocks and an MP4's `covr` there and back. An ID3v2.3
-//! tag is written as 2.3. MP3 and
+//! FLAC's PICTURE blocks and an MP4's `covr` there and back. MP3 and
 //! WAV (ID3v2), FLAC (Vorbis comments) and M4A (iTunes atoms); WMA is
-//! read but not written by lofty.
+//! read but not written by lofty. How an MP3's tags are written is the
+//! settings' (`WriteTags`): the ID3v2 version (the file's own and a new
+//! tag's 2.3 by default), and whether its ID3v1 and APE tags, which would
+//! keep the values from before, are written alike (by default when it has
+//! them), removed or left as they were.
 
 use std::io::BufReader;
 use std::path::Path;
@@ -23,7 +26,17 @@ use lofty::TextEncoding;
 use lofty::id3::v2::{Frame, FrameId, Id3v2Tag, TextInformationFrame};
 use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::tag::items::Timestamp;
-use lofty::tag::{ItemKey, ItemValue, MergeTag, SplitTag, Tag, TagItem};
+use lofty::tag::{ItemKey, ItemValue, MergeTag, SplitTag, Tag, TagItem, TagType};
+
+use crate::settings::{ApeTag, Id3Version, Id3v1Tag};
+
+/// How an MP3's tags are written (the settings' Tags section).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WriteTags {
+    pub id3v2: Id3Version,
+    pub id3v1: Id3v1Tag,
+    pub ape: ApeTag,
+}
 
 /// The main fields, in the order the window shows them (`Key::ALL`, and
 /// `key as usize` is the place in it).
@@ -174,11 +187,13 @@ pub fn read(path: &Path) -> Result<Values, String> {
             })
         },
         None,
+        Id3Version::default(),
     )
 }
 
-/// Writes `changes` to `path`'s tag (one is made when it has none).
-pub fn write(path: &Path, changes: &Changes) -> Result<(), String> {
+/// Writes `changes` to `path`'s tag (one is made when it has none), and
+/// to an MP3's ID3v1 and APE tags as `how` says.
+pub fn write(path: &Path, changes: &Changes, how: WriteTags) -> Result<(), String> {
     // Checked before the file is touched: a bad number writes nothing.
     for (key, change) in Key::ALL.iter().zip(&changes.main) {
         if let Some(v) = change
@@ -187,7 +202,79 @@ pub fn write(path: &Path, changes: &Changes) -> Result<(), String> {
             number_text(*key, v)?;
         }
     }
-    with_tag(path, |tag| apply(tag, changes), Some(changes))
+    with_tag(path, |tag| apply(tag, changes), Some(changes), how.id3v2)?;
+    if FileType::from_path(path) == Some(FileType::Mpeg) {
+        other_tags(path, changes, how)?;
+    }
+    Ok(())
+}
+
+/// An MP3's APE and ID3v1 tags after its ID3v2 was written: the fields
+/// changed written into its APE tag too (the rest of it, MP3Gain's
+/// ReplayGain among it, kept; a cover only into one that has pictures), or
+/// the tag removed; its ID3v1 written from the ID3v2 as it now is, or
+/// removed (`id3v1`).
+fn other_tags(path: &Path, changes: &Changes, how: WriteTags) -> Result<(), String> {
+    if how.ape == ApeTag::Keep && how.id3v1 == Id3v1Tag::Keep {
+        return Ok(());
+    }
+    let failed = |e: &dyn std::error::Error| in_use(&described(e));
+    let options = ParseOptions::new().read_properties(false);
+    let (has_ape, has_id3v1) = {
+        let mut reader = BufReader::new(std::fs::File::open(path).map_err(|e| failed(&e))?);
+        let file =
+            lofty::mpeg::MpegFile::read_from(&mut reader, options).map_err(|e| failed(&e))?;
+        match how.ape {
+            ApeTag::Update if file.ape().is_some() => {
+                let ape = file.ape().cloned().unwrap_or_default();
+                drop(reader);
+                let (rest, mut common) = ape.split_tag();
+                let mut changes = changes.clone();
+                if common.pictures().is_empty() {
+                    changes.cover = None;
+                }
+                apply(&mut common, &changes)?;
+                rest.merge_tag(common)
+                    .save_to_path(path, WriteOptions::default())
+                    .map_err(|e| failed(&e))?;
+            }
+            _ => {}
+        }
+        (file.ape().is_some(), file.id3v1().is_some())
+    };
+    if how.ape == ApeTag::Remove && has_ape {
+        // `remove_from_path` opens the file for reading only, and writing
+        // to it is then refused (os error 5).
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .map_err(|e| failed(&e))?;
+        TagType::Ape
+            .remove_from(&mut file, WriteOptions::default())
+            .map_err(|e| failed(&e))?;
+    }
+    match how.id3v1 {
+        Id3v1Tag::Remove if has_id3v1 => {
+            super::id3v1::remove(path).map_err(|e| failed(&e))?;
+        }
+        Id3v1Tag::Always | Id3v1Tag::Update if how.id3v1 == Id3v1Tag::Always || has_id3v1 => {
+            let values = read(path)?;
+            let field = |key: Key| values.main[key as usize].as_str();
+            let fields = super::id3v1::Fields {
+                title: field(Key::Title),
+                artist: field(Key::Artist),
+                album: field(Key::Album),
+                year: field(Key::Year),
+                comment: field(Key::Comment),
+                track: field(Key::Track),
+                genre: field(Key::Genre),
+            };
+            super::id3v1::write(path, &fields).map_err(|e| failed(&e))?;
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Reads `path`'s own tag, lets `f` see (and change) its common fields,
@@ -196,6 +283,7 @@ fn with_tag<R>(
     path: &Path,
     f: impl FnOnce(&mut Tag) -> Result<R, String>,
     changes: Option<&Changes>,
+    version: Id3Version,
 ) -> Result<R, String> {
     let save = changes.is_some();
     let numbers = |tag: &mut Id3v2Tag| {
@@ -207,17 +295,29 @@ fn with_tag<R>(
     let mut reader = BufReader::new(view);
     let options = ParseOptions::new().read_properties(false);
     let err = |e: lofty::error::FileParseError| described(&e);
-    let write = WriteOptions::default().use_id3v23(is_id3v23(path));
+    // The version the ID3v2 tag is written in, by the one it had.
+    let id3 = |tag: Option<&Id3v2Tag>| {
+        let original = tag.map(|t| match t.original_version() {
+            lofty::id3::v2::Id3v2Version::V2 => 2,
+            lofty::id3::v2::Id3v2Version::V3 => 3,
+            lofty::id3::v2::Id3v2Version::V4 => 4,
+        });
+        WriteOptions::default().use_id3v23(version.writes_23(original))
+    };
+    let write = WriteOptions::default();
     match file_type {
         Some(FileType::Mpeg) => {
             let file = lofty::mpeg::MpegFile::read_from(&mut reader, options).map_err(err)?;
             drop(reader);
+            let write = id3(file.id3v2());
             let tag = file.id3v2().cloned().unwrap_or_else(|| {
                 seeded(
-                    file.ape()
-                        .cloned()
-                        .map(Tag::from)
-                        .or_else(|| file.id3v1().cloned().map(Tag::from)),
+                    [
+                        file.ape().cloned().map(Tag::from),
+                        file.id3v1().cloned().map(Tag::from),
+                    ]
+                    .into_iter()
+                    .flatten(),
                 )
             });
             edit(tag, f, save, path, write, numbers)
@@ -225,6 +325,7 @@ fn with_tag<R>(
         Some(FileType::Wav) => {
             let file = lofty::iff::wav::WavFile::read_from(&mut reader, options).map_err(err)?;
             drop(reader);
+            let write = id3(file.id3v2());
             let tag = file
                 .id3v2()
                 .cloned()
@@ -263,13 +364,22 @@ fn with_tag<R>(
     }
 }
 
-/// A file without an ID3v2 tag gets one holding what its other tag says
-/// (an MP3's APE or ID3v1, a WAV's RIFF INFO), which the library read:
-/// written from one field alone, it became the tag read, the rest lost.
-fn seeded(other: Option<Tag>) -> lofty::id3::v2::Id3v2Tag {
-    let Some(mut tag) = other else {
+/// A file without an ID3v2 tag gets one holding what its other tags say
+/// (an MP3's APE, then what only its ID3v1 has; a WAV's RIFF INFO), which
+/// the library read: written from one field alone, it became the tag
+/// read, the rest lost.
+fn seeded(others: impl IntoIterator<Item = Tag>) -> lofty::id3::v2::Id3v2Tag {
+    let mut others = others.into_iter();
+    let Some(mut tag) = others.next() else {
         return Default::default();
     };
+    for other in others {
+        for item in other.items() {
+            if tag.get(item.key()).is_none() {
+                tag.insert(item.clone());
+            }
+        }
+    }
     // ID3v1's year is lofty's `Year`, which ID3v2 does not take: the
     // recording date (TDRC, or TYER in 2.3) is the year players read.
     if tag.get_string(ItemKey::RecordingDate).is_none()
@@ -360,8 +470,8 @@ fn in_use(error: &str) -> String {
     }
 }
 
-/// The file's ID3v2 tag is of version 2.3 (most taggers' default), to be
-/// written as such; lofty would write 2.4.
+/// The file's ID3v2 tag is of version 2.3 (most taggers' default).
+#[cfg(test)]
 fn is_id3v23(path: &Path) -> bool {
     use std::io::Read;
     let mut head = [0u8; 4];
@@ -648,7 +758,7 @@ mod tests {
         let mut changes: Changes = Default::default();
         changes.main[Key::Genre as usize] = Some("Metal".into());
         changes.main[Key::Track as usize] = Some("03/12".into());
-        write(&file, &changes).unwrap();
+        write(&file, &changes, WriteTags::default()).unwrap();
         let main = read(&file).unwrap().main;
         assert_eq!(main[Key::Genre as usize], "Metal");
         // lofty reads a FLAC's numbers as numbers; the comment keeps them
@@ -759,7 +869,7 @@ mod tests {
             cover: Some(CoverChange::Set(std::sync::Arc::new(data.clone()))),
             ..Default::default()
         };
-        write(&file, &changes).unwrap();
+        write(&file, &changes, WriteTags::default()).unwrap();
         let (kinds, after) = blocks(&file);
         assert_eq!(after, audio, "{kinds:?}");
         assert_eq!(pictures(&file), [(PictureType::CoverFront, data)]);
@@ -767,7 +877,7 @@ mod tests {
             cover: Some(CoverChange::Remove),
             ..Default::default()
         };
-        write(&file, &changes).unwrap();
+        write(&file, &changes, WriteTags::default()).unwrap();
         let (kinds, after) = blocks(&file);
         assert_eq!(after, audio, "{kinds:?}");
         assert!(!kinds.contains(&6), "{kinds:?}");
@@ -792,9 +902,12 @@ mod tests {
             .unwrap();
         let mut changes: Changes = Default::default();
         changes.main[Key::Genre as usize] = Some("Metal".into());
-        assert_eq!(write(&file, &changes), Err(in_use("os error 32")));
+        assert_eq!(
+            write(&file, &changes, WriteTags::default()),
+            Err(in_use("os error 32"))
+        );
         drop(held);
-        write(&file, &changes).unwrap();
+        write(&file, &changes, WriteTags::default()).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -816,7 +929,7 @@ mod tests {
             ..Default::default()
         };
         changes.main[Key::Album as usize] = Some("Album".into());
-        write(&file, &changes).unwrap();
+        write(&file, &changes, WriteTags::default()).unwrap();
         let mut f = std::fs::File::open(&file).unwrap();
         let mp3 = lofty::mpeg::MpegFile::read_from(&mut f, ParseOptions::new()).unwrap();
         let tag = mp3.id3v2().unwrap();
@@ -865,7 +978,7 @@ mod tests {
         assert_eq!(before[Key::Album as usize], "Old album");
         let mut changes: Changes = Default::default();
         changes.main[Key::AlbumArtist as usize] = Some("Old band".into());
-        write(&file, &changes).unwrap();
+        write(&file, &changes, WriteTags::default()).unwrap();
         let after = read(&file).unwrap().main;
         assert_eq!(after[Key::AlbumArtist as usize], "Old band");
         assert_eq!(after[Key::Title as usize], "Old title");
@@ -873,6 +986,87 @@ mod tests {
         assert_eq!(after[Key::Album as usize], "Old album");
         assert_eq!(after[Key::Year as usize], "1999");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// An MP3 with APE and ID3v1 tags and no ID3v2: by default its new
+    /// ID3v2 is 2.3 and the other two get the field changed (the APE's
+    /// ReplayGain kept); then 2.4, and the other two removed.
+    #[test]
+    fn how_an_mp3s_tags_are_written() {
+        use lofty::ape::{ApeItem, ApeTag as Ape};
+        let mut bytes = Vec::new();
+        for _ in 0..4 {
+            bytes.extend_from_slice(&[0xFF, 0xFB, 0x90, 0x64]);
+            bytes.extend_from_slice(&[0; 413]);
+        }
+        let dir = std::env::temp_dir().join(format!("metalamp_mp3_tags_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("tags.mp3");
+        std::fs::write(&file, &bytes).unwrap();
+        let mut ape = Ape::default();
+        ape.set_title("Old title".into());
+        ape.insert(
+            ApeItem::new(
+                "REPLAYGAIN_TRACK_GAIN".into(),
+                ItemValue::Text("-7.5 dB".into()),
+            )
+            .unwrap(),
+        );
+        ape.save_to_path(&file, WriteOptions::default()).unwrap();
+        super::super::id3v1::write(
+            &file,
+            &super::super::id3v1::Fields {
+                title: "Old title",
+                artist: "Band",
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut changes: Changes = Default::default();
+        changes.main[Key::Title as usize] = Some("New title".into());
+        write(&file, &changes, WriteTags::default()).unwrap();
+        let written = std::fs::read(&file).unwrap();
+        assert_eq!(&written[..4], b"ID3\x03");
+        let tail = &written[written.len() - 128..];
+        assert_eq!(&tail[..12], b"TAGNew title");
+        assert_eq!(&tail[33..37], b"Band");
+        let read_ape = || {
+            let mut f = std::fs::File::open(&file).unwrap();
+            lofty::mpeg::MpegFile::read_from(&mut f, ParseOptions::new())
+                .unwrap()
+                .ape()
+                .cloned()
+        };
+        let ape = read_ape().unwrap();
+        assert_eq!(ape.title().as_deref(), Some("New title"));
+        assert!(ape.get("REPLAYGAIN_TRACK_GAIN").is_some());
+
+        let how = WriteTags {
+            id3v2: Id3Version::V24,
+            id3v1: Id3v1Tag::Remove,
+            ape: ApeTag::Remove,
+        };
+        changes.main[Key::Title as usize] = Some("Newer title".into());
+        write(&file, &changes, how).unwrap();
+        let written = std::fs::read(&file).unwrap();
+        assert_eq!(&written[..4], b"ID3\x04");
+        assert_ne!(&written[written.len() - 128..written.len() - 125], b"TAG");
+        assert!(read_ape().is_none());
+        assert_eq!(
+            read(&file).unwrap().main[Key::Title as usize],
+            "Newer title"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_version_written() {
+        let file23 = Id3Version::File23;
+        assert!(file23.writes_23(None) && file23.writes_23(Some(3)) && file23.writes_23(Some(2)));
+        assert!(!file23.writes_23(Some(4)));
+        let file24 = Id3Version::File24;
+        assert!(!file24.writes_23(None) && file24.writes_23(Some(3)) && !file24.writes_23(Some(4)));
+        assert!(Id3Version::V23.writes_23(Some(4)) && !Id3Version::V24.writes_23(Some(3)));
     }
 
     /// The other fields: several values split at "; ", a link kept a
@@ -949,10 +1143,21 @@ mod tests {
                 .windows(2)
                 .position(|w| w[0] == 0xFF && w[1] & 0xE0 == 0xE0)
                 .unwrap();
-            bytes[start + first..].to_vec()
+            // The tags at the end (ID3v1, then an APE tag before it) are
+            // written too.
+            let mut end = bytes.len();
+            if end >= 128 && &bytes[end - 128..end - 125] == b"TAG" {
+                end -= 128;
+            }
+            if end >= 32 && &bytes[end - 32..end - 24] == b"APETAGEX" {
+                let word = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+                let (size, flags) = (word(end - 20) as usize, word(end - 12));
+                end -= size + if flags & 0x8000_0000 != 0 { 32 } else { 0 };
+            }
+            bytes[start + first..end].to_vec()
         };
         let audio_before = audio(&copy);
-        write(&copy, &changes).unwrap();
+        write(&copy, &changes, WriteTags::default()).unwrap();
         assert!(audio(&copy) == audio_before, "the audio changed");
         let mut f = std::fs::File::open(&copy).unwrap();
         let mp3 = lofty::mpeg::MpegFile::read_from(&mut f, ParseOptions::new()).unwrap();

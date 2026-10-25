@@ -127,6 +127,12 @@ pub struct Settings {
     pub media_keys: MediaKeys,
     /// How large a cover put into tags may be (the file info window).
     pub tag_cover_side: CoverSide,
+    /// The ID3v2 version an MP3's (or a WAV's) tag is written in.
+    pub id3v2_version: Id3Version,
+    /// What becomes of an MP3's ID3v1 tag when its tags are written.
+    pub id3v1: Id3v1Tag,
+    /// What becomes of an MP3's APE tag when its tags are written.
+    pub ape: ApeTag,
     /// The keys as changed on the settings' Keys page (`keymap.rs`; only
     /// the changes are written).
     pub keys: crate::keymap::Keymap,
@@ -237,6 +243,108 @@ impl CoverSide {
         match self.pixels() {
             None => tr!("As it is", "Как есть").to_owned(),
             Some(px) => px.to_string(),
+        }
+    }
+}
+
+/// The ID3v2 version tags are written in: the file's own, a new tag
+/// (or one of 2.2, which is not written) in 2.3, which every program and
+/// device reads, or in 2.4; or always one of them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Id3Version {
+    #[default]
+    File23,
+    File24,
+    #[serde(rename = "2.3")]
+    V23,
+    #[serde(rename = "2.4")]
+    V24,
+}
+
+impl Id3Version {
+    pub const ALL: [Id3Version; 4] = [
+        Id3Version::File23,
+        Id3Version::File24,
+        Id3Version::V23,
+        Id3Version::V24,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Id3Version::File23 => tr!("As in the file, new ones 2.3", "Как в файле, новые — 2.3"),
+            Id3Version::File24 => tr!("As in the file, new ones 2.4", "Как в файле, новые — 2.4"),
+            Id3Version::V23 => tr!("Always 2.3", "Всегда 2.3"),
+            Id3Version::V24 => tr!("Always 2.4", "Всегда 2.4"),
+        }
+    }
+
+    /// Whether a tag of `original` (2, 3 or 4; none: no tag) is written
+    /// as 2.3 (else 2.4).
+    pub fn writes_23(self, original: Option<u8>) -> bool {
+        match self {
+            Id3Version::File23 => original != Some(4),
+            Id3Version::File24 => original == Some(3),
+            Id3Version::V23 => true,
+            Id3Version::V24 => false,
+        }
+    }
+}
+
+/// What becomes of an MP3's ID3v1 tag (the 128 bytes at its end that old
+/// players and car stereos read) when its tags are written.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Id3v1Tag {
+    /// Written with the same fields when the file has one.
+    #[default]
+    Update,
+    Remove,
+    /// Left as it was.
+    Keep,
+    /// Written, also into a file without one.
+    Always,
+}
+
+impl Id3v1Tag {
+    pub const ALL: [Id3v1Tag; 4] = [
+        Id3v1Tag::Update,
+        Id3v1Tag::Remove,
+        Id3v1Tag::Keep,
+        Id3v1Tag::Always,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Id3v1Tag::Update => tr!("Updated when there is one", "Обновлять, если есть"),
+            Id3v1Tag::Remove => tr!("Removed", "Удалять"),
+            Id3v1Tag::Keep => tr!("Left as it was", "Не трогать"),
+            Id3v1Tag::Always => tr!("Always written", "Писать всегда"),
+        }
+    }
+}
+
+/// What becomes of an MP3's APE tag (foobar2000's, MP3Gain's) when its
+/// tags are written.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApeTag {
+    /// The fields changed written into it too, the rest of it kept.
+    #[default]
+    Update,
+    Remove,
+    /// Left as it was.
+    Keep,
+}
+
+impl ApeTag {
+    pub const ALL: [ApeTag; 3] = [ApeTag::Update, ApeTag::Remove, ApeTag::Keep];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ApeTag::Update => tr!("Updated when there is one", "Обновлять, если есть"),
+            ApeTag::Remove => tr!("Removed", "Удалять"),
+            ApeTag::Keep => tr!("Left as it was", "Не трогать"),
         }
     }
 }
@@ -451,6 +559,9 @@ impl Default for Settings {
             crossfade_in_albums: false,
             media_keys: MediaKeys::default(),
             tag_cover_side: CoverSide::default(),
+            id3v2_version: Id3Version::default(),
+            id3v1: Id3v1Tag::default(),
+            ape: ApeTag::default(),
             keys: crate::keymap::Keymap::default(),
             tray: false,
             on_top: false,

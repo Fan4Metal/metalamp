@@ -44,7 +44,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 # Keep the feature list minimal; add a feature only for an API that is used.
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
-    "Win32_Globalization",            # GetUserDefaultUILanguage (i18n)
+    "Win32_Globalization",            # GetUserDefaultUILanguage (i18n), WideCharToMultiByte (ID3v1)
     "Win32_Networking_WinHttp",       # the update check
     "Win32_System_Console",           # AttachConsole for the command line modes
     "Win32_Graphics_Gdi",             # WNDCLASSW (one instance)
