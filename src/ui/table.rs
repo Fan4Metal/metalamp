@@ -282,7 +282,7 @@ impl Table<'_> {
                             .ctx()
                             .pointer_hover_pos()
                             .is_some_and(|p| (left..right).contains(&p.x));
-                    let whole = here.then(|| text.clone());
+                    let whole = here.then(|| (text.clone(), clip));
                     let galley =
                         crate::ui::elided(painter, text, font.clone(), color, clip.width());
                     if galley.elided {
@@ -297,8 +297,13 @@ impl Table<'_> {
                         .with_clip_rect(clip.intersect(viewport_rect(ui)))
                         .galley(pos, galley, color);
                 }
-                if let Some(tip) = tip {
-                    resp.clone().on_hover_text(tip);
+                if let Some((tip, clip)) = tip {
+                    // Under the cell's text, not under the row's left end
+                    // (egui places it by `interact_rect`).
+                    let mut cell = resp.clone();
+                    cell.rect = clip.intersect(viewport_rect(ui));
+                    cell.interact_rect = cell.rect;
+                    cell.on_hover_text(tip);
                 }
                 if crate::ui::double_clicked(&resp) {
                     out.double_clicked = Some(row);
