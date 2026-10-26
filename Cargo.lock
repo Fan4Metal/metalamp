@@ -1282,7 +1282,7 @@ dependencies = [
 
 [[package]]
 name = "metalamp"
-version = "0.1.2-dev"
+version = "0.2.0"
 dependencies = [
  "directories",
  "eframe",
