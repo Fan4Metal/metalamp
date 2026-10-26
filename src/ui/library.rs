@@ -1248,36 +1248,53 @@ fn top_bar(
             *changed = true;
         }
         ui.add_space(8.0);
+        // One button for the albums' view: its icon the view shown, a click
+        // the other one; the right button: both, and the covers' size.
         let table = settings.album_view == AlbumView::Table;
-        if crate::ui::icon_button(
-            ui,
-            Icon::List,
-            table,
-            tr!("Albums as a table", "Альбомы таблицей"),
-        )
-        .clicked()
-        {
-            settings.album_view = AlbumView::Table;
+        let (icon, tip) = if table {
+            (
+                Icon::List,
+                tr!(
+                    "Albums as a table. A click: as covers; the right button: the covers' size",
+                    "Альбомы таблицей. Щелчок: обложками; правая кнопка: размер обложек"
+                ),
+            )
+        } else {
+            (
+                Icon::Gallery,
+                tr!(
+                    "Albums as covers. A click: as a table; the right button: their size",
+                    "Альбомы обложками. Щелчок: таблицей; правая кнопка: их размер"
+                ),
+            )
+        };
+        let view = crate::ui::icon_button(ui, icon, false, tip);
+        if view.clicked() {
+            settings.album_view = if table {
+                AlbumView::Grid
+            } else {
+                AlbumView::Table
+            };
             *changed = true;
         }
-        let gallery = crate::ui::icon_button(
-            ui,
-            Icon::Gallery,
-            !table,
-            tr!(
-                "Albums as covers; the right button: their size",
-                "Альбомы обложками; правая кнопка: их размер"
-            ),
-        );
-        if gallery.clicked() {
-            settings.album_view = AlbumView::Grid;
-            *changed = true;
-        }
-        // The right button: the covers' size, as presets and a slider.
-        egui::Popup::context_menu(&gallery)
+        egui::Popup::context_menu(&view)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
                 ui.set_min_width(220.0);
+                for (shown, label) in [
+                    (AlbumView::Grid, tr!("Albums as covers", "Альбомы обложками")),
+                    (AlbumView::Table, tr!("Albums as a table", "Альбомы таблицей")),
+                ] {
+                    if ui
+                        .selectable_label(settings.album_view == shown, label)
+                        .clicked()
+                    {
+                        settings.album_view = shown;
+                        *changed = true;
+                        ui.close();
+                    }
+                }
+                ui.separator();
                 for (name, size) in COVER_PRESETS {
                     let on = (settings.cover_size - size).abs() < 0.5;
                     if ui
