@@ -440,6 +440,9 @@ pub enum Visual {
     /// spectrum's place, which it takes in older settings).
     #[serde(alias = "radial")]
     Lightning,
+    /// The waves heard flying out from the middle in swirling trails, a
+    /// picture with feedback as MilkDrop's.
+    Vortex,
     /// The sound's peaks rolling from the right.
     Waveform,
     /// The wave itself.
@@ -454,7 +457,7 @@ pub enum Visual {
 
 impl Visual {
     /// As the display's menu and the settings list them, "none" last.
-    pub const ALL: [Visual; 13] = [
+    pub const ALL: [Visual; 14] = [
         Visual::Spectrum,
         Visual::Led,
         Visual::Curve,
@@ -463,6 +466,7 @@ impl Visual {
         Visual::Spectrogram,
         Visual::Synthwave,
         Visual::Lightning,
+        Visual::Vortex,
         Visual::Waveform,
         Visual::Scope,
         Visual::Chroma,
@@ -480,6 +484,7 @@ impl Visual {
             Visual::Spectrogram => tr!("Spectrogram", "Спектрограмма"),
             Visual::Synthwave => tr!("Synthwave", "Синтвейв"),
             Visual::Lightning => tr!("Lightning", "Молнии"),
+            Visual::Vortex => tr!("Vortex", "Вихрь"),
             Visual::Waveform => tr!("Waveform", "Волна"),
             Visual::Scope => tr!("Oscilloscope", "Осциллограф"),
             Visual::Chroma => tr!("Notes", "Ноты"),

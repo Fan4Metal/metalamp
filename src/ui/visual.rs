@@ -11,9 +11,10 @@
 //! an editor draws a track), an oscilloscope (25 ms of the wave, started
 //! at a rising zero crossing so a steady tone stands still), a
 //! spectrogram (the analyzer's bands as a column of colours every 20 ms,
-//! rolling from the right: the loud ones bright), two scenes of the
-//! analyzer's levels: a synthwave flight (`synthwave`) and lightning
-//! striking on the beats (`lightning`), and the notes
+//! rolling from the right: the loud ones bright), three scenes: a
+//! synthwave flight (`synthwave`) and lightning striking on the beats
+//! (`lightning`) of the analyzer's levels, a vortex of the waves heard
+//! (`vortex`, a picture with feedback as MilkDrop's), and the notes
 //! (`notes`): the twelve pitch classes as bars (a chromagram) or a
 //! piano's keys lit by their notes with a bar over each. The waveform,
 //! the ridges and the spectrogram count the frames heard since the frame
@@ -39,6 +40,7 @@ use crate::ui::lightning::{self, Lightning};
 use crate::ui::notes::{self, Notes};
 use crate::ui::spectrum::{self, Analyzer};
 use crate::ui::synthwave::{self, Synthwave};
+use crate::ui::vortex::{self, Vortex};
 
 /// The frames asked of the tap each frame: the analyzer's window, and
 /// what is heard between two frames at 50 frames a second up to 192 kHz.
@@ -86,6 +88,7 @@ pub struct Visualizer {
     notes: Notes,
     lightning: Lightning,
     synthwave: Synthwave,
+    vortex: Vortex,
     /// The ridges' lines, oldest first: the levels across, the lowest
     /// band first.
     ridges: VecDeque<Vec<f32>>,
@@ -130,6 +133,7 @@ impl Visualizer {
             notes: Notes::new(),
             lightning: Lightning::new(),
             synthwave: Synthwave::new(),
+            vortex: Vortex::new(),
             ridges: VecDeque::new(),
             ridges_due: 0.0,
             wave: VecDeque::new(),
@@ -200,6 +204,19 @@ impl Visualizer {
                     (smoothed(&levels), new as f32 / h.rate as f32)
                 });
                 self.synthwave.feed(row, dt);
+            }
+            Visual::Vortex => {
+                let heard = heard.map(|(s, h)| {
+                    let levels =
+                        self.analyzer
+                            .levels(&s[s.len() - spectrum::N..], h.rate, vortex::BANDS);
+                    let span = ((h.rate as f32 * vortex::WAVE_S) as usize).clamp(16, s.len());
+                    (&s[s.len() - span..], levels)
+                });
+                let heard = heard
+                    .as_ref()
+                    .map(|(wave, levels)| (*wave, levels.as_slice()));
+                self.vortex.feed(heard, new > 0, dt, size);
             }
             Visual::Chroma | Visual::Piano => {
                 let window = heard
@@ -353,6 +370,7 @@ impl Visualizer {
             }
             Visual::Lightning => self.lightning.active(),
             Visual::Synthwave => self.synthwave.active(),
+            Visual::Vortex => self.vortex.active(),
             Visual::Ridges => !self.ridges.is_empty(),
             Visual::Chroma | Visual::Piano => self.notes.active(),
             Visual::Waveform => !self.wave.is_empty(),
@@ -371,6 +389,7 @@ impl Visualizer {
             Visual::Mirror => self.analyzer.paint_mirror(painter, rect),
             Visual::Lightning => self.lightning.paint(painter, rect),
             Visual::Synthwave => self.synthwave.paint(painter, rect),
+            Visual::Vortex => self.vortex.paint(painter, rect),
             Visual::Ridges => self.paint_ridges(painter, rect),
             Visual::Chroma => self.paint_chroma(painter, rect),
             Visual::Piano => self.paint_piano(painter, rect),

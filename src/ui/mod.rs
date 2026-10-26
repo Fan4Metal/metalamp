@@ -23,6 +23,7 @@ pub mod table;
 pub mod title;
 pub mod view_editor;
 pub mod visual;
+pub mod vortex;
 
 use egui::{Response, TextureHandle, TextureOptions, Ui};
 use icons::Icon;
