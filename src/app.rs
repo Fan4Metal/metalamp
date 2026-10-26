@@ -624,6 +624,7 @@ impl App {
             visual: self.settings.visual(),
             visual_enabled: self.settings.visual_enabled,
             visual_click: self.settings.visual_click,
+            look: self.settings.look(),
             status: self.player.status,
             title,
             artist,
@@ -710,6 +711,12 @@ impl App {
                 }
                 BarCmd::Visual(v) => {
                     *self.settings.visual_mut() = v;
+                    self.place_changed = Some(Instant::now());
+                }
+                BarCmd::VisualColours(c) => {
+                    // Only the visualization's colours: egui's own stay.
+                    self.settings.visual_colours = c;
+                    palette::set(self.settings.look());
                     self.place_changed = Some(Instant::now());
                 }
                 BarCmd::Equalizer(button) => self.eq_window.toggle(button),

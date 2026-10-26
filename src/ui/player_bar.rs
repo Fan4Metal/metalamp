@@ -56,6 +56,8 @@ pub enum BarCmd {
     TimeMode,
     /// The display clicked, or one chosen in its menu.
     Visual(Visual),
+    /// The visualization's colours chosen in the display's menu.
+    VisualColours(crate::palette::VisualColours),
     /// The equalizer's button clicked (its rect: the window opens under
     /// it).
     Equalizer(Rect),
@@ -88,6 +90,8 @@ pub struct NowPlaying<'a> {
     pub visual_enabled: bool,
     /// A click on the display goes on to the next visualization.
     pub visual_click: bool,
+    /// The look in use, for the colours' swatches in the display's menu.
+    pub look: crate::palette::Look,
     /// The equalizer is on.
     pub eq: bool,
     /// Playing stops after the track heard (Shift+V): Stop is lit.
@@ -335,6 +339,14 @@ fn visual_display(
                 cmds.push(BarCmd::Visual(v));
                 ui.close();
             }
+        }
+        // The colours, as the settings' swatches; the menu stays open, so
+        // they are tried one after another.
+        ui.separator();
+        let mut colours = now.look.visual;
+        ui.horizontal(|ui| crate::ui::settings::visual_colours_row(ui, &mut colours, now.look));
+        if colours != now.look.visual {
+            cmds.push(BarCmd::VisualColours(colours));
         }
     });
 }

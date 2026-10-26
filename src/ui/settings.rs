@@ -2141,6 +2141,32 @@ fn visual_colours(ui: &mut Ui, colours: &mut VisualColours, look: palette::Look)
     }
 }
 
+/// The visualization's colours in the display's menu, left to right: the
+/// ready ones, then the user's own once chosen (it is picked in the
+/// settings window).
+pub(crate) fn visual_colours_row(
+    ui: &mut Ui,
+    colours: &mut VisualColours,
+    look: palette::Look,
+) {
+    ui.spacing_mut().item_spacing.x = 5.0;
+    let own = matches!(*colours, VisualColours::Custom(_)).then_some(*colours);
+    for c in VisualColours::ALL.into_iter().chain(own) {
+        let (rect, response) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
+        let response = response.on_hover_text(c.label());
+        let mut shades = Palette::of(palette::Look { visual: c, ..look }).visual;
+        if c == VisualColours::Cover {
+            shades = palette::with_cover(shades);
+        }
+        swatch(ui, rect, *colours == c, response.hovered(), |p, centre, r| {
+            gradient_disc(p, centre, r, shades);
+        });
+        if response.clicked() {
+            *colours = c;
+        }
+    }
+}
+
 /// A disc of `shades`' colours: the level up, the place across.
 fn gradient_disc(painter: &egui::Painter, centre: egui::Pos2, r: f32, shades: palette::VisualPalette) {
     let colour = |p: egui::Pos2| {
