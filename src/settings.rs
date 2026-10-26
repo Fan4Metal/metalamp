@@ -431,6 +431,9 @@ pub enum Visual {
     Mirror,
     /// The spectra of the last moments as lines one behind the other.
     Ridges,
+    /// Each band's levels over time as lines one behind the other, the
+    /// bass in front, rolling from the right.
+    Strata,
     /// The spectrum's bands as colours rolling from the right.
     Spectrogram,
     /// A flight over a grid with mountains of the spectrum, a sun over
@@ -457,12 +460,13 @@ pub enum Visual {
 
 impl Visual {
     /// As the display's menu and the settings list them, "none" last.
-    pub const ALL: [Visual; 14] = [
+    pub const ALL: [Visual; 15] = [
         Visual::Spectrum,
         Visual::Led,
         Visual::Curve,
         Visual::Mirror,
         Visual::Ridges,
+        Visual::Strata,
         Visual::Spectrogram,
         Visual::Synthwave,
         Visual::Lightning,
@@ -481,6 +485,7 @@ impl Visual {
             Visual::Curve => tr!("Spectrum curve", "Спектр-кривая"),
             Visual::Mirror => tr!("Mirrored spectrum", "Зеркальный спектр"),
             Visual::Ridges => tr!("Ridges", "Хребты"),
+            Visual::Strata => tr!("Strata", "Пласты"),
             Visual::Spectrogram => tr!("Spectrogram", "Спектрограмма"),
             Visual::Synthwave => tr!("Synthwave", "Синтвейв"),
             Visual::Lightning => tr!("Lightning", "Молнии"),
@@ -831,6 +836,7 @@ mod tests {
         for (v, name) in [
             (Visual::Led, "led"),
             (Visual::Ridges, "ridges"),
+            (Visual::Strata, "strata"),
             (Visual::Chroma, "chroma"),
         ] {
             assert_eq!(serde_json::to_string(&v).unwrap(), format!("\"{name}\""));
