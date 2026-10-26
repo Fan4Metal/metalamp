@@ -953,6 +953,84 @@ mod tests {
             .collect()
     }
 
+    /// What a frame of each visualization costs in a full bar's display,
+    /// filled: the feed, the painting and egui's tessellation. Run with
+    /// `cargo test --release paint_costs -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn paint_costs() {
+        use std::time::{Duration, Instant};
+        let rate = 48000;
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), Vec2::new(760.0, 118.0));
+        // Many bands lit: sines across the range, a little noise.
+        let mut seed = 1u32;
+        let sound = |offset: usize, seed: &mut u32| -> Vec<f32> {
+            (offset..offset + FETCH)
+                .map(|i| {
+                    *seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    let noise = (*seed >> 8) as f32 / (1 << 24) as f32 - 0.5;
+                    let t = i as f32 / rate as f32;
+                    [55.0, 110.0, 220.0, 440.0, 880.0, 1760.0, 3520.0, 7040.0]
+                        .iter()
+                        .map(|f| 0.08 * (2.0 * PI * f * t).sin())
+                        .sum::<f32>()
+                        + 0.05 * noise
+                })
+                .collect()
+        };
+        for visual in [
+            Visual::Ridges,
+            Visual::Strata,
+            Visual::Vortex,
+            Visual::Spectrum,
+        ] {
+            let mut v = Visualizer::new();
+            let ctx = egui::Context::default();
+            let mut end = 10_000u64;
+            // Filled: a few seconds of frames at 50 a second.
+            for _ in 0..300 {
+                end += 960;
+                let s = sound(end as usize, &mut seed);
+                v.feed(visual, Some((&s, Heard { rate, end })), Some(rect.size()));
+            }
+            let (mut feed, mut paint, mut tess) = (Duration::ZERO, Duration::ZERO, Duration::ZERO);
+            let (mut vertices, frames) = (0, 100);
+            for _ in 0..frames {
+                end += 960;
+                let s = sound(end as usize, &mut seed);
+                let t = Instant::now();
+                v.feed(visual, Some((&s, Heard { rate, end })), Some(rect.size()));
+                feed += t.elapsed();
+                let mut painted = Duration::ZERO;
+                let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    let t = Instant::now();
+                    v.paint(ui.painter(), rect);
+                    painted = t.elapsed();
+                });
+                paint += painted;
+                let t = Instant::now();
+                let prims = ctx.tessellate(out.shapes, out.pixels_per_point);
+                tess += t.elapsed();
+                vertices = prims
+                    .iter()
+                    .map(|p| match &p.primitive {
+                        egui::epaint::Primitive::Mesh(m) => m.vertices.len(),
+                        _ => 0,
+                    })
+                    .sum();
+            }
+            let ms = |d: Duration| d.as_secs_f64() * 1000.0 / frames as f64;
+            println!(
+                "{:<12} feed {:.3} ms, paint {:.3} ms, tessellate {:.3} ms, {} vertices",
+                format!("{visual:?}"),
+                ms(feed),
+                ms(paint),
+                ms(tess),
+                vertices
+            );
+        }
+    }
+
     #[test]
     fn the_waveform_rolls_with_the_frames_heard() {
         let mut v = Visualizer::new();

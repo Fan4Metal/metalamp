@@ -28,6 +28,7 @@ cargo test reads_a_real_file -- --ignored   # with METALAMP_SAMPLE=<an mp3>: lof
 cargo test decoder_opens_sample -- --ignored   # METALAMP_SAMPLE: Media Foundation decodes it and seeks
 cargo test engine_goes_on_without_a_gap -- --ignored --nocapture   # METALAMP_SAMPLE and the next file of its folder: plays ~3 s quietly on the default device
 cargo test play_while_paused_plays -- --ignored --nocapture   # METALAMP_SAMPLE: a Play after a Pause plays (~2 s quietly)
+cargo test --release paint_costs -- --ignored --nocapture   # a frame of the ridges, strata, vortex and spectrum, filled, in a full bar's display: feed, paint, tessellation (ridges ~0.8 ms in all)
 ```
 
 Releases: pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`, which runs `make_release.py` and publishes both files; the tag must equal the version in `Cargo.toml`. Creating or pushing a tag publishes a public release, so do it only when the user asks. `tools/setup.iss` installs per user; its uninstaller closes a copy running from the installed folder (PowerShell's `CloseMainWindow`, so the settings are saved) and, unless silent, asks whether to delete `%APPDATA%\MetalAMP` (qrec's way). `.cargo/config.toml` links the CRT statically, so no VCRUNTIME140.dll is needed. These scripts mirror those of disk_flashlight, qview, qrec and metalmd; keep them in step.
