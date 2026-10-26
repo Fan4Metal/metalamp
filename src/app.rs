@@ -2003,6 +2003,7 @@ impl eframe::App for App {
             // The files written: their tags read again.
             self.rescan();
             self.outside.read_again(&ctx);
+            self.playlist_view.loose.forget();
         }
         // The size chosen in the cover's menu is kept.
         if self.file_info.cover_side != self.settings.tag_cover_side {

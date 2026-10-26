@@ -15,6 +15,7 @@ use egui::{Align2, FontId, Key, Modifiers, Rect, Sense, TextureHandle, Ui, pos2,
 
 use crate::keymap::{Cmd, with_key};
 use crate::library::Library;
+use crate::library::outside::Loose;
 use crate::player::Player;
 use crate::ui::icons::{self, Icon};
 use crate::ui::table::{self, ROW_HEIGHT};
@@ -55,6 +56,8 @@ pub struct PlaylistView {
     revision: u64,
     /// The rows as last built.
     rows: Option<Arc<Rows>>,
+    /// The tracks of the entries the library does not hold.
+    pub loose: Loose,
     /// The name typed in the playlists' menu to save the list under.
     save_name: String,
     /// The search field takes the focus (Ctrl+F without the library).
@@ -89,9 +92,9 @@ struct Listed {
 /// entry each frame, it was a lookup and a string or two (a long list at
 /// 50 frames a second while playing).
 struct Rows {
-    /// The playlist's revision, the library's generation, the search and
-    /// the template.
-    key: (u64, u64, String, String),
+    /// The playlist's revision, the library's generation, the search, the
+    /// template and the revision of the files outside the library.
+    key: (u64, u64, String, String, u64),
     /// Each entry's line (by the template) and length.
     lines: Vec<(String, Option<u32>)>,
     /// The entries the search leaves.
@@ -101,13 +104,21 @@ struct Rows {
 }
 
 impl Rows {
-    fn of(key: (u64, u64, String, String), player: &Player, library: &Library) -> Rows {
+    fn of(
+        key: (u64, u64, String, String, u64),
+        player: &Player,
+        library: &Library,
+        loose: &mut Loose,
+        ctx: &egui::Context,
+    ) -> Rows {
         let words = crate::library::query_words(&key.2);
-        let described: Vec<(String, String, Option<u32>)> = player
-            .queue
-            .entries()
+        let entries = player.queue.entries();
+        let paths: std::collections::HashSet<&std::path::Path> =
+            entries.iter().map(|e| e.path.as_path()).collect();
+        loose.retain(|p| paths.contains(p));
+        let described: Vec<(String, String, Option<u32>)> = entries
             .iter()
-            .map(|e| describe(library, &e.path, &key.3))
+            .map(|e| describe(library, loose, ctx, &e.path, &key.3))
             .collect();
         // The search finds the line, and the artist, the title and the
         // album whatever the line shows.
@@ -189,17 +200,22 @@ pub enum PlaylistAction {
     Export,
 }
 
-/// The line of an entry by `template` from the library, else the file's
-/// name; what the search looks in (the line, the artist, the title, the
-/// album); and its length, if known.
+/// The line of an entry by `template` from the library or the file's tags
+/// (`loose`, once read), else the file's name; what the search looks in
+/// (the line, the artist, the title, the album); and its length, if known.
 fn describe(
     library: &Library,
+    loose: &mut Loose,
+    ctx: &egui::Context,
     path: &std::path::Path,
     template: &str,
 ) -> (String, String, Option<u32>) {
-    match library.track_at(path) {
-        Some(id) => {
-            let t = &library.tracks[id as usize];
+    let track = match library.track_at(path) {
+        Some(id) => library.tracks.get(id as usize),
+        None => loose.track(ctx, path),
+    };
+    match track {
+        Some(t) => {
             let line = crate::title_format::line(template, t);
             let search = format!("{line} {} {} {}", t.artist, t.title, t.album);
             (line, search, Some(t.duration_ms))
@@ -331,14 +347,17 @@ pub fn show(
     }
 
     // The rows the search leaves, as indices into the playlist.
+    pv.loose.take_read();
     let key = (
         player.queue.revision,
         library.generation,
         pv.query.clone(),
         pv.format.clone(),
+        pv.loose.revision,
     );
     if pv.rows.as_ref().is_none_or(|r| r.key != key) {
-        pv.rows = Some(Arc::new(Rows::of(key, player, library)));
+        let ctx = ui.ctx().clone();
+        pv.rows = Some(Arc::new(Rows::of(key, player, library, &mut pv.loose, &ctx)));
     }
     let Some(rows) = pv.rows.clone() else {
         return actions;

@@ -3,8 +3,9 @@
 //! a thread of their own, so the player bar shows them as for a track of
 //! the library.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::UNIX_EPOCH;
 
 use egui::{TextureHandle, TextureOptions};
@@ -103,6 +104,85 @@ impl Outside {
         if let Some(path) = self.path.take() {
             self.follow(ctx, Some(&path));
         }
+    }
+}
+
+/// The tracks of the playlist's files the library does not hold, read one
+/// after another on a thread of their own as the playlist asks for them,
+/// so its rows show their lines by the template and their lengths.
+#[derive(Default)]
+pub struct Loose {
+    /// Each file asked for and still in the playlist: its track once read
+    /// (`None` meanwhile, or when it could not be read).
+    tracks: HashMap<PathBuf, Option<Track>>,
+    /// Raised whenever a track comes in or the tracks are dropped.
+    pub revision: u64,
+    worker: Option<(Sender<PathBuf>, Receiver<Loaded>)>,
+}
+
+/// A file read by `Loose`'s thread and its track.
+type Loaded = (PathBuf, Option<Track>);
+
+impl Loose {
+    /// Takes the tracks read since the frame before.
+    pub fn take_read(&mut self) {
+        let Some((_, rx)) = &self.worker else {
+            return;
+        };
+        while let Ok((path, track)) = rx.try_recv() {
+            // A file taken out of the playlist meanwhile is not kept.
+            if let Some(slot) = self.tracks.get_mut(&path) {
+                *slot = track;
+                self.revision += 1;
+            }
+        }
+    }
+
+    /// The track of `path` once read; a file not asked for yet is read.
+    pub fn track(&mut self, ctx: &egui::Context, path: &Path) -> Option<&Track> {
+        if !self.tracks.contains_key(path) {
+            self.tracks.insert(path.to_path_buf(), None);
+            self.ask(ctx, path);
+        }
+        self.tracks.get(path)?.as_ref()
+    }
+
+    fn ask(&mut self, ctx: &egui::Context, path: &Path) {
+        if self.worker.is_none() {
+            let (tx, paths) = channel::<PathBuf>();
+            let (done, rx) = channel();
+            let wake = ctx.clone();
+            let spawned = std::thread::Builder::new()
+                .name("loose".into())
+                .spawn(move || {
+                    // Ends once the sender is dropped with the app.
+                    for path in paths {
+                        let track = crate::guard::catch(&path, || read_track(&path)).flatten();
+                        if done.send((path, track)).is_err() {
+                            break;
+                        }
+                        wake.request_repaint();
+                    }
+                });
+            if spawned.is_err() {
+                return;
+            }
+            self.worker = Some((tx, rx));
+        }
+        if let Some((tx, _)) = &self.worker {
+            let _ = tx.send(path.to_path_buf());
+        }
+    }
+
+    /// Keeps only the files `kept` says are still in the playlist.
+    pub fn retain(&mut self, kept: impl Fn(&Path) -> bool) {
+        self.tracks.retain(|p, _| kept(p));
+    }
+
+    /// Drops every track read, to read them again (tags were written).
+    pub fn forget(&mut self) {
+        self.tracks.clear();
+        self.revision += 1;
     }
 }
 
