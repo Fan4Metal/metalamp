@@ -411,14 +411,30 @@ fn winamp(
         } else {
             text.clone()
         };
-        let room = field.width() - 16.0;
-        let galley = line(ui, &text, 13.0, palette::text_bright(), room);
-        let cut = galley.size().x >= room - 1.0;
-        painter.galley(
-            pos2(field.left() + 8.0, field.center().y - galley.size().y / 2.0),
-            galley,
-            palette::text_bright(),
-        );
+        let clip = field.shrink2(vec2(8.0, 0.0));
+        let colour = palette::text_bright();
+        let galley = line(ui, &text, 13.0, colour, f32::INFINITY);
+        let y = field.center().y - galley.size().y / 2.0;
+        let cut = galley.size().x > clip.width();
+        if cut {
+            // Too long: it runs to the left in a loop, the text and a
+            // separator a lap.
+            let lap = line(
+                ui,
+                &format!("{text}{TITLE_SEPARATOR}"),
+                13.0,
+                colour,
+                f32::INFINITY,
+            );
+            let period = lap.size().x;
+            let offset = running(ui.ctx(), &text, period, ui.input(|i| i.time));
+            let painter = painter.with_clip_rect(clip.intersect(painter.clip_rect()));
+            let x = clip.left() - offset;
+            painter.galley(pos2(x, y), lap.clone(), colour);
+            painter.galley(pos2(x + period, y), lap, colour);
+        } else {
+            painter.galley(pos2(clip.left(), y), galley, colour);
+        }
         // A double click: the file info.
         let resp = ui.interact(field, ui.id().with("winamp_title"), Sense::click());
         let tip = if cut {
@@ -579,6 +595,43 @@ fn facts(now: &NowPlaying<'_>) -> String {
 }
 
 /// One line of text cut to `room` points.
+/// What follows a running title before it comes round again, as Winamp's.
+const TITLE_SEPARATOR: &str = "  ***  ";
+/// A running title's pause where its text came, in seconds, and its speed,
+/// in points a second.
+const TITLE_PAUSE: f64 = 1.6;
+const TITLE_SPEED: f64 = 30.0;
+
+/// How far a title too long for its field has run at `now` (seconds), in
+/// points: from the time its text came (kept in egui's memory), a pause,
+/// then to the left in a loop of `period` points (the text and the
+/// separator), as Winamp's. The next frame is asked for: soon while it
+/// moves, at the pause's end else.
+fn running(ctx: &egui::Context, text: &str, period: f32, now: f64) -> f32 {
+    let id = egui::Id::new("winamp_title_run");
+    let start = ctx.data_mut(|d| {
+        let kept = d.get_temp_mut_or_insert_with(id, || (text.to_owned(), now));
+        if kept.0 != text {
+            *kept = (text.to_owned(), now);
+        }
+        kept.1
+    });
+    let (offset, still) = running_at(now - start, period);
+    let wait = if still > 0.0 { still } else { 1.0 / 30.0 };
+    ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait));
+    offset
+}
+
+/// Where a title runs `t` seconds after its text came, in points of its
+/// `period`, and how long it stays there (0 while it moves).
+fn running_at(t: f64, period: f32) -> (f32, f64) {
+    if t < TITLE_PAUSE {
+        return (0.0, TITLE_PAUSE - t);
+    }
+    let run = (t - TITLE_PAUSE) * TITLE_SPEED;
+    (run.rem_euclid(f64::from(period.max(1.0))) as f32, 0.0)
+}
+
 fn line(
     ui: &mut Ui,
     text: &str,
@@ -924,4 +977,19 @@ pub(super) fn seek_bar(
         resp.on_hover_text_at_pointer(format::time((share as f64 * duration as f64) as u64));
     }
     shown_ms
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_title_waits_then_runs_round() {
+        assert_eq!(running_at(0.0, 300.0), (0.0, TITLE_PAUSE));
+        assert_eq!(running_at(TITLE_PAUSE + 1.0, 300.0).0, TITLE_SPEED as f32);
+        let lap = 300.0 / TITLE_SPEED;
+        let (offset, still) = running_at(TITLE_PAUSE + lap + 1.0, 300.0);
+        assert!((offset - TITLE_SPEED as f32).abs() < 1e-3);
+        assert_eq!(still, 0.0);
+    }
 }
