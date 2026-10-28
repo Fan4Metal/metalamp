@@ -23,7 +23,7 @@ pub enum Cmd {
     StopAfter,
     Previous,
     Next,
-    /// Seconds back (negative) or forward.
+    /// Back (-1) or forward (1) by the seek step (`settings.seek_step`).
     Seek(i64),
     Repeat,
     Shuffle,
@@ -380,8 +380,6 @@ macro_rules! actions {
     };
 }
 
-/// The step of the seek keys, in seconds.
-pub const SEEK_STEP: i64 = 5;
 /// The step of the volume keys and of a wheel notch, in percent.
 pub const VOLUME_STEP: i8 = 5;
 
@@ -392,8 +390,8 @@ actions! {
     StopAfter "stop_after" Playback Cmd::StopAfter, [Chord::shift(Key::V)];
     Previous "previous" Playback Cmd::Previous, [Chord::ctrl(Key::ArrowLeft), Chord::key(Key::Z)];
     Next "next" Playback Cmd::Next, [Chord::ctrl(Key::ArrowRight), Chord::key(Key::B)];
-    SeekBack "seek_back" Playback Cmd::Seek(-SEEK_STEP), [Chord::shift(Key::ArrowLeft)];
-    SeekForward "seek_forward" Playback Cmd::Seek(SEEK_STEP), [Chord::shift(Key::ArrowRight)];
+    SeekBack "seek_back" Playback Cmd::Seek(-1), [Chord::shift(Key::ArrowLeft)];
+    SeekForward "seek_forward" Playback Cmd::Seek(1), [Chord::shift(Key::ArrowRight)];
     Repeat "repeat" Playback Cmd::Repeat, [Chord::key(Key::R)];
     Shuffle "shuffle" Playback Cmd::Shuffle, [Chord::key(Key::S)];
 
@@ -447,8 +445,14 @@ impl Action {
                 "Предыдущий трек (после 3 с — начало текущего)"
             ),
             Action::Next => tr!("Next track", "Следующий трек"),
-            Action::SeekBack => tr!("Back by 5 s", "Назад на 5 с"),
-            Action::SeekForward => tr!("Forward by 5 s", "Вперёд на 5 с"),
+            Action::SeekBack => tr!(
+                "Seek back (the step is on the General page)",
+                "Перемотка назад (шаг — на странице «Общие»)"
+            ),
+            Action::SeekForward => tr!(
+                "Seek forward (the step is on the General page)",
+                "Перемотка вперёд (шаг — на странице «Общие»)"
+            ),
             Action::Repeat => tr!(
                 "Repeat: off, the playlist, the track",
                 "Повтор: выключен, плейлист, трек"
@@ -882,7 +886,7 @@ mod tests {
         let map = Keymap::default();
         assert_eq!(
             map.command(Chord::shift(Key::ArrowLeft), true),
-            Some(Cmd::Seek(-SEEK_STEP))
+            Some(Cmd::Seek(-1))
         );
         assert_eq!(
             map.command(Chord::ctrl(Key::ArrowUp), true),

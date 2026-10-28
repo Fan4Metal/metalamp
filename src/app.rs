@@ -729,7 +729,7 @@ impl App {
     /// unless a text field has the focus (else they move in the library's
     /// panes).
     fn pointer_keys(&mut self, ctx: &egui::Context, over_player: bool) {
-        use crate::keymap::{SEEK_STEP, VOLUME_STEP};
+        use crate::keymap::VOLUME_STEP;
         if !over_player || ctx.memory(|m| m.focused().is_some()) {
             return;
         }
@@ -737,11 +737,12 @@ impl App {
         // and those chords are the keymap's.
         let pressed =
             |k: Key| ctx.input_mut(|i| i.modifiers.is_none() && i.consume_key(Modifiers::NONE, k));
+        let step = self.settings.seek_seconds();
         if pressed(Key::ArrowRight) {
-            self.player.seek_by(SEEK_STEP);
+            self.player.seek_by(step);
         }
         if pressed(Key::ArrowLeft) {
-            self.player.seek_by(-SEEK_STEP);
+            self.player.seek_by(-step);
         }
         if pressed(Key::ArrowUp) {
             self.step_volume(VOLUME_STEP);
@@ -854,7 +855,7 @@ impl App {
             Cmd::StopAfter => self.player.toggle_stop_after(),
             Cmd::Previous => self.player.previous(),
             Cmd::Next => self.player.next(),
-            Cmd::Seek(seconds) => self.player.seek_by(seconds),
+            Cmd::Seek(way) => self.player.seek_by(way * self.settings.seek_seconds()),
             Cmd::Repeat => {
                 let next = self.player.queue.repeat.next();
                 self.player.set_repeat(next);

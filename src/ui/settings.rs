@@ -1177,6 +1177,25 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
         );
     });
     section(ui, tr!("Playlist", "Плейлист"), |ui| playlist_rows(ui, settings));
+    section(ui, tr!("Playback", "Воспроизведение"), |ui| {
+        row(
+            ui,
+            tr!("Seek step", "Шаг перемотки"),
+            Some(tr!(
+                "How far Shift+Left / Shift+Right, and Left / Right with the pointer over the player bar, seek.",
+                "На сколько перематывают Shift+Влево / Shift+Вправо и Влево / Вправо с указателем над панелью плеера."
+            )),
+            CONTROL,
+            |ui| {
+                ui.spacing_mut().slider_width = CONTROL - 70.0;
+                settings.seek_step = settings.seek_step.clamp(1, crate::settings::MAX_SEEK_STEP);
+                ui.add(
+                    egui::Slider::new(&mut settings.seek_step, 1..=crate::settings::MAX_SEEK_STEP)
+                        .suffix(tr!(" s", " с")),
+                );
+            },
+        );
+    });
     section(ui, tr!("Media keys", "Медиаклавиши"), |ui| {
         row(
             ui,
@@ -2517,6 +2536,7 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     settings.dsp = d.dsp;
     settings.crossfade = d.crossfade;
     settings.crossfade_in_albums = d.crossfade_in_albums;
+    settings.seek_step = d.seek_step;
     settings.tray = d.tray;
     updates.enabled = d.check_updates;
 }

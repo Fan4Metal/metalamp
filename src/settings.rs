@@ -123,6 +123,9 @@ pub struct Settings {
     /// between the tracks of one folder too (else albums play gapless).
     pub crossfade: u8,
     pub crossfade_in_albums: bool,
+    /// How far the seek keys (Shift+Left/Right, the arrows over the
+    /// player bar) go, in seconds (1–`MAX_SEEK_STEP`).
+    pub seek_step: u8,
     /// When the media keys are the player's.
     pub media_keys: MediaKeys,
     /// How large a cover put into tags may be (the file info window).
@@ -156,6 +159,12 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// The seek keys' step in seconds, within its bounds (a file may hold
+    /// 0 or more than the slider offers).
+    pub fn seek_seconds(&self) -> i64 {
+        i64::from(self.seek_step.clamp(1, MAX_SEEK_STEP))
+    }
+
     /// The view in use, if `view` names one of `views`.
     pub fn current_view(&self) -> Option<&crate::library::filter::Filter> {
         if self.view.is_empty() {
@@ -387,6 +396,10 @@ impl WindowLayout {
 pub const PLAYLIST_MIN_SIZE: [f32; 2] = [440.0, 400.0];
 pub const PLAYLIST_SIZE: [f32; 2] = [440.0, 780.0];
 
+/// The seek keys' step by default and at most, in seconds.
+pub const DEFAULT_SEEK_STEP: u8 = 5;
+pub const MAX_SEEK_STEP: u8 = 60;
+
 /// The player bar's layout.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -567,6 +580,7 @@ impl Default for Settings {
             eq_presets: Vec::new(),
             crossfade: 0,
             crossfade_in_albums: false,
+            seek_step: DEFAULT_SEEK_STEP,
             media_keys: MediaKeys::default(),
             tag_cover_side: CoverSide::default(),
             id3v2_version: Id3Version::default(),

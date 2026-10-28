@@ -105,7 +105,7 @@ The keys below are the defaults; those of the player's actions can be changed in
 | `Shift+V` | Stop after the current track (again: go on as usual); the Stop button is lit meanwhile, and the playlist's menu has it too |
 | `Ctrl+Right`, `B` | Next track |
 | `Ctrl+Left`, `Z` | Previous track (the start of the current one after its first 3 seconds) |
-| `Shift+Right` / `Shift+Left`, or `Right` / `Left` with the pointer over the player bar | 5 seconds forward / back |
+| `Shift+Right` / `Shift+Left`, or `Right` / `Left` with the pointer over the player bar | Forward / back by the seek step (5 seconds by default; **Seek step** in the settings window, General, 1–60 s) |
 | `Ctrl+Up` / `Ctrl+Down`, or `Up` / `Down` with the pointer over the player bar | Volume up / down |
 | `M` | Mute |
 | `R` | Repeat: off, the playlist, the track |
