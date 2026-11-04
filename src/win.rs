@@ -558,6 +558,23 @@ pub fn snapped_to_edges(rect: [i32; 4], work: [i32; 4], reach: i32) -> [i32; 4] 
     [rect[0] + dx, rect[1] + dy, rect[2] + dx, rect[3] + dy]
 }
 
+/// The mini player's client area made square again by its least side,
+/// the top left corner kept. A window with a caption is kept `SM_CXMIN`
+/// wide at least (166 px at 125 %) when its frame changes (winit's
+/// `SetWindowPos` with `SWP_FRAMECHANGED` after a style change, the
+/// window level the mini player sets among them), whatever
+/// `WM_GETMINMAXINFO` says, so a mini player smaller than that came out
+/// wider than high; set again, it takes its size.
+pub fn square_up(hwnd: isize) {
+    let Some(r) = window_rect(hwnd) else { return };
+    let [bx, by] = border(hwnd);
+    let (w, h) = (r[2] - r[0] - bx, r[3] - r[1] - by);
+    if w != h {
+        let side = w.min(h);
+        set_rect(hwnd, [r[0], r[1], r[0] + side + bx, r[1] + side + by]);
+    }
+}
+
 /// The size of the window's frame around its client area, in pixels.
 fn border(hwnd: isize) -> [i32; 2] {
     use windows_sys::Win32::Foundation::RECT;

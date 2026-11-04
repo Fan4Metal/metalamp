@@ -150,6 +150,11 @@ pub struct Settings {
     /// The mini player's window where it was left (pixels, screen
     /// coordinates); none: the work area's bottom right corner.
     pub mini_rect: Option<[i32; 4]>,
+    /// The mini player shows the title and the artist (a click on the
+    /// cover switches it), and the cover as a record turning while it
+    /// plays (its menu).
+    pub mini_names: bool,
+    pub mini_vinyl: bool,
     /// The look: the base theme and the controls' colour.
     pub theme: crate::palette::Theme,
     pub accent: crate::palette::Accent,
@@ -591,6 +596,8 @@ impl Default for Settings {
             on_top: false,
             mini: false,
             mini_rect: None,
+            mini_names: true,
+            mini_vinyl: false,
             theme: Default::default(),
             accent: Default::default(),
             selection: Default::default(),

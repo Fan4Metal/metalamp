@@ -107,6 +107,8 @@ pub struct App {
     /// The mini player's cover, read large, and the app icon for a track
     /// without one.
     mini_cover: crate::ui::mini::Cover,
+    /// The mini player's record: how far it has turned.
+    mini_spin: crate::ui::mini::Spin,
     mini_icon: Option<egui::TextureHandle>,
     /// The file heard when the library does not hold it, read.
     outside: crate::library::outside::Outside,
@@ -254,6 +256,7 @@ impl App {
             applied_modes: None,
             layout_after_mini: false,
             mini_cover: Default::default(),
+            mini_spin: Default::default(),
             outside: Default::default(),
             mini_icon: None,
             growing: None,
@@ -604,7 +607,11 @@ impl App {
         let cover = self.mini_cover.of(&ctx, path.as_deref());
         let icon = crate::ui::app_icon(&ctx, 128.0, &mut self.mini_icon);
         let now = self.now_shown(&title, &artist, cover);
-        let cmds = crate::ui::mini::show(ui, &now, &icon);
+        let look = crate::ui::mini::Look {
+            names: self.settings.mini_names,
+            vinyl: self.settings.mini_vinyl,
+        };
+        let cmds = crate::ui::mini::show(ui, &now, &icon, look, &mut self.mini_spin);
         self.bar_commands(cmds);
     }
 
@@ -701,6 +708,14 @@ impl App {
             match cmd {
                 BarCmd::Whole => {
                     self.settings.mini = false;
+                    self.place_changed = Some(Instant::now());
+                }
+                BarCmd::MiniNames(on) => {
+                    self.settings.mini_names = on;
+                    self.place_changed = Some(Instant::now());
+                }
+                BarCmd::MiniVinyl(on) => {
+                    self.settings.mini_vinyl = on;
                     self.place_changed = Some(Instant::now());
                 }
                 BarCmd::Previous => self.player.previous(),
@@ -1477,6 +1492,11 @@ impl App {
         );
         let applied = self.applied_modes;
         if applied == Some(wanted) {
+            // Windows widens a narrow mini player when its frame changes
+            // (`win::square_up`).
+            if wanted.1 && !win::is_minimized(hwnd) {
+                win::square_up(hwnd);
+            }
             return;
         }
         if applied.map(|a| a.0) != Some(wanted.0) {
