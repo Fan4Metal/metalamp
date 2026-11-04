@@ -63,9 +63,10 @@ pub enum BarCmd {
     Equalizer(Rect),
     /// The mini player's way back to the whole window.
     Whole,
-    /// The mini player's names shown or not, its cover as a record or not.
+    /// The mini player's names shown or not, its cover as it is or a
+    /// record.
     MiniNames(bool),
-    MiniVinyl(bool),
+    MiniStyle(crate::settings::MiniStyle),
 }
 
 /// What the bar shows.

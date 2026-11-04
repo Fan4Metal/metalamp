@@ -575,6 +575,40 @@ pub fn square_up(hwnd: isize) {
     }
 }
 
+/// The window's size its round region was made for (none: it has none).
+static ROUND: std::sync::Mutex<Option<(i32, i32)>> = std::sync::Mutex::new(None);
+
+/// The window clipped to the circle inscribed in it (`round`), or whole:
+/// the mini player's record, drawn smooth on a transparent window, lets
+/// clicks round it through to the windows behind. Made again only when
+/// the size changed.
+pub fn set_round(hwnd: isize, round: bool) {
+    #[link(name = "gdi32")]
+    unsafe extern "system" {
+        fn CreateEllipticRgn(left: i32, top: i32, right: i32, bottom: i32) -> isize;
+    }
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn SetWindowRgn(hwnd: isize, region: isize, redraw: i32) -> i32;
+    }
+    let size = if round {
+        window_rect(hwnd).map(|r| (r[2] - r[0], r[3] - r[1]))
+    } else {
+        None
+    };
+    let Ok(mut kept) = ROUND.lock() else { return };
+    if *kept == size {
+        return;
+    }
+    *kept = size;
+    // The window owns the region once it is set.
+    let region = match size {
+        Some((w, h)) => unsafe { CreateEllipticRgn(0, 0, w + 1, h + 1) },
+        None => 0,
+    };
+    unsafe { SetWindowRgn(hwnd, region, 1) };
+}
+
 /// The size of the window's frame around its client area, in pixels.
 fn border(hwnd: isize) -> [i32; 2] {
     use windows_sys::Win32::Foundation::RECT;

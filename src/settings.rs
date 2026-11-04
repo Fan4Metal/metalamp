@@ -151,10 +151,10 @@ pub struct Settings {
     /// coordinates); none: the work area's bottom right corner.
     pub mini_rect: Option<[i32; 4]>,
     /// The mini player shows the title and the artist (a click on the
-    /// cover switches it), and the cover as a record turning while it
-    /// plays (its menu).
+    /// cover switches it), and the cover as it is or as a record's label
+    /// (its menu).
     pub mini_names: bool,
-    pub mini_vinyl: bool,
+    pub mini_style: MiniStyle,
     /// The look: the base theme and the controls' colour.
     pub theme: crate::palette::Theme,
     pub accent: crate::palette::Accent,
@@ -405,6 +405,27 @@ pub const PLAYLIST_SIZE: [f32; 2] = [440.0, 780.0];
 pub const DEFAULT_SEEK_STEP: u8 = 5;
 pub const MAX_SEEK_STEP: u8 = 60;
 
+/// How the mini player shows the cover.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MiniStyle {
+    /// The whole square (also for a value not known: `from_json`).
+    #[default]
+    Cover,
+    /// A record turning, the cover its label.
+    Record,
+    /// The record seen closer: a larger label, a narrower band of
+    /// grooves.
+    CloseUp,
+}
+
+impl MiniStyle {
+    /// A record, round in a window clear about it.
+    pub fn is_record(self) -> bool {
+        self != MiniStyle::Cover
+    }
+}
+
 /// The player bar's layout.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -597,7 +618,7 @@ impl Default for Settings {
             mini: false,
             mini_rect: None,
             mini_names: true,
-            mini_vinyl: false,
+            mini_style: MiniStyle::Cover,
             theme: Default::default(),
             accent: Default::default(),
             selection: Default::default(),

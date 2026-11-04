@@ -79,9 +79,11 @@ impl OwnWindow {
         self.hwnd.flatten()
     }
 
-    /// The builder of a window made hidden.
+    /// The builder of a window made hidden; opaque, though the main window
+    /// is transparent (for the mini player's record), which eframe's
+    /// viewports otherwise inherit.
     pub fn builder(builder: egui::ViewportBuilder) -> egui::ViewportBuilder {
-        builder.with_visible(false)
+        builder.with_visible(false).with_transparent(false)
     }
 
     /// Each frame inside the viewport's closure (`ctx` is the viewport's):

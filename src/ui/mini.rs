@@ -23,6 +23,7 @@ use super::player_bar::{self, BarCmd, NowPlaying};
 use crate::keymap::{Cmd, with_key};
 use crate::palette;
 use crate::player::Status;
+use crate::settings::MiniStyle;
 use crate::ui::icons::{self, Icon};
 
 /// A running line's pause at either end, in seconds, and its speed, in
@@ -92,19 +93,21 @@ const BOTTOM_NARROW: f32 = 56.0;
 const WITH_VOLUME: f32 = 190.0;
 const NARROW: f32 = 150.0;
 
-/// The record: its radius in the half side, its label's in its own; the
-/// speed of 33⅓ turns a minute, in radians a second, reached or lost in
-/// about `SPIN_EASE` seconds.
-const DISC: f32 = 0.96;
+/// The record: its radius in the half side (the rest for its shadow on
+/// what is behind the window), its label's in its own, seen as it is and
+/// closer; the speed of 33⅓ turns a minute, in radians a second, reached
+/// or lost in about `SPIN_EASE` seconds.
+const DISC: f32 = 0.955;
 const LABEL: f32 = 0.42;
+const LABEL_CLOSE: f32 = 0.66;
 const TURNS: f32 = 33.333 / 60.0 * TAU;
 const SPIN_EASE: f32 = 0.35;
 
-/// What the mini player shows: the names, the cover as a record.
+/// What the mini player shows: the names, the cover as it is or a record.
 #[derive(Clone, Copy)]
 pub struct Look {
     pub names: bool,
-    pub vinyl: bool,
+    pub style: MiniStyle,
 }
 
 /// How far the record has turned and how fast it turns: it gathers speed
@@ -214,17 +217,19 @@ pub fn show(
     let painter = ui.painter().clone();
     let playing = now.status == Status::Playing;
     let now_s = ctx.input(|i| i.time);
-    painter.rect_filled(rect, 0.0, palette::bar_bg());
-    let disc = look.vinyl.then(|| {
+    // A record on nothing: the window is clear round it (`App::clear_color`
+    // and `win::set_round`).
+    let disc = look.style.is_record().then(|| {
         let (angle, moving) = spin.turn(now_s, playing);
         if moving {
             ctx.request_repaint();
         }
-        let record = Record::of(rect);
+        let record = Record::of(rect, look.style);
         record.paint(&painter, now, icon, angle);
         record
     });
     if disc.is_none() {
+        painter.rect_filled(rect, 0.0, palette::bar_bg());
         // Turned on again, the record starts from rest.
         *spin = Spin::default();
         match &now.cover {
@@ -272,37 +277,41 @@ pub fn show(
         BOTTOM_NARROW
     };
     let on_controls = hover.is_some_and(|p| match &disc {
-        Some(d) => p.distance(d.centre) <= d.controls_reach() || p.y <= rect.top() + top_h,
+        Some(d) => d.on_controls(p),
         None => p.y <= rect.top() + top_h || p.y >= rect.bottom() - bottom_h,
+    });
+    let over = hover.is_some_and(|p| match &disc {
+        Some(d) => p.distance(d.centre) <= d.radius,
+        None => rect.contains(p),
     });
     // `METALAMP_MINI_CONTROLS=1`: always shown, for GUI checks.
     static ALWAYS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let always = *ALWAYS.get_or_init(|| std::env::var_os("METALAMP_MINI_CONTROLS").is_some());
     let shown = always
         || egui::Popup::is_any_open(&ctx)
-        || (hover.is_some_and(|p| rect.contains(p))
-            && (!playing || on_controls || down || still < CONTROLS_FOR));
+        || (over && (!playing || on_controls || down || still < CONTROLS_FOR));
     if shown && playing && !on_controls && !down {
         ctx.request_repaint_after(Duration::from_secs_f32((CONTROLS_FOR - still).max(0.05)));
     }
     let ground = palette::bar_bg().gamma_multiply_u8(225);
 
+    if let Some(d) = &disc {
+        if look.names {
+            d.names(&ctx, &painter, now, shown, now_s);
+        }
+        if shown {
+            d.controls(ui, &painter, now, &mut cmds);
+        }
+        return cmds;
+    }
     let top = Rect::from_min_size(rect.min, vec2(rect.width(), top_h));
     if look.names {
         names(ui, &painter, top, now, shown, now_s, ground);
     }
     if shown {
         back_button(ui, &painter, top, look.names, ground, &mut cmds);
-    }
-    if !shown {
-        return cmds;
-    }
-    match &disc {
-        Some(d) => d.controls(ui, &painter, now, &mut cmds),
-        None => {
-            let bottom = Rect::from_min_max(pos2(rect.left(), rect.bottom() - bottom_h), rect.max);
-            bottom_band(ui, &painter, bottom, now, ground, &mut cmds);
-        }
+        let bottom = Rect::from_min_max(pos2(rect.left(), rect.bottom() - bottom_h), rect.max);
+        bottom_band(ui, &painter, bottom, now, ground, &mut cmds);
     }
     cmds
 }
@@ -342,12 +351,18 @@ fn menu(ui: &mut Ui, look: Look, cmds: &mut Vec<BarCmd>) {
     if ui.checkbox(&mut names, tr!("Names", "Названия")).changed() {
         cmds.push(BarCmd::MiniNames(names));
     }
-    let mut vinyl = look.vinyl;
-    if ui
-        .checkbox(&mut vinyl, tr!("Record", "Пластинка"))
-        .changed()
-    {
-        cmds.push(BarCmd::MiniVinyl(vinyl));
+    ui.separator();
+    for (style, label) in [
+        (MiniStyle::Cover, tr!("Cover", "Обложка")),
+        (MiniStyle::Record, tr!("Record", "Пластинка")),
+        (
+            MiniStyle::CloseUp,
+            tr!("Record, closer", "Пластинка крупно"),
+        ),
+    ] {
+        if ui.radio(look.style == style, label).clicked() && look.style != style {
+            cmds.push(BarCmd::MiniStyle(style));
+        }
     }
     ui.separator();
     if ui
@@ -409,35 +424,15 @@ fn names(
     } else {
         (44.0, 44.0)
     };
-    let room = (top.width() - left - right).max(20.0);
     let clip = Rect::from_min_max(
         pos2(top.left() + left, top.top()),
         pos2(top.right() - right, top.bottom() + 4.0),
     );
+    let shadow = palette::bar_bg().gamma_multiply(0.85);
     let line = |key: &str, text: &str, size: f32, colour: Color32, y: f32| {
-        let shadow = palette::bar_bg().gamma_multiply(0.85);
-        let layout = |size: f32, colour: Color32| {
-            painter.layout_no_wrap(text.to_owned(), FontId::proportional(size), colour)
-        };
-        let fits = [size, size * 0.9, size * 0.82]
-            .into_iter()
-            .find(|&s| layout(s, colour).size().x <= room);
-        let (size, offset) = match fits {
-            Some(s) => (s, None),
-            None => {
-                let s = size * 0.82;
-                let over = layout(s, colour).size().x - room;
-                (s, Some(marquee(ctx, key, text, over, now_s)))
-            }
-        };
-        let (galley, under) = (layout(size, colour), layout(size, shadow));
-        let x = match offset {
-            Some(o) => clip.left() - o,
-            None => clip.center().x - galley.size().x / 2.0,
-        };
-        let painter = painter.with_clip_rect(clip.intersect(painter.clip_rect()));
-        painter.galley(pos2(x + 0.8, y + 1.0), under, shadow);
-        painter.galley(pos2(x, y), galley, colour);
+        name_line(
+            ctx, painter, key, text, size, colour, shadow, clip, y, now_s,
+        );
     };
     line(
         "title",
@@ -455,6 +450,48 @@ fn names(
         };
         line("artist", artist, 12.0, shade, top.top() + 24.0);
     }
+}
+
+/// A line of the names with its top at `y`, centred in `clip`'s width, a
+/// soft `shadow` under it, so it reads over any cover; in a smaller font
+/// when it does not fit, and running (`marquee`) when it does not even
+/// then.
+#[allow(clippy::too_many_arguments)]
+fn name_line(
+    ctx: &egui::Context,
+    painter: &egui::Painter,
+    key: &str,
+    text: &str,
+    size: f32,
+    colour: Color32,
+    shadow: Color32,
+    clip: Rect,
+    y: f32,
+    now_s: f64,
+) {
+    let room = clip.width().max(20.0);
+    let layout = |size: f32, colour: Color32| {
+        painter.layout_no_wrap(text.to_owned(), FontId::proportional(size), colour)
+    };
+    let fits = [size, size * 0.9, size * 0.82]
+        .into_iter()
+        .find(|&s| layout(s, colour).size().x <= room);
+    let (size, offset) = match fits {
+        Some(s) => (s, None),
+        None => {
+            let s = size * 0.82;
+            let over = layout(s, colour).size().x - room;
+            (s, Some(marquee(ctx, key, text, over, now_s)))
+        }
+    };
+    let (galley, under) = (layout(size, colour), layout(size, shadow));
+    let x = match offset {
+        Some(o) => clip.left() - o,
+        None => clip.center().x - galley.size().x / 2.0,
+    };
+    let painter = painter.with_clip_rect(clip.intersect(painter.clip_rect()));
+    painter.galley(pos2(x + 0.8, y + 1.0), under, shadow);
+    painter.galley(pos2(x, y), galley, colour);
 }
 
 /// The way back to the whole window at the right of `top`; without the
@@ -626,28 +663,53 @@ fn bottom_band(
 /// The record in the window: where it is and how large.
 struct Record {
     centre: Pos2,
-    /// The disc's radius, and its label's.
+    /// The disc's radius, its label's, and the spindle hole's.
     radius: f32,
     label: f32,
+    hole: f32,
 }
 
 impl Record {
-    fn of(rect: Rect) -> Record {
+    fn of(rect: Rect, style: MiniStyle) -> Record {
         let radius = rect.width().min(rect.height()) / 2.0 * DISC;
+        let label = radius
+            * if style == MiniStyle::CloseUp {
+                LABEL_CLOSE
+            } else {
+                LABEL
+            };
         Record {
             centre: rect.center(),
             radius,
-            label: radius * LABEL,
+            label,
+            hole: (radius * 0.03).max(2.0),
         }
     }
 
-    /// How far from the middle the pointer keeps the controls shown.
-    fn controls_reach(&self) -> f32 {
-        self.label * 1.9
+    /// The middle of the band of grooves, from the centre: where the names
+    /// and the buttons on the vinyl go.
+    fn band(&self) -> f32 {
+        (self.label + self.radius) / 2.0
     }
 
-    /// The disc, its grooves and sheen, the label turned by `angle`, the
-    /// position as a ring along the edge.
+    /// The width of the disc at `d` from its centre across, less a margin.
+    fn chord(&self, d: f32) -> f32 {
+        2.0 * (self.radius * self.radius - d * d).max(0.0).sqrt() - 12.0
+    }
+
+    /// Whether the pointer at `p` rests on a control: the label (Play/Pause)
+    /// or a button on the vinyl.
+    fn on_controls(&self, p: Pos2) -> bool {
+        let band = self.band();
+        p.distance(self.centre) <= self.label
+            || [vec2(-band, 0.0), vec2(band, 0.0), vec2(0.0, band)]
+                .iter()
+                .any(|&o| p.distance(self.centre + o) <= 20.0)
+    }
+
+    /// The disc on nothing (a soft shadow round it), its grooves and sheen,
+    /// the label turned by `angle` with the spindle's hole through both,
+    /// the position as a ring along the edge.
     fn paint(
         &self,
         painter: &egui::Painter,
@@ -656,13 +718,29 @@ impl Record {
         angle: f32,
     ) {
         let (c, r) = (self.centre, self.radius);
-        // A drop of shadow under the disc, then the vinyl.
-        painter.circle_filled(c + vec2(0.0, 1.5), r + 1.0, Color32::from_black_alpha(90));
-        painter.circle_filled(c, r, Color32::from_rgb(16, 16, 18));
+        // The shadow on what is behind the window, a little lower, fading
+        // out within the margin round the disc.
+        let margin = (r / DISC - r).max(1.0);
+        let steps = margin.ceil() as usize;
+        for i in 0..steps {
+            let t = i as f32 / steps as f32;
+            let alpha = (60.0 * (1.0 - t) * (1.0 - t)) as u8;
+            painter.circle_stroke(
+                c + vec2(0.0, 1.0),
+                r + i as f32 + 0.5,
+                egui::Stroke::new(1.0, Color32::from_black_alpha(alpha)),
+            );
+        }
+        // The vinyl: a ring from the hole to the edge (a stroke that wide
+        // left a gap in its middle), its outer edge smoothed by a thin
+        // stroke over it.
+        let vinyl = Color32::from_rgb(16, 16, 18);
+        painter.add(ring(c, self.hole, r - 0.5, vinyl));
+        painter.circle_stroke(c, r - 0.75, egui::Stroke::new(1.5, vinyl));
         // Grooves: fine rings a little lighter, a wider gap now and then
         // between "tracks".
         let groove = Color32::from_white_alpha(9);
-        let mut g = self.label * 1.08;
+        let mut g = self.label * 1.06 + 1.0;
         let mut n = 0;
         while g < r * 0.97 {
             painter.circle_stroke(c, g, egui::Stroke::new(0.6, groove));
@@ -672,7 +750,7 @@ impl Record {
         // The light on it: two faint wedges across, which stay put while
         // the disc turns.
         for middle in [-0.25 * std::f32::consts::PI, 0.75 * std::f32::consts::PI] {
-            painter.add(sheen(c, self.label * 1.05, r * 0.98, middle, 0.42, 30));
+            painter.add(sheen(c, self.label * 1.04, r * 0.98, middle, 0.42, 30));
         }
         painter.circle_stroke(
             c,
@@ -680,31 +758,39 @@ impl Record {
             egui::Stroke::new(1.0, Color32::from_white_alpha(18)),
         );
 
-        // The label: the cover, else the app icon on the card's ground.
+        // The label: the cover, else the app icon on the card's ground,
+        // with the hole left open.
         let label = self.label;
         match &now.cover {
             Some(cover) => {
                 painter.add(turned_disc(
                     cover.id(),
                     c,
+                    self.hole,
                     label,
                     middle_square(cover.size()),
                     angle,
                 ));
             }
             None => {
-                painter.circle_filled(c, label, palette::card_bg());
+                painter.add(ring(c, self.hole, label, palette::card_bg()));
                 let full = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
                 painter.add(turned_square(icon.id(), c, label * 0.62, full, angle));
+                // The icon's middle over the hole: opened again.
+                painter.circle_filled(c, self.hole, palette::card_bg());
             }
         }
+        // The label's edge and the hole's rim, smoothing the mesh's edges.
         painter.circle_stroke(
             c,
             label,
             egui::Stroke::new(1.5, Color32::from_black_alpha(110)),
         );
-        // The spindle's hole.
-        painter.circle_filled(c, (label * 0.07).max(2.0), palette::bar_bg());
+        painter.circle_stroke(
+            c,
+            self.hole + 0.4,
+            egui::Stroke::new(1.2, Color32::from_black_alpha(150)),
+        );
 
         // The position along the edge, from the top clockwise.
         if now.status != Status::Stopped && now.duration_ms > 0 {
@@ -731,8 +817,67 @@ impl Record {
         }
     }
 
-    /// Play/Pause in the label's middle; Previous and Next on the vinyl
-    /// either side when the window is wide enough.
+    /// The title on the vinyl over the label, the artist under it (where
+    /// the way back is while the controls are `shown`), light over the
+    /// black whatever the theme, each as wide as the disc is there.
+    fn names(
+        &self,
+        ctx: &egui::Context,
+        painter: &egui::Painter,
+        now: &NowPlaying<'_>,
+        shown: bool,
+        now_s: f64,
+    ) {
+        let (title, artist) = if now.has_track() {
+            (now.title, now.artist)
+        } else {
+            ("MetalAMP", "")
+        };
+        let band = self.band();
+        let thick = self.radius - self.label;
+        let shadow = Color32::from_black_alpha(200);
+        let line = |key: &str, text: &str, size: f32, colour: Color32, middle: f32| {
+            let height = size * 1.3;
+            let far = (middle - self.centre.y).abs() + height / 2.0;
+            let width = self.chord(far).max(20.0);
+            let clip =
+                Rect::from_center_size(pos2(self.centre.x, middle), vec2(width, height + 4.0));
+            name_line(
+                ctx,
+                painter,
+                key,
+                text,
+                size,
+                colour,
+                shadow,
+                clip,
+                middle - height / 2.0,
+                now_s,
+            );
+        };
+        let title_size = (thick * 0.62).min(14.5);
+        line(
+            "title",
+            title,
+            title_size,
+            Color32::from_gray(235),
+            self.centre.y - band,
+        );
+        if !shown && !artist.is_empty() {
+            let size = (thick * 0.52).min(12.0);
+            line(
+                "artist",
+                artist,
+                size,
+                Color32::from_gray(175),
+                self.centre.y + band,
+            );
+        }
+    }
+
+    /// Play/Pause in the label's middle; the way back on the vinyl under
+    /// it; Previous and Next on the vinyl either side when the window is
+    /// wide enough.
     fn controls(
         &self,
         ui: &mut Ui,
@@ -756,15 +901,30 @@ impl Record {
         ) {
             cmds.push(BarCmd::PlayPause);
         }
+        let ground = Some(Color32::from_rgba_unmultiplied(40, 40, 44, 220));
+        let band = self.band();
+        let side = (self.radius - self.label - 4.0).clamp(22.0, 34.0);
+        let back = with_key(tr!("The whole window", "Всё окно"), Cmd::Mini);
+        let at = self.centre + vec2(0.0, band);
+        if button(
+            ui,
+            painter,
+            at,
+            side,
+            Icon::Mini,
+            13.0,
+            false,
+            ground,
+            &back,
+        ) {
+            cmds.push(BarCmd::Whole);
+        }
         if self.radius * 2.0 < NARROW {
             return;
         }
-        let ground = Some(palette::bar_bg().gamma_multiply_u8(210));
-        let step = (self.label + self.radius) / 2.0 + 2.0;
-        let side = (d * 0.62).clamp(26.0, 34.0);
         let previous = with_key(tr!("Previous", "Предыдущий"), Cmd::Previous);
         let next = with_key(tr!("Next", "Следующий"), Cmd::Next);
-        let at = self.centre - vec2(step, 0.0);
+        let at = self.centre - vec2(band, 0.0);
         if button(
             ui,
             painter,
@@ -778,7 +938,7 @@ impl Record {
         ) {
             cmds.push(BarCmd::Previous);
         }
-        let at = self.centre + vec2(step, 0.0);
+        let at = self.centre + vec2(band, 0.0);
         if button(
             ui,
             painter,
@@ -818,28 +978,58 @@ fn sheen(c: Pos2, inner: f32, outer: f32, middle: f32, width: f32, peak: u8) -> 
     mesh
 }
 
-/// A round picture: the circle in `uv` drawn at `c` with radius `r`,
-/// turned by `angle` (clockwise on screen).
-fn turned_disc(texture: egui::TextureId, c: Pos2, r: f32, uv: Rect, angle: f32) -> egui::Mesh {
-    const STEPS: usize = 72;
+/// A ring of `colour` at `c` from `inner` to `outer`, its edges not
+/// smoothed (strokes over them do it).
+fn ring(c: Pos2, inner: f32, outer: f32, colour: Color32) -> egui::Mesh {
+    const STEPS: u32 = 128;
+    let mut mesh = egui::Mesh::default();
+    for i in 0..=STEPS {
+        let a = TAU * i as f32 / STEPS as f32;
+        let dir = vec2(a.cos(), a.sin());
+        mesh.colored_vertex(c + inner * dir, colour);
+        mesh.colored_vertex(c + outer * dir, colour);
+        if i > 0 {
+            let k = 2 * i;
+            mesh.add_triangle(k - 2, k - 1, k);
+            mesh.add_triangle(k - 1, k + 1, k);
+        }
+    }
+    mesh
+}
+
+/// A round picture with a hole: the circle in `uv` drawn at `c` with
+/// radius `r`, less the middle within `hole`, turned by `angle`
+/// (clockwise on screen).
+fn turned_disc(
+    texture: egui::TextureId,
+    c: Pos2,
+    hole: f32,
+    r: f32,
+    uv: Rect,
+    angle: f32,
+) -> egui::Mesh {
+    const STEPS: u32 = 96;
     let mut mesh = egui::Mesh::with_texture(texture);
     let half = uv.size() / 2.0;
-    mesh.vertices.push(egui::epaint::Vertex {
-        pos: c,
-        uv: uv.center(),
-        color: Color32::WHITE,
-    });
     for i in 0..=STEPS {
         let a = TAU * i as f32 / STEPS as f32;
         // The picture's point that shows at the angle `a` once turned.
         let b = a - angle;
-        mesh.vertices.push(egui::epaint::Vertex {
-            pos: c + r * vec2(a.cos(), a.sin()),
-            uv: uv.center() + vec2(half.x * b.cos(), half.y * b.sin()),
-            color: Color32::WHITE,
-        });
+        let (dir, turned) = (
+            vec2(a.cos(), a.sin()),
+            vec2(half.x * b.cos(), half.y * b.sin()),
+        );
+        for radius in [hole, r] {
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: c + radius * dir,
+                uv: uv.center() + turned * (radius / r),
+                color: Color32::WHITE,
+            });
+        }
         if i > 0 {
-            mesh.add_triangle(0, i as u32, i as u32 + 1);
+            let k = 2 * i;
+            mesh.add_triangle(k - 2, k - 1, k);
+            mesh.add_triangle(k - 1, k + 1, k);
         }
     }
     mesh

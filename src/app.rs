@@ -609,7 +609,7 @@ impl App {
         let now = self.now_shown(&title, &artist, cover);
         let look = crate::ui::mini::Look {
             names: self.settings.mini_names,
-            vinyl: self.settings.mini_vinyl,
+            style: self.settings.mini_style,
         };
         let cmds = crate::ui::mini::show(ui, &now, &icon, look, &mut self.mini_spin);
         self.bar_commands(cmds);
@@ -714,8 +714,8 @@ impl App {
                     self.settings.mini_names = on;
                     self.place_changed = Some(Instant::now());
                 }
-                BarCmd::MiniVinyl(on) => {
-                    self.settings.mini_vinyl = on;
+                BarCmd::MiniStyle(style) => {
+                    self.settings.mini_style = style;
                     self.place_changed = Some(Instant::now());
                 }
                 BarCmd::Previous => self.player.previous(),
@@ -1497,6 +1497,8 @@ impl App {
             if wanted.1 && !win::is_minimized(hwnd) {
                 win::square_up(hwnd);
             }
+            // The record: clicks round it go through.
+            win::set_round(hwnd, wanted.1 && self.settings.mini_style.is_record());
             return;
         }
         if applied.map(|a| a.0) != Some(wanted.0) {
@@ -1541,6 +1543,7 @@ impl App {
                 self.settings.mini_rect = win::window_rect(hwnd);
             }
             win::set_mini(None);
+            win::set_round(hwnd, false);
             self.mini_cover.clear();
             self.growing = Some(Instant::now());
             ctx.send_viewport_cmd(ViewportCommand::EnableButtons {
@@ -1665,6 +1668,17 @@ impl App {
 }
 
 impl eframe::App for App {
+    /// The window is transparent (`main`) for the mini player's record,
+    /// clear round it; everywhere else it is cleared opaque, the dark grey
+    /// eframe's own clear colour showed in an opaque window.
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        if self.applied_modes.is_some_and(|m| m.1) && self.settings.mini_style.is_record() {
+            [0.0; 4]
+        } else {
+            egui::Color32::from_rgb(8, 8, 8).to_normalized_gamma_f32()
+        }
+    }
+
     /// The right button's press is held back until it is let go and then
     /// given to egui with the release, where it was let go: egui counts a
     /// press and release as a click only within 6 points and 0.8 s, and a

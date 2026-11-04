@@ -160,6 +160,9 @@ fn main() -> eframe::Result {
             .with_decorations(false)
             .with_resizable(true)
             .with_drag_and_drop(true)
+            // Painted opaque all over (`App::clear_color`) but round the
+            // mini player's record.
+            .with_transparent(true)
             .with_inner_size(settings.default_size())
             .with_min_inner_size(settings.min_size())
             .with_icon(window_icon()),
