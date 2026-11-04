@@ -1195,6 +1195,28 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
                 );
             },
         );
+        row(
+            ui,
+            tr!("Volume step", "Шаг громкости"),
+            Some(tr!(
+                "How far Ctrl+Up / Ctrl+Down, Up / Down with the pointer over the player bar and a wheel notch over it change the volume.",
+                "На сколько меняют громкость Ctrl+Вверх / Ctrl+Вниз, Вверх / Вниз с указателем над панелью плеера и щелчок колеса над ней."
+            )),
+            CONTROL,
+            |ui| {
+                ui.spacing_mut().slider_width = CONTROL - 70.0;
+                settings.volume_step = settings
+                    .volume_step
+                    .clamp(1, crate::settings::MAX_VOLUME_STEP);
+                ui.add(
+                    egui::Slider::new(
+                        &mut settings.volume_step,
+                        1..=crate::settings::MAX_VOLUME_STEP,
+                    )
+                    .suffix(" %"),
+                );
+            },
+        );
     });
     section(ui, tr!("Media keys", "Медиаклавиши"), |ui| {
         row(
@@ -2537,6 +2559,7 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     settings.crossfade = d.crossfade;
     settings.crossfade_in_albums = d.crossfade_in_albums;
     settings.seek_step = d.seek_step;
+    settings.volume_step = d.volume_step;
     settings.tray = d.tray;
     updates.enabled = d.check_updates;
 }

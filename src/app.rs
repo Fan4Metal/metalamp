@@ -766,7 +766,6 @@ impl App {
     /// unless a text field has the focus (else they move in the library's
     /// panes).
     fn pointer_keys(&mut self, ctx: &egui::Context, over_player: bool) {
-        use crate::keymap::VOLUME_STEP;
         if !over_player || ctx.memory(|m| m.focused().is_some()) {
             return;
         }
@@ -782,15 +781,17 @@ impl App {
             self.player.seek_by(-step);
         }
         if pressed(Key::ArrowUp) {
-            self.step_volume(VOLUME_STEP);
+            self.step_volume(1);
         }
         if pressed(Key::ArrowDown) {
-            self.step_volume(-VOLUME_STEP);
+            self.step_volume(-1);
         }
     }
 
-    fn step_volume(&mut self, step: i8) {
-        let v = (i16::from(self.player.volume) + i16::from(step)).clamp(0, 100) as u8;
+    /// The volume `steps` volume steps up (or down).
+    fn step_volume(&mut self, steps: i32) {
+        let step = steps * self.settings.volume_percent();
+        let v = (i32::from(self.player.volume) + step).clamp(0, 100) as u8;
         self.player.set_volume(v);
         self.place_changed = Some(Instant::now());
     }
@@ -903,7 +904,7 @@ impl App {
                 self.player.set_shuffle(on);
                 self.place_changed = Some(Instant::now());
             }
-            Cmd::Volume(step) => self.step_volume(step),
+            Cmd::Volume(way) => self.step_volume(i32::from(way)),
             Cmd::Mute => {
                 self.player.toggle_mute();
                 self.place_changed = Some(Instant::now());
@@ -1914,7 +1915,7 @@ impl eframe::App for App {
             title_rect.union(bar_rect)
         };
         // The wheel anywhere over the title row and the player bar (the
-        // mini player) steps the volume by 5.
+        // mini player) steps the volume by the volume step.
         if !modal
             && ctx
                 .pointer_hover_pos()
@@ -1922,9 +1923,7 @@ impl eframe::App for App {
         {
             let notches = crate::ui::wheel_notches(root_ui);
             if notches != 0 {
-                let v = (i32::from(self.player.volume) + notches * 5).clamp(0, 100) as u8;
-                self.player.set_volume(v);
-                self.place_changed = Some(Instant::now());
+                self.step_volume(notches);
             }
         }
         let alone = self.settings.window_layout == WindowLayout::Playlist && !mini;

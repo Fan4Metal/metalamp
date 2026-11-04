@@ -27,7 +27,7 @@ pub enum Cmd {
     Seek(i64),
     Repeat,
     Shuffle,
-    /// Percent up or down.
+    /// Down (-1) or up (1) by the volume step (`settings.volume_step`).
     Volume(i8),
     Mute,
     Equalizer,
@@ -384,9 +384,6 @@ macro_rules! actions {
     };
 }
 
-/// The step of the volume keys and of a wheel notch, in percent.
-pub const VOLUME_STEP: i8 = 5;
-
 actions! {
     PlayPause "play_pause" Playback Cmd::PlayPause, [Chord::key(Key::Space), Chord::key(Key::C)];
     Play "play" Playback Cmd::Play, [Chord::key(Key::X)];
@@ -399,8 +396,8 @@ actions! {
     Repeat "repeat" Playback Cmd::Repeat, [Chord::key(Key::R)];
     Shuffle "shuffle" Playback Cmd::Shuffle, [Chord::key(Key::S)];
 
-    VolumeUp "volume_up" Sound Cmd::Volume(VOLUME_STEP), [Chord::ctrl(Key::ArrowUp)];
-    VolumeDown "volume_down" Sound Cmd::Volume(-VOLUME_STEP), [Chord::ctrl(Key::ArrowDown)];
+    VolumeUp "volume_up" Sound Cmd::Volume(1), [Chord::ctrl(Key::ArrowUp)];
+    VolumeDown "volume_down" Sound Cmd::Volume(-1), [Chord::ctrl(Key::ArrowDown)];
     Mute "mute" Sound Cmd::Mute, [Chord::key(Key::M)];
     Equalizer "equalizer" Sound Cmd::Equalizer, [];
     EqualizerOnOff "equalizer_on_off" Sound Cmd::EqualizerOnOff, [];
@@ -904,7 +901,7 @@ mod tests {
         );
         assert_eq!(
             map.command(Chord::ctrl(Key::ArrowUp), true),
-            Some(Cmd::Volume(VOLUME_STEP))
+            Some(Cmd::Volume(1))
         );
         assert_eq!(map.command(Chord::key(Key::Space), true), None);
         assert_eq!(

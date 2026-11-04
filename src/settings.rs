@@ -126,6 +126,10 @@ pub struct Settings {
     /// How far the seek keys (Shift+Left/Right, the arrows over the
     /// player bar) go, in seconds (1–`MAX_SEEK_STEP`).
     pub seek_step: u8,
+    /// How far the volume keys (Ctrl+Up/Down, the arrows over the player
+    /// bar) and a wheel notch over it go, in percent
+    /// (1–`MAX_VOLUME_STEP`).
+    pub volume_step: u8,
     /// When the media keys are the player's.
     pub media_keys: MediaKeys,
     /// How large a cover put into tags may be (the file info window).
@@ -168,6 +172,12 @@ impl Settings {
     /// 0 or more than the slider offers).
     pub fn seek_seconds(&self) -> i64 {
         i64::from(self.seek_step.clamp(1, MAX_SEEK_STEP))
+    }
+
+    /// The volume keys' and the wheel's step in percent, within its
+    /// bounds.
+    pub fn volume_percent(&self) -> i32 {
+        i32::from(self.volume_step.clamp(1, MAX_VOLUME_STEP))
     }
 
     /// The view in use, if `view` names one of `views`.
@@ -405,6 +415,10 @@ pub const PLAYLIST_SIZE: [f32; 2] = [440.0, 780.0];
 pub const DEFAULT_SEEK_STEP: u8 = 5;
 pub const MAX_SEEK_STEP: u8 = 60;
 
+/// The volume keys' step by default and at most, in percent.
+pub const DEFAULT_VOLUME_STEP: u8 = 5;
+pub const MAX_VOLUME_STEP: u8 = 25;
+
 /// How the mini player shows the cover.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -607,6 +621,7 @@ impl Default for Settings {
             crossfade: 0,
             crossfade_in_albums: false,
             seek_step: DEFAULT_SEEK_STEP,
+            volume_step: DEFAULT_VOLUME_STEP,
             media_keys: MediaKeys::default(),
             tag_cover_side: CoverSide::default(),
             id3v2_version: Id3Version::default(),
