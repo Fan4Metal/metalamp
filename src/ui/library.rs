@@ -2294,16 +2294,27 @@ fn context_menu(
                 MenuChoice::Enqueue,
                 tr!("Add to the playlist", "Добавить в плейлист"),
             );
-            let go = [
-                (MenuChoice::GoToAlbum, go_to_album_label()),
-                (MenuChoice::GoToArtist, go_to_artist_label()),
-            ];
+            // The keys go from a track, not from an album clicked.
+            let go = if id == "albums" {
+                [
+                    (MenuChoice::GoToAlbum, go_to_album_label()),
+                    (
+                        MenuChoice::GoToArtist,
+                        tr!("Go to artist", "Перейти к исполнителю").to_owned(),
+                    ),
+                ]
+            } else {
+                [
+                    (MenuChoice::GoToAlbum, go_to_album_label()),
+                    (MenuChoice::GoToArtist, go_to_artist_label()),
+                ]
+            };
             if go.iter().any(|(c, _)| extras.contains(c)) {
                 ui.separator();
             }
             for (c, label) in go {
                 if extras.contains(&c) {
-                    item(ui, c, label);
+                    item(ui, c, &label);
                 }
             }
             if extras.contains(&MenuChoice::Rating) {
@@ -2359,13 +2370,13 @@ pub fn edit_tags_label() -> String {
 }
 
 /// The menus' "Go to album", shared with the playlist's.
-pub fn go_to_album_label() -> &'static str {
-    tr!("Go to album", "Перейти к альбому")
+pub fn go_to_album_label() -> String {
+    with_key(tr!("Go to album", "Перейти к альбому"), Cmd::GoTo(true))
 }
 
 /// The menus' "Go to artist", shared with the playlist's.
-pub fn go_to_artist_label() -> &'static str {
-    tr!("Go to artist", "Перейти к исполнителю")
+pub fn go_to_artist_label() -> String {
+    with_key(tr!("Go to artist", "Перейти к исполнителю"), Cmd::GoTo(false))
 }
 
 /// Enter on the tracks: one selected plays the table from it, several

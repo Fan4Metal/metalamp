@@ -710,16 +710,16 @@ pub fn show(
             let known = entry
                 .and_then(|i| player.queue.entries().get(i))
                 .is_some_and(|e| library.track_at(&e.path).is_some());
-            let go_to: &[(bool, &str)] = if pv.no_library {
-                &[]
+            let go_to = if pv.no_library {
+                Vec::new()
             } else {
                 ui.separator();
-                &[
+                vec![
                     (true, super::library::go_to_album_label()),
                     (false, super::library::go_to_artist_label()),
                 ]
             };
-            for &(to_album, label) in go_to {
+            for (to_album, label) in go_to {
                 if ui.add_enabled(known, egui::Button::new(label)).clicked()
                     && let Some(i) = entry
                 {

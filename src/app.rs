@@ -541,6 +541,28 @@ impl App {
             .cloned()
     }
 
+    /// The library's track the keys to go to an album or an artist take:
+    /// the playlist's selection when it has the keys, the tracks' table's
+    /// when it has them, else the track heard (or the playlist's current
+    /// one). None when the library does not hold it.
+    fn go_to_track(&self) -> Option<crate::library::TrackId> {
+        if self.playlist_view.focused {
+            let entries = self.player.queue.entries();
+            if let Some(e) = self
+                .playlist_view
+                .selected_entry()
+                .and_then(|i| entries.get(i))
+            {
+                return self.library.track_at(&e.path);
+            }
+        } else if self.library_view.focus == crate::ui::library::Pane::Tracks
+            && let Some(t) = self.library_view.selected_track_of(&self.library)
+        {
+            return Some(t);
+        }
+        self.library.track_at(&self.playing_or_current_path()?)
+    }
+
     /// The path of the track heard, else of the playlist's current one.
     fn playing_or_current_path(&self) -> Option<PathBuf> {
         self.player
@@ -954,6 +976,15 @@ impl App {
                     self.paths_of(&tracks)
                 };
                 self.file_info.open(ctx, paths, true);
+            }
+            // No library in the player and playlist layout.
+            Cmd::GoTo(_) if self.settings.window_layout == WindowLayout::Playlist => {}
+            Cmd::GoTo(to_album) => {
+                if let Some(t) = self.go_to_track() {
+                    let album = self.library.album_of[t as usize];
+                    self.go_to(album, Some(t), to_album);
+                    self.settings.mini = false;
+                }
             }
             Cmd::View(n) => {
                 if crate::ui::library::choose_view(&mut self.settings, usize::from(n)) {

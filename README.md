@@ -65,7 +65,7 @@ A click on a column's header sorts by that column, a second click reverses the o
 
 A double click or `Enter` plays: an artist plays its tracks, an album its tracks, a track the whole table from it on. The right button opens a menu with **Play**, **Play next** (right after the track playing, also when shuffled), **Add to the playlist** and **Show in folder**, on an album also **Go to artist** and **Edit tags…** (its tracks at once), on a track also **Go to album**, **Go to artist**, **Rating**, **Edit tags…** and **File info…**.
 
-**Edit tags…** (`Ctrl+E`, also in the playlist's menu) opens the file info window with the tags of the selected files in text fields (see [File info](#file-info)). Going to an album or an artist chooses them in the panes, scrolls them into sight and selects the track the menu was opened on; a search or a view that would hide them is cleared.
+**Edit tags…** (`Ctrl+E`, also in the playlist's menu) opens the file info window with the tags of the selected files in text fields (see [File info](#file-info)). Going to an album or an artist chooses them in the panes, scrolls them into sight and selects the track the menu was opened on; a search or a view that would hide them is cleared. The keys `G` (album) and `Shift+G` (artist) do the same for the track selected in the tracks' table or the playlist, whichever was clicked last, else for the track playing.
 
 ### File info
 
@@ -120,6 +120,7 @@ The keys below are the defaults; those of the player's actions can be changed in
 | `Ctrl+T` | Keep the window over the other windows (again: no longer) |
 | `I`, `Alt+3` | File info of the selected track (else of the one playing) |
 | `Ctrl+E` | Edit the tags of the selected tracks (in the playlist when it was clicked last) |
+| `G`, `Shift+G` | Go to the album, to the artist of the selected track (else of the one playing) |
 | Arrows, `Page Up`, `Page Down`, `Home`, `End` | Move in the pane clicked last |
 | Letters, with the pointer over the artists | Go to the first artist starting with them (the same letter again goes on to the next one) |
 | `Enter` | Play the selection |

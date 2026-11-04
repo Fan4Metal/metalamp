@@ -47,6 +47,10 @@ pub enum Cmd {
     Rescan,
     Info,
     EditTags,
+    /// The library's album (true) or artist (false) of a track: the
+    /// playlist's selection when it has the keys, the tracks' table's
+    /// when it has them, else the track heard.
+    GoTo(bool),
     /// The whole library (0) or a view, as its menu lists them.
     View(u8),
     Settings,
@@ -417,6 +421,8 @@ actions! {
     Rescan "rescan" Library Cmd::Rescan, [Chord::ctrl(Key::R)];
     Info "info" Library Cmd::Info, [Chord::key(Key::I), Chord::alt(Key::Num3)];
     EditTags "edit_tags" Library Cmd::EditTags, [Chord::ctrl(Key::E)];
+    GoToAlbum "go_to_album" Library Cmd::GoTo(true), [Chord::key(Key::G)];
+    GoToArtist "go_to_artist" Library Cmd::GoTo(false), [Chord::shift(Key::G)];
     WholeLibrary "view_0" Library Cmd::View(0), [Chord::ctrl(Key::Num1)];
     View1 "view_1" Library Cmd::View(1), [Chord::ctrl(Key::Num2)];
     View2 "view_2" Library Cmd::View(2), [Chord::ctrl(Key::Num3)];
@@ -493,6 +499,14 @@ impl Action {
             Action::Rescan => tr!("Read the folders again", "Перечитать папки"),
             Action::Info => tr!("File info", "Сведения о файле"),
             Action::EditTags => tr!("Edit tags", "Изменить теги"),
+            Action::GoToAlbum => tr!(
+                "Go to the track's album (the one selected, else the one heard)",
+                "Перейти к альбому трека (выбранного, иначе звучащего)"
+            ),
+            Action::GoToArtist => tr!(
+                "Go to the track's artist (the one selected, else the one heard)",
+                "Перейти к исполнителю трека (выбранного, иначе звучащего)"
+            ),
             Action::WholeLibrary => tr!("The whole library", "Вся библиотека"),
             Action::View1 => tr!("The first view", "Первое представление"),
             Action::View2 => tr!("The second view", "Второе представление"),
@@ -839,7 +853,7 @@ mod tests {
         assert_eq!(map.action(space), Some(Action::Stop));
         assert_eq!(map.chords(Action::PlayPause), [Chord::key(Key::C)]);
         // In place of the second key.
-        let g = Chord::key(Key::G);
+        let g = Chord::key(Key::J);
         assert_eq!(map.assign(Action::Info, Some(1), g), None);
         assert_eq!(map.chords(Action::Info), [Chord::key(Key::I), g]);
         map.remove(Action::Info, 0);
