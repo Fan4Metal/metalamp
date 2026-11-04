@@ -158,13 +158,15 @@ fn full(
         let g1 = line(ui, now.title, 15.0, palette::text_bright(), room);
         let g2 = line(ui, now.artist, 12.5, palette::text_weak(), room);
         let g3 = line(ui, &facts(now), 11.5, palette::text_weak(), room);
-        painter.galley(
-            pos2(text_left, info.top() - 1.0),
-            g1,
-            palette::text_bright(),
+        let at = pos2(text_left, info.top() - 1.0);
+        let (names, cut) = names_area(
+            at,
+            &[(&g1, 0.0, now.title), (&g2, 20.0, now.artist), (&g3, 37.0, "")],
         );
-        painter.galley(pos2(text_left, info.top() + 19.0), g2, palette::text_weak());
-        painter.galley(pos2(text_left, info.top() + 36.0), g3, palette::text_weak());
+        painter.galley(at, g1, palette::text_bright());
+        painter.galley(at + vec2(0.0, 20.0), g2, palette::text_weak());
+        painter.galley(at + vec2(0.0, 37.0), g3, palette::text_weak());
+        info_on_double_click(ui, names, "names", cut.as_deref(), cmds);
     }
 
     // The seek bar, the length at its end.
@@ -447,26 +449,7 @@ fn winamp(
         } else {
             painter.galley(pos2(clip.left(), y), galley, colour);
         }
-        // A double click: the file info.
-        let resp = ui.interact(field, ui.id().with("winamp_title"), Sense::click());
-        let tip = if cut {
-            format!(
-                "{text}\n{}",
-                tr!(
-                    "A double click: file info",
-                    "Двойной щелчок: сведения о файле"
-                )
-            )
-        } else {
-            tr!(
-                "A double click: file info",
-                "Двойной щелчок: сведения о файле"
-            )
-            .to_owned()
-        };
-        if crate::ui::double_clicked(&resp.on_hover_text(tip)) {
-            cmds.push(BarCmd::Info);
-        }
+        info_on_double_click(ui, field, "winamp_title", cut.then_some(text.as_str()), cmds);
         let facts = line(ui, &facts(now), 11.5, palette::text_weak(), right.width());
         painter.galley(
             pos2(right.left() + 2.0, field.bottom() + 8.0),
@@ -538,8 +521,11 @@ fn classic(
     if now.has_track() {
         let g1 = line(ui, now.title, 15.0, palette::text_bright(), room);
         let g2 = line(ui, now.artist, 12.5, palette::text_weak(), room);
-        painter.galley(pos2(text_left, cy - 19.0), g1, palette::text_bright());
-        painter.galley(pos2(text_left, cy + 2.0), g2, palette::text_weak());
+        let at = pos2(text_left, cy - 19.0);
+        let (names, cut) = names_area(at, &[(&g1, 0.0, now.title), (&g2, 21.0, now.artist)]);
+        painter.galley(at, g1, palette::text_bright());
+        painter.galley(at + vec2(0.0, 21.0), g2, palette::text_weak());
+        info_on_double_click(ui, names, "names", cut.as_deref(), cmds);
     }
 
     // The seek bar across the bottom, the times at its ends.
@@ -642,6 +628,55 @@ fn running_at(t: f64, period: f32) -> (f32, f64) {
     }
     let run = (t - TITLE_PAUSE) * TITLE_SPEED;
     (run.rem_euclid(f64::from(period.max(1.0))) as f32, 0.0)
+}
+
+/// The names of the track in `rect`: a double click opens the file info,
+/// the tip tells so, after the whole text (`cut`) when it is cut. Senses
+/// clicks only, so the bar's drag goes on under it.
+fn info_on_double_click(
+    ui: &mut Ui,
+    rect: Rect,
+    id: &str,
+    cut: Option<&str>,
+    cmds: &mut Vec<BarCmd>,
+) {
+    let resp = ui.interact(rect, ui.id().with(id), Sense::click());
+    let hint = tr!(
+        "A double click: file info",
+        "Двойной щелчок: сведения о файле"
+    );
+    let tip = match cut {
+        Some(text) => format!("{text}\n{hint}"),
+        None => hint.to_owned(),
+    };
+    if crate::ui::double_clicked(&resp.on_hover_text(tip)) {
+        cmds.push(BarCmd::Info);
+    }
+}
+
+/// The names' lines, each a galley drawn at `at` lowered by its offset,
+/// with its whole text (empty: left out of the tip): the rectangle they
+/// cover, and their whole text when one is cut.
+fn names_area(
+    at: egui::Pos2,
+    galleys: &[(&std::sync::Arc<egui::Galley>, f32, &str)],
+) -> (Rect, Option<String>) {
+    let mut rect = Rect::NOTHING;
+    for (g, dy, _) in galleys {
+        rect = rect.union(Rect::from_min_size(at + vec2(0.0, *dy), g.size()));
+    }
+    let cut = galleys
+        .iter()
+        .any(|(g, _, _)| g.elided)
+        .then(|| {
+            galleys
+                .iter()
+                .map(|(_, _, t)| *t)
+                .filter(|t| !t.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n")
+        });
+    (rect, cut)
 }
 
 fn line(
