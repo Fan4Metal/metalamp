@@ -100,6 +100,11 @@ const NARROW: f32 = 150.0;
 const DISC: f32 = 0.955;
 const LABEL: f32 = 0.42;
 const LABEL_CLOSE: f32 = 0.66;
+/// The names on the record: the middle of a line from the label's edge, at
+/// least this much of the line's height, else this much of the band of
+/// grooves.
+const NAMES_RISE: f32 = 0.4;
+const NAMES_AT: f32 = 0.3;
 const TURNS: f32 = 33.333 / 60.0 * TAU;
 const SPIN_EASE: f32 = 0.35;
 
@@ -833,11 +838,15 @@ impl Record {
         } else {
             ("MetalAMP", "")
         };
-        let band = self.band();
         let thick = self.radius - self.label;
         let shadow = Color32::from_black_alpha(200);
-        let line = |key: &str, text: &str, size: f32, colour: Color32, middle: f32| {
+        // Near the label rather than the edge (the disc is wider there, and
+        // the line clear of the position's ring), its foot a little over the
+        // label in a small window, where the band is a line high.
+        let line = |key: &str, text: &str, size: f32, colour: Color32, way: f32| {
             let height = size * 1.3;
+            let from_centre = self.label + (height * NAMES_RISE).max(thick * NAMES_AT);
+            let middle = self.centre.y + way * from_centre;
             let far = (middle - self.centre.y).abs() + height / 2.0;
             let width = self.chord(far).max(20.0);
             let clip =
@@ -856,22 +865,10 @@ impl Record {
             );
         };
         let title_size = (thick * 0.62).min(14.5);
-        line(
-            "title",
-            title,
-            title_size,
-            Color32::from_gray(235),
-            self.centre.y - band,
-        );
+        line("title", title, title_size, Color32::from_gray(235), -1.0);
         if !shown && !artist.is_empty() {
             let size = (thick * 0.52).min(12.0);
-            line(
-                "artist",
-                artist,
-                size,
-                Color32::from_gray(175),
-                self.centre.y + band,
-            );
+            line("artist", artist, size, Color32::from_gray(175), 1.0);
         }
     }
 
