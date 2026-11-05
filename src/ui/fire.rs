@@ -1,9 +1,10 @@
 //! Fire: flames rising from the spectrum along the display's bottom, as
 //! Doom's fire was drawn. The picture is a coarse grid of heat (a pixel
-//! about `POINTS` points wide); `STEP_HZ` times a second each pixel takes
-//! the heat of the one under it, less a little at random, shifted a pixel
-//! aside at random, so the heat rises in licking tongues and cools on its
-//! way up. The bottom row is the source: each column the analyzer's level
+//! about `POINTS` points wide); `STEP_HZ` times a second each pixel gives
+//! its heat to the one over it, as Doom did it: one random number of four
+//! moves it a pixel aside (mostly to the left, a wind) and takes a step of
+//! heat off or not, so the shift and the cooling go together and the heat
+//! rises in licking tongues rather than as noise. The bottom row is the source: each column the analyzer's level
 //! at its place across (the bass on the left), flickering, and every beat
 //! throws it higher. Shown as a texture over the display, the heat in the
 //! visualization's colours, the hottest drawn towards white. Paused, it
@@ -22,11 +23,11 @@ const MAX_WIDTH: usize = 400;
 /// The heat rises a pixel this many times a second.
 const STEP_HZ: f32 = 60.0;
 /// The source's full heat reaches this share of the height on average.
-const REACH: f32 = 0.8;
+const REACH: f32 = 0.95;
 /// A level under this lights nothing; over it the source's heat grows to
 /// full at 1, raised to `POWER`.
-const FROM: f32 = 0.3;
-const POWER: f32 = 1.3;
+const FROM: f32 = 0.25;
+const POWER: f32 = 1.0;
 /// A beat's height adds this much heat to the whole source.
 const KICK_HEAT: f32 = 0.35;
 /// The source's heat falls the whole way in this long.
@@ -111,29 +112,33 @@ impl Fire {
         self.changed |= steps > 0;
     }
 
-    /// The heat a pixel up: each pixel's into the one over it (or beside
-    /// that), less a little; the bottom row from the source, flickering.
+    /// The heat a pixel up: each pixel's into the one over it, a pixel
+    /// to the right, the same, or one or two to the left, and a step of
+    /// heat lost with the odd ones (Doom's way); the bottom row from the
+    /// source, flickering a little.
     fn step(&mut self) {
         let (w, h) = (self.width, self.height);
-        // Lost a row on average: what reaches `REACH` of the height.
+        // Half a step lost a row on average: full heat reaches `REACH` of
+        // the height.
         let cooling = 2.0 / (REACH * h as f32);
         for y in 1..h {
+            let mut bits = 0u64;
             for x in 0..w {
+                if x % 32 == 0 {
+                    bits = self.rng.next();
+                }
+                let r = (bits & 3) as usize;
+                bits >>= 2;
                 let v = self.heat[y * w + x];
-                let r = self.rng.next();
-                let to = match r & 3 {
-                    0 => x.saturating_sub(1),
-                    3 => (x + 1).min(w - 1),
-                    _ => x,
-                };
-                let lost = cooling * ((r >> 8) & 0xff) as f32 / 255.0;
+                let to = (x + 1).saturating_sub(r).min(w - 1);
+                let lost = (r & 1) as f32 * cooling;
                 self.heat[(y - 1) * w + to] = (v - lost).max(0.0);
             }
         }
         let bottom = (h - 1) * w;
         let mut lit = false;
         for x in 0..w {
-            let flicker = 0.8 + 0.2 * self.rng.unit();
+            let flicker = 0.9 + 0.1 * self.rng.unit();
             self.heat[bottom + x] = self.source[x] * flicker;
         }
         for &v in &self.heat {
@@ -164,17 +169,25 @@ impl Fire {
                 colours.peak(0.5)
             };
             let mut image = ColorImage::filled([w, h], ground);
-            for (i, (out, &v)) in image.pixels.iter_mut().zip(&self.heat).enumerate() {
-                if v <= 0.003 {
+            for (i, out) in image.pixels.iter_mut().enumerate() {
+                // Each pixel with its neighbours across (1 2 1): the
+                // flames' edges soft, not grains.
+                let x = i % w;
+                let left = self.heat[i - usize::from(x > 0)];
+                let right = self.heat[i + usize::from(x + 1 < w)];
+                let v = (left + 2.0 * self.heat[i] + right) / 4.0;
+                if v <= 0.01 {
                     continue;
                 }
-                let place = (i % w) as f32 / (w - 1).max(1) as f32;
-                let mut c = colours.at(v.powf(0.8), place);
-                if v > 0.7 {
-                    c = c.lerp_to_gamma(bright, (v - 0.7) / 0.3 * 0.6);
+                let place = x as f32 / (w - 1).max(1) as f32;
+                // The colour's floor for the cooler half, its top for the
+                // hot core, then towards white.
+                let mut c = colours.at(v.powf(1.6), place);
+                if v > 0.75 {
+                    c = c.lerp_to_gamma(bright, (v - 0.75) / 0.25 * 0.6);
                 }
                 // Fading into the ground where it is cool.
-                let a = (v / 0.35).clamp(0.0, 1.0);
+                let a = (v / 0.45).clamp(0.0, 1.0);
                 *out = ground.lerp_to_gamma(c, a * a * (3.0 - 2.0 * a));
             }
             match &mut self.texture {

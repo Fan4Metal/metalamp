@@ -21,8 +21,10 @@ use crate::palette;
 const MOST_SIDE: f32 = 200.0;
 /// The light halves this often.
 const HALF_S: f32 = 0.07;
-/// The light a frame's trace leaves at most per pixel of its length.
-const LIGHT: f32 = 0.5;
+/// The light a frame heard leaves at most per pixel of its trace, and
+/// the trace's length it is shared over, in the picture's sides.
+const LIGHT: f32 = 0.45;
+const TRACE: f32 = 1.2;
 /// The loudness followed falls by half in `PEAK_HALF_S`; the picture is
 /// scaled up to `MOST_GAIN` times to fill `FILL` of it.
 const PEAK_HALF_S: f32 = 1.5;
@@ -140,7 +142,9 @@ impl Goniometer {
         let half = n as f32 / 2.0;
         let gain = (FILL / self.peak.max(1e-4)).clamp(1.0, MOST_GAIN) * half;
         let colours = palette::visual();
-        let weight = (LIGHT * n as f32 * 4.0 / mid.len() as f32).min(LIGHT);
+        // About as much light a frame whatever the rate: each frame's trace
+        // as bright as `LIGHT` over a line `TRACE` sides long.
+        let weight = (LIGHT * TRACE * n as f32 / mid.len() as f32).min(LIGHT);
         let mut last: Option<(f32, f32)> = None;
         for (&m, &s) in mid.iter().zip(wide) {
             // The left channel alone up the left diagonal.

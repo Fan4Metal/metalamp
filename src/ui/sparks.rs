@@ -1,12 +1,13 @@
-//! Sparks: thrown up from the display's bottom as from a grinder, each
-//! band of the analyzer throwing them at its place across (the bass on
-//! the left), more and higher the louder it is; every beat throws a
-//! sheaf of them in a fan from a place or two. They fly as thrown things
-//! do, falling back, bouncing once or twice off the bottom, and cool from
-//! white through the visualization's colour into nothing. Each is drawn
-//! as a short streak along its flight with a faint glow under it, the
-//! glow added to the ground on a dark theme. Paused, they stand; stopped,
-//! the last of them fall and go out.
+//! Sparks: a fountain of them from the middle of the display's bottom, as
+//! from a grinder. Each band of the analyzer throws its sparks its own
+//! way, the bass to the left and the treble to the right, more and
+//! further the louder it is, so the fountain's shape is the spectrum's;
+//! every beat throws a sheaf of them all ways at once, faster. They fly
+//! as thrown things do, falling back, bouncing once or twice off the
+//! bottom, and cool from white through the visualization's colour into
+//! nothing. Each is drawn as a streak along its flight with a faint glow
+//! under it and a bright head, the light added to the ground on a dark
+//! theme. Paused, they stand; stopped, the last of them fall and go out.
 
 use egui::{Color32, Mesh, Painter, Pos2, Rect, Vec2, pos2, vec2};
 
@@ -17,25 +18,26 @@ use crate::palette;
 pub const BANDS: usize = 24;
 /// A band at full level throws this many sparks a second; under `FROM`
 /// none.
-const RATE: f32 = 70.0;
+const RATE: f32 = 28.0;
 const FROM: f32 = 0.3;
-/// A spark thrown at full level rises to the display's top in `RISE_S`.
+/// A spark thrown at full level rises to the display's top in `RISE_S`
+/// and, the bass's or the treble's, lands near its end.
 const RISE_S: f32 = 0.5;
-/// A beat throws this many sparks at full strength from each of its
-/// places, faster than the bands' by `BURST_SPEED`.
-const BURST: f32 = 45.0;
+/// A beat throws this many sparks at full strength, faster than the
+/// bands' by `BURST_SPEED`.
+const BURST: f32 = 70.0;
 const BURST_SPEED: f32 = 1.2;
 /// The sparks kept at most (the oldest go).
 const MOST: usize = 1500;
 /// A spark lives this long at most, a bounce taking this share of the
 /// height of its fall, and of its speed across.
-const LIFE_S: [f32; 2] = [0.5, 1.3];
+const LIFE_S: [f32; 2] = [0.7, 1.6];
 const BOUNCE: f32 = 0.35;
 const BOUNCE_ACROSS: f32 = 0.6;
 /// A spark's streak is as long as its flight in this long, at most
 /// `STREAK_MOST` points.
-const STREAK_S: f32 = 0.03;
-const STREAK_MOST: f32 = 14.0;
+const STREAK_S: f32 = 0.05;
+const STREAK_MOST: f32 = 24.0;
 /// The time step of the flight at most (a slow frame takes several).
 const STEP_S: f32 = 0.02;
 
@@ -105,6 +107,10 @@ impl Sparks {
             .retain(|s| s.age < s.life && s.at.x > -STREAK_MOST && s.at.x < size.x + STREAK_MOST);
 
         let struck = self.beat.feed(levels, dt);
+        // Across: the furthest bands land at the ends at three quarters of
+        // full level, after twice the rise.
+        let across = size.x / 2.0 / (2.0 * RISE_S) / 0.75;
+        let from = pos2(size.x / 2.0, size.y);
         if let Some(levels) = levels {
             let n = levels.len().min(BANDS);
             for (band, &level) in levels.iter().take(n).enumerate() {
@@ -113,25 +119,19 @@ impl Sparks {
                 while self.owed[band] >= 1.0 {
                     self.owed[band] -= 1.0;
                     let place = (band as f32 + self.rng.unit()) / n as f32;
-                    let up = speed * (0.55 + 0.45 * l) * self.rng.between(0.7, 1.05);
-                    let across = speed * self.rng.between(-0.3, 0.3);
-                    self.throw(pos2(place * size.x, size.y), vec2(across, -up), place);
+                    let strength = (0.5 + 0.5 * l) * self.rng.between(0.75, 1.05);
+                    let way = vec2((2.0 * place - 1.0) * across, -speed);
+                    let at = from + vec2(self.rng.between(-4.0, 4.0), 0.0);
+                    self.throw(at, way * strength, place);
                 }
             }
         }
         if let Some(strength) = struck {
-            let places = 1 + (self.rng.next() & 1) as usize;
-            for _ in 0..places {
-                let place = self.rng.between(0.1, 0.9);
-                for _ in 0..(BURST * strength) as usize {
-                    let angle = self.rng.between(-2.6, -0.55);
-                    let v = speed * BURST_SPEED * strength * self.rng.between(0.5, 1.0);
-                    self.throw(
-                        pos2(place * size.x, size.y),
-                        vec2(angle.cos(), angle.sin()) * v,
-                        place,
-                    );
-                }
+            for _ in 0..(BURST * strength) as usize {
+                let place = self.rng.unit();
+                let v = BURST_SPEED * strength * self.rng.between(0.6, 1.0);
+                let way = vec2((2.0 * place - 1.0) * across, -speed);
+                self.throw(from, way * v, place);
             }
         }
         if self.sparks.len() > MOST {
@@ -164,9 +164,9 @@ impl Sparks {
         let mut mesh = Mesh::default();
         for s in &self.sparks {
             let t = s.age / s.life;
-            let colour = colours.at(1.0 - 0.6 * t, s.place);
-            let colour = if dark && t < 0.35 {
-                hot.lerp_to_gamma(colour, t / 0.35)
+            let colour = colours.at(1.0 - 0.25 * t, s.place);
+            let colour = if dark && t < 0.3 {
+                hot.lerp_to_gamma(colour, t / 0.3)
             } else {
                 colour
             };
@@ -174,8 +174,13 @@ impl Sparks {
             let head = rect.min + s.at.to_vec2();
             let tail_by = s.speed * STREAK_S;
             let tail = head - tail_by * (STREAK_MOST / tail_by.length().max(STREAK_MOST)).min(1.0);
-            segment(&mut mesh, tail, head, 3.5, glow(colour, 0.22 * fade, dark));
-            segment(&mut mesh, tail, head, 1.3, glow(colour, fade, dark));
+            segment(&mut mesh, tail, head, 4.0, glow(colour, 0.2 * fade, dark));
+            segment(&mut mesh, tail, head, 1.2, glow(colour, 0.8 * fade, dark));
+            let head_colour = if dark { hot } else { colour };
+            mesh.add_colored_rect(
+                Rect::from_center_size(head, vec2(2.2, 2.2)),
+                glow(head_colour, fade, dark),
+            );
         }
         painter.add(mesh);
     }
