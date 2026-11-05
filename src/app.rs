@@ -33,6 +33,8 @@ pub struct App {
     /// The player bar's visualization and the samples it is fed.
     visual: crate::ui::visual::Visualizer,
     heard: Vec<f32>,
+    /// Their side, for the goniometer.
+    heard_side: Vec<f32>,
     /// The visualization's colours of the cover heard, moving to the next
     /// cover's.
     cover_fade: palette::CoverFade,
@@ -223,6 +225,7 @@ impl App {
             visual: crate::ui::visual::Visualizer::new(),
             cover_fade: palette::CoverFade::default(),
             heard: Vec::new(),
+            heard_side: Vec::new(),
             player_area: egui::Rect::NOTHING,
             about,
             statistics: crate::ui::statistics::StatisticsView::from_env(),
@@ -697,15 +700,24 @@ impl App {
         // The visualization: the samples heard now, for its display's size.
         let size = player_bar::visual_size(self.bar_layout(), ui.max_rect());
         let mut heard = std::mem::take(&mut self.heard);
-        let at = self
-            .player
-            .heard_samples(crate::ui::visual::FETCH, &mut heard);
+        let mut side = std::mem::take(&mut self.heard_side);
+        let visual = self.settings.visual_shown();
+        // The side only for the goniometer.
+        let at = if visual == crate::settings::Visual::Goniometer {
+            self.player
+                .heard_stereo(crate::ui::visual::FETCH, &mut heard, &mut side)
+        } else {
+            self.player
+                .heard_samples(crate::ui::visual::FETCH, &mut heard)
+        };
         self.visual.feed(
-            self.settings.visual_shown(),
+            visual,
             at.map(|h| (heard.as_slice(), h)),
+            at.map(|_| side.as_slice()),
             size,
         );
         self.heard = heard;
+        self.heard_side = side;
         let now = self.now_shown(&title, &artist, cover);
         let cmds = player_bar::show(ui, &now, &mut self.visual);
         self.bar_commands(cmds);

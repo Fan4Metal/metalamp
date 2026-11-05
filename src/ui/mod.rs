@@ -4,7 +4,11 @@
 //! frameless window (`title`). The themes and the colours are `palette`'s.
 
 pub mod about;
+pub mod aurora;
+pub mod beat;
 pub mod eq_window;
+pub mod fire;
+pub mod goniometer;
 pub mod icons;
 pub mod info;
 pub mod library;
@@ -15,10 +19,12 @@ pub mod notes;
 pub mod player_bar;
 pub mod playlist;
 pub mod settings;
+pub mod sparks;
 pub mod spectrum;
 pub mod start;
 pub mod statistics;
 pub mod status;
+pub mod strings;
 pub mod synthwave;
 pub mod table;
 pub mod title;

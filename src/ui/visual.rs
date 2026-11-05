@@ -39,9 +39,14 @@ use egui::{
 use crate::audio::vis::Heard;
 use crate::palette;
 use crate::settings::Visual;
+use crate::ui::aurora::{self, Aurora};
+use crate::ui::fire::{self, Fire};
+use crate::ui::goniometer::Goniometer;
 use crate::ui::lightning::{self, Lightning};
 use crate::ui::notes::{self, Notes};
+use crate::ui::sparks::{self, Sparks};
 use crate::ui::spectrum::{self, Analyzer};
+use crate::ui::strings::Strings;
 use crate::ui::synthwave::{self, Synthwave};
 use crate::ui::vortex::{self, Vortex};
 
@@ -103,6 +108,11 @@ pub struct Visualizer {
     lightning: Lightning,
     synthwave: Synthwave,
     vortex: Vortex,
+    fire: Fire,
+    sparks: Sparks,
+    aurora: Aurora,
+    goniometer: Goniometer,
+    strings: Strings,
     /// The ridges' lines, oldest first: the levels across, the lowest
     /// band first.
     ridges: VecDeque<Vec<f32>>,
@@ -150,6 +160,11 @@ impl Visualizer {
             lightning: Lightning::new(),
             synthwave: Synthwave::new(),
             vortex: Vortex::new(),
+            fire: Fire::new(),
+            sparks: Sparks::new(),
+            aurora: Aurora::new(),
+            goniometer: Goniometer::new(),
+            strings: Strings::new(),
             ridges: VecDeque::new(),
             strata: VecDeque::new(),
             owed: 0.0,
@@ -169,8 +184,15 @@ impl Visualizer {
     }
 
     /// Moves `visual` on with the `FETCH` frames heard now (`None`:
-    /// nothing is heard) for a display of `size` (`None`: none shown).
-    pub fn feed(&mut self, visual: Visual, heard: Option<(&[f32], Heard)>, size: Option<Vec2>) {
+    /// nothing is heard) and, for the goniometer, their side, for a
+    /// display of `size` (`None`: none shown).
+    pub fn feed(
+        &mut self,
+        visual: Visual,
+        heard: Option<(&[f32], Heard)>,
+        side: Option<&[f32]>,
+        size: Option<Vec2>,
+    ) {
         let now = Instant::now();
         let dt = now.duration_since(self.last).as_secs_f32().min(0.1);
         self.last = now;
@@ -234,11 +256,43 @@ impl Visualizer {
                     .map(|(wave, levels)| (*wave, levels.as_slice()));
                 self.vortex.feed(heard, new > 0, dt, size);
             }
-            Visual::Chroma | Visual::Piano => {
+            Visual::Chroma | Visual::Piano | Visual::Strings => {
                 let window = heard
                     .filter(|(s, _)| s.len() >= notes::N)
                     .map(|(s, _)| &s[s.len() - notes::N..]);
                 self.notes.feed(window, rate);
+                if visual == Visual::Strings {
+                    self.strings
+                        .feed(&self.notes.keys, heard.is_none() || new > 0, dt, size.x);
+                }
+            }
+            Visual::Fire | Visual::Sparks | Visual::Aurora => {
+                let bands = match visual {
+                    Visual::Fire => fire::BANDS,
+                    Visual::Sparks => sparks::BANDS,
+                    _ => aurora::BANDS,
+                };
+                let levels = heard.map(|(s, h)| {
+                    self.analyzer
+                        .levels(&s[s.len() - spectrum::N..], h.rate, bands)
+                });
+                let levels = levels.as_deref();
+                let moved = new > 0;
+                match visual {
+                    Visual::Fire => self.fire.feed(levels, moved, dt, size),
+                    Visual::Sparks => self.sparks.feed(levels, moved, dt, size),
+                    _ => self.aurora.feed(levels.map(smoothed).as_deref(), moved, dt),
+                }
+            }
+            Visual::Goniometer => {
+                let both = heard
+                    .zip(side)
+                    .filter(|((s, _), side)| s.len() == side.len());
+                let fresh = both.map(|((s, _), side)| {
+                    let n = new.min(s.len());
+                    (&s[s.len() - n..], &side[side.len() - n..])
+                });
+                self.goniometer.feed(fresh, new > 0, dt, size);
             }
             Visual::Ridges => {
                 let cap = ridge_lines(size.y);
@@ -417,6 +471,11 @@ impl Visualizer {
             Visual::Ridges => !self.ridges.is_empty(),
             Visual::Strata => !self.strata.is_empty(),
             Visual::Chroma | Visual::Piano => self.notes.active(),
+            Visual::Strings => self.strings.active(),
+            Visual::Fire => self.fire.active(),
+            Visual::Sparks => self.sparks.active(),
+            Visual::Aurora => self.aurora.active(),
+            Visual::Goniometer => self.goniometer.active(),
             Visual::Waveform => !self.wave.is_empty(),
             Visual::Spectrogram => !self.gram.is_empty(),
             Visual::Scope => !self.scope.is_empty(),
@@ -434,6 +493,11 @@ impl Visualizer {
             Visual::Lightning => self.lightning.paint(painter, rect),
             Visual::Synthwave => self.synthwave.paint(painter, rect),
             Visual::Vortex => self.vortex.paint(painter, rect),
+            Visual::Fire => self.fire.paint(painter, rect),
+            Visual::Sparks => self.sparks.paint(painter, rect),
+            Visual::Aurora => self.aurora.paint(painter, rect),
+            Visual::Goniometer => self.goniometer.paint(painter, rect),
+            Visual::Strings => self.strings.paint(painter, rect),
             Visual::Ridges => self.paint_ridges(painter, rect),
             Visual::Strata => self.paint_strata(painter, rect),
             Visual::Chroma => self.paint_chroma(painter, rect),
@@ -983,6 +1047,11 @@ mod tests {
             Visual::Strata,
             Visual::Vortex,
             Visual::Spectrum,
+            Visual::Fire,
+            Visual::Sparks,
+            Visual::Aurora,
+            Visual::Goniometer,
+            Visual::Strings,
         ] {
             let mut v = Visualizer::new();
             let ctx = egui::Context::default();
@@ -991,7 +1060,12 @@ mod tests {
             for _ in 0..300 {
                 end += 960;
                 let s = sound(end as usize, &mut seed);
-                v.feed(visual, Some((&s, Heard { rate, end })), Some(rect.size()));
+                v.feed(
+                    visual,
+                    Some((&s, Heard { rate, end })),
+                    Some(&s),
+                    Some(rect.size()),
+                );
             }
             let (mut feed, mut paint, mut tess) = (Duration::ZERO, Duration::ZERO, Duration::ZERO);
             let (mut vertices, frames) = (0, 100);
@@ -999,7 +1073,12 @@ mod tests {
                 end += 960;
                 let s = sound(end as usize, &mut seed);
                 let t = Instant::now();
-                v.feed(visual, Some((&s, Heard { rate, end })), Some(rect.size()));
+                v.feed(
+                    visual,
+                    Some((&s, Heard { rate, end })),
+                    Some(&s),
+                    Some(rect.size()),
+                );
                 feed += t.elapsed();
                 let mut painted = Duration::ZERO;
                 let out = ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -1040,6 +1119,7 @@ mod tests {
         v.feed(
             Visual::Waveform,
             Some((&s, Heard { rate, end: 10_000 })),
+            None,
             size,
         );
         // The first frame only learns where the sound is.
@@ -1049,6 +1129,7 @@ mod tests {
         v.feed(
             Visual::Waveform,
             Some((&s, Heard { rate, end: 14_800 })),
+            None,
             size,
         );
         assert_eq!(v.wave.len(), 5);
@@ -1060,12 +1141,13 @@ mod tests {
         v.feed(
             Visual::Waveform,
             Some((&s, Heard { rate, end: 14_800 })),
+            None,
             size,
         );
         assert_eq!(v.wave.len(), 5);
         assert!(v.active());
         // Another visualization starts afresh.
-        v.feed(Visual::Spectrum, None, size);
+        v.feed(Visual::Spectrum, None, None, size);
         assert!(v.wave.is_empty());
     }
 
@@ -1078,6 +1160,7 @@ mod tests {
         v.feed(
             Visual::Ridges,
             Some((&s, Heard { rate, end: 10_000 })),
+            None,
             size,
         );
         assert!(v.ridges.is_empty());
@@ -1086,6 +1169,7 @@ mod tests {
         v.feed(
             Visual::Ridges,
             Some((&s, Heard { rate, end: 14_800 })),
+            None,
             size,
         );
         assert_eq!(v.ridges.len(), 2);
@@ -1094,13 +1178,13 @@ mod tests {
         // Never more than the display holds.
         for i in 1..20 {
             let end = 14_800 + i * 8000;
-            v.feed(Visual::Ridges, Some((&s, Heard { rate, end })), size);
+            v.feed(Visual::Ridges, Some((&s, Heard { rate, end })), None, size);
         }
         assert_eq!(v.ridges.len(), ridge_lines(90.0));
         // Stopped: silent lines push the sound out, then nothing is left.
         for _ in 0..ridge_lines(90.0) + 2 {
             v.idle = 1.0;
-            v.feed(Visual::Ridges, None, size);
+            v.feed(Visual::Ridges, None, None, size);
         }
         assert!(!v.active());
     }
@@ -1114,6 +1198,7 @@ mod tests {
         v.feed(
             Visual::Strata,
             Some((&s, Heard { rate, end: 10_000 })),
+            None,
             size,
         );
         assert!(v.strata.is_empty());
@@ -1122,6 +1207,7 @@ mod tests {
         v.feed(
             Visual::Strata,
             Some((&s, Heard { rate, end: 14_800 })),
+            None,
             size,
         );
         assert_eq!(v.strata.len(), 5);
@@ -1130,13 +1216,13 @@ mod tests {
         // Never more than the display holds.
         for i in 1..60 {
             let end = 14_800 + i * 8000;
-            v.feed(Visual::Strata, Some((&s, Heard { rate, end })), size);
+            v.feed(Visual::Strata, Some((&s, Heard { rate, end })), None, size);
         }
         assert_eq!(v.strata.len(), columns(400.0, STRATA_PITCH));
         // Stopped: silent columns push the sound out, then nothing is left.
         for _ in 0..columns(400.0, STRATA_PITCH) + 2 {
             v.idle = 1.0;
-            v.feed(Visual::Strata, None, size);
+            v.feed(Visual::Strata, None, None, size);
         }
         assert!(!v.active());
     }
@@ -1156,12 +1242,13 @@ mod tests {
                     end: FETCH as u64,
                 },
             )),
+            None,
             Some(Vec2::new(300.0, 80.0)),
         );
         assert_eq!(v.scope.len(), (rate as f32 * SCOPE_S) as usize);
         assert!(v.scope[0] >= 0.0 && v.scope[0] < 0.07, "{}", v.scope[0]);
         assert!(v.scope[1] > v.scope[0]);
-        v.feed(Visual::Scope, None, Some(Vec2::new(300.0, 80.0)));
+        v.feed(Visual::Scope, None, None, Some(Vec2::new(300.0, 80.0)));
         assert!(!v.active());
     }
 
@@ -1174,6 +1261,7 @@ mod tests {
         v.feed(
             Visual::Spectrogram,
             Some((&s, Heard { rate, end: 50_000 })),
+            None,
             size,
         );
         v.feed(
@@ -1185,6 +1273,7 @@ mod tests {
                     end: 50_000 + 2205,
                 },
             )),
+            None,
             size,
         );
         assert_eq!(v.gram.len(), 2);

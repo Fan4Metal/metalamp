@@ -522,21 +522,33 @@ pub enum Visual {
     /// The waves heard flying out from the middle in swirling trails, a
     /// picture with feedback as MilkDrop's.
     Vortex,
+    /// Flames rising from the spectrum along the bottom, as Doom's fire.
+    Fire,
+    /// Sparks thrown up by the spectrum and the beats, falling back.
+    Sparks,
+    /// Curtains of light over the spectrum, swaying.
+    Aurora,
     /// The sound's peaks rolling from the right.
     Waveform,
     /// The wave itself.
     Scope,
+    /// The stereo field: the mid up, the side across, as a phosphor's
+    /// trace; and the channels' correlation.
+    Goniometer,
     /// The twelve notes' loudness, the octaves added up.
     Chroma,
     /// The notes on a piano's keys, and a bar over each.
     Piano,
+    /// The notes on a guitar's neck: the strings ringing, the frets
+    /// played lit.
+    Strings,
     /// An empty display, and no frames drawn for it.
     Off,
 }
 
 impl Visual {
     /// As the display's menu and the settings list them, "none" last.
-    pub const ALL: [Visual; 15] = [
+    pub const ALL: [Visual; 20] = [
         Visual::Spectrum,
         Visual::Led,
         Visual::Curve,
@@ -547,10 +559,15 @@ impl Visual {
         Visual::Synthwave,
         Visual::Lightning,
         Visual::Vortex,
+        Visual::Fire,
+        Visual::Sparks,
+        Visual::Aurora,
         Visual::Waveform,
         Visual::Scope,
+        Visual::Goniometer,
         Visual::Chroma,
         Visual::Piano,
+        Visual::Strings,
         Visual::Off,
     ];
 
@@ -566,10 +583,15 @@ impl Visual {
             Visual::Synthwave => tr!("Synthwave", "Синтвейв"),
             Visual::Lightning => tr!("Lightning", "Молнии"),
             Visual::Vortex => tr!("Vortex", "Вихрь"),
+            Visual::Fire => tr!("Fire", "Огонь"),
+            Visual::Sparks => tr!("Sparks", "Искры"),
+            Visual::Aurora => tr!("Aurora", "Северное сияние"),
             Visual::Waveform => tr!("Waveform", "Волна"),
             Visual::Scope => tr!("Oscilloscope", "Осциллограф"),
+            Visual::Goniometer => tr!("Goniometer", "Гониометр"),
             Visual::Chroma => tr!("Notes", "Ноты"),
             Visual::Piano => tr!("Piano", "Клавиатура"),
+            Visual::Strings => tr!("Guitar strings", "Гитарные струны"),
             Visual::Off => tr!("No visualization", "Без визуализации"),
         }
     }
@@ -910,7 +932,8 @@ mod tests {
         s.window_layout = WindowLayout::Library;
         assert_eq!(s.visual_shown(), Visual::Scope);
         // A click goes through "none" too.
-        assert_eq!(Visual::Piano.next(), Visual::Off);
+        assert_eq!(Visual::Piano.next(), Visual::Strings);
+        assert_eq!(Visual::Strings.next(), Visual::Off);
         assert_eq!(Visual::Off.next(), Visual::Spectrum);
         assert_eq!(Visual::Spectrum.next(), Visual::Led);
         // Kept by their names.
@@ -919,6 +942,11 @@ mod tests {
             (Visual::Ridges, "ridges"),
             (Visual::Strata, "strata"),
             (Visual::Chroma, "chroma"),
+            (Visual::Fire, "fire"),
+            (Visual::Sparks, "sparks"),
+            (Visual::Aurora, "aurora"),
+            (Visual::Goniometer, "goniometer"),
+            (Visual::Strings, "strings"),
         ] {
             assert_eq!(serde_json::to_string(&v).unwrap(), format!("\"{name}\""));
         }

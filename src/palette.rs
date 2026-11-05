@@ -162,6 +162,11 @@ impl VisualPalette {
         matches!(self.colours, VisualColours::Winamp | VisualColours::Fire)
     }
 
+    /// The ground is dark (light shows as light on it).
+    pub fn is_dark(self) -> bool {
+        self.dark
+    }
+
     /// The colour at `level` (0: the floor, 1: the top) and `place`
     /// across (0: the lowest band or the left edge, 1: the highest or the
     /// right edge).
