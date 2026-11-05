@@ -3,10 +3,9 @@
 //! A cover is a 256-pixel thumbnail kept as JPEG in `covers\` next to the
 //! settings, named by a hash of the album and of its first file's time, so
 //! a changed file gets a new one. Without a thumbnail, the picture comes
-//! from the album's folder (`folder.jpg`, `cover.jpg`, …: one small file,
-//! the quickest on a hard disk) or else from the first track's tag
-//! (metalmpv's `cover.rs`). An album without either gets an empty `.none`
-//! file, so it is not looked for again.
+//! from the first track's tag with a picture, or else from the album's
+//! folder (`folder.jpg`, `cover.jpg`, …). An album without either gets an
+//! empty `.none` file, so it is not looked for again.
 //!
 //! One worker thread does it all, the album asked for last first: the
 //! cells in sight are asked for each frame, so they come before those
@@ -22,6 +21,8 @@ use crate::library::{Album, Library};
 
 /// Thumbnails' longest side in pixels.
 const SIDE: u32 = 256;
+/// Version 1 prefers embedded artwork; older thumbnails preferred the folder.
+const CACHE_VERSION: u8 = 1;
 /// Textures kept: 256 KB each, 64 MB at most.
 const MAX_TEXTURES: usize = 256;
 /// A picture larger than this is not decoded (a bomb, or a scan of a
@@ -254,11 +255,13 @@ pub fn prune(library: Arc<Library>) {
     }
 }
 
-/// The album's key in the cache: its artist and title, and its first
-/// file's path and time (a retagged or replaced file gets a new cover).
+/// The album's key in the cache: the cache version, its artist and title,
+/// and its first file's path and time (a retagged or replaced file gets a
+/// new cover).
 fn key_of(library: &Library, album: &Album) -> CoverKey {
     let first = album.tracks.first().map(|&t| &library.tracks[t as usize]);
     let mut h = Fnv::default();
+    h.write(&[CACHE_VERSION]);
     h.write(album.key.as_bytes());
     if let Some(t) = first {
         h.write(t.path.as_os_str().as_encoded_bytes());
@@ -338,15 +341,7 @@ fn cover(job: &Job, dir: Option<&Path>) -> Option<egui::ColorImage> {
     if none.as_ref().is_some_and(|p| current(p)) {
         return None;
     }
-    // The folder's picture, else the tag's: also when the folder's cannot
-    // be decoded (too large, another format under a JPEG's name).
-    let picture = in_folder(&job.folder)
-        .and_then(|p| std::fs::read(p).ok())
-        .and_then(|bytes| decode(&bytes))
-        .or_else(|| {
-            let bytes = job.tagged.as_deref().and_then(embedded)?;
-            decode(&bytes)
-        });
+    let picture = from_sources(job.tagged.as_deref(), &job.folder);
     let Some(picture) = picture else {
         // Known to have none only when both places could be looked at: a
         // disk not plugged in yet is looked at again next time.
@@ -371,21 +366,29 @@ fn cover(job: &Job, dir: Option<&Path>) -> Option<egui::ColorImage> {
 }
 
 /// The cover of the track at `path` no larger than `side` pixels, as the
-/// thumbnails find it: its folder's picture, else its tag's (the mini
+/// thumbnails find it: its tag's picture, else its folder's (the mini
 /// player, which shows it larger than a thumbnail).
 pub fn large(path: &Path, side: u32) -> Option<egui::ColorImage> {
-    let picture = path
-        .parent()
-        .and_then(in_folder)
-        .and_then(|p| std::fs::read(p).ok())
-        .and_then(|bytes| decode(&bytes))
-        .or_else(|| decode(&embedded(path)?))?;
+    let picture = from_sources(Some(path), path.parent()?)?;
     let picture = if picture.width().max(picture.height()) > side {
         picture.resize(side, side, image::imageops::FilterType::Triangle)
     } else {
         picture
     };
     Some(color_image(&picture))
+}
+
+/// Match the file info: embedded artwork first, with the folder as a
+/// fallback when the tag has no usable picture. Singles in one folder
+/// may each have their own cover.
+fn from_sources(tagged: Option<&Path>, folder: &Path) -> Option<image::DynamicImage> {
+    tagged
+        .and_then(embedded)
+        .and_then(|bytes| decode(&bytes))
+        .or_else(|| {
+            let path = in_folder(folder)?;
+            decode(&std::fs::read(path).ok()?)
+        })
 }
 
 /// A picture made ready for a tag (`for_tag`).
@@ -555,8 +558,10 @@ fn embedded(path: &Path) -> Option<Vec<u8>> {
         lofty::config::ParseOptions::new().read_properties(false),
     )
     .ok()?;
-    let pictures: Vec<&lofty::picture::Picture> =
-        tagged.tags().iter().flat_map(|t| t.pictures()).collect();
+    let pictures = tagged
+        .primary_tag()
+        .or_else(|| tagged.first_tag())?
+        .pictures();
     pictures
         .iter()
         .find(|p| p.pic_type() == PictureType::CoverFront)
@@ -591,6 +596,96 @@ mod tests {
         let mut h = Fnv::default();
         h.write(b"a");
         assert_eq!(h.0, 0xaf63_dc4c_8601_ec8c);
+    }
+
+    /// Singles sharing a folder keep their embedded covers, even when a
+    /// folder picture and thumbnails made by the old policy are present.
+    #[test]
+    fn embedded_covers_override_folder_and_old_thumbnails() {
+        use lofty::config::WriteOptions;
+        use lofty::picture::{MimeType, Picture, PictureType};
+        use lofty::prelude::TagExt;
+        use lofty::tag::{Tag, TagType};
+
+        let dir =
+            std::env::temp_dir().join(format!("metalamp_embedded_covers_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cache = dir.join("cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        let png = |rgb| {
+            let picture =
+                image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(8, 8, image::Rgb(rgb)));
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            picture
+                .write_to(&mut bytes, image::ImageFormat::Png)
+                .unwrap();
+            bytes.into_inner()
+        };
+        let folder = png([0, 255, 0]);
+        std::fs::write(dir.join("folder.png"), &folder).unwrap();
+        let mut tracks = Vec::new();
+        for (name, artwork) in [
+            ("red", Some(png([255, 0, 0]))),
+            ("blue", Some(png([0, 0, 255]))),
+            ("plain", None),
+            ("broken", Some(b"not a picture".to_vec())),
+        ] {
+            let path = dir.join(format!("{name}.mp3"));
+            let mut audio = Vec::new();
+            for _ in 0..4 {
+                audio.extend_from_slice(&[0xff, 0xfb, 0x90, 0x64]);
+                audio.extend_from_slice(&[0; 413]);
+            }
+            std::fs::write(&path, audio).unwrap();
+            if let Some(bytes) = &artwork {
+                let mut tag = Tag::new(TagType::Id3v2);
+                tag.push_picture(
+                    Picture::unchecked(bytes.clone())
+                        .pic_type(PictureType::CoverFront)
+                        .mime_type(MimeType::Png)
+                        .build(),
+                );
+                tag.save_to_path(&path, WriteOptions::default()).unwrap();
+            }
+            tracks.push(crate::library::Track {
+                path,
+                album: name.into(),
+                has_cover: artwork.is_some(),
+                ..Default::default()
+            });
+        }
+        let library = Library::new(tracks);
+        for album in &library.albums {
+            let track = &library.tracks[album.tracks[0] as usize];
+            let mut old_key = Fnv::default();
+            old_key.write(album.key.as_bytes());
+            old_key.write(track.path.as_os_str().as_encoded_bytes());
+            old_key.write(&track.mtime.to_le_bytes());
+            let key = key_of(&library, album);
+            assert_ne!(key, old_key.0);
+            save_jpeg(
+                &decode(&folder).unwrap(),
+                &cache.join(format!("{:016x}.jpg", old_key.0)),
+            );
+            let job = Job {
+                key,
+                folder: dir.clone(),
+                tagged: track.has_cover.then(|| track.path.clone()),
+            };
+            let expected = match album.title.as_str() {
+                "red" => egui::Color32::RED,
+                "blue" => egui::Color32::BLUE,
+                _ => egui::Color32::GREEN,
+            };
+            let thumbnail = cover(&job, Some(&cache)).unwrap();
+            assert_eq!(thumbnail.pixels[0], expected, "{}", album.title);
+            let large = large(&track.path, 400).unwrap();
+            let details = crate::library::details::read(&track.path).unwrap();
+            assert_eq!(large.pixels, thumbnail.pixels);
+            assert_eq!(details.cover.unwrap().pixels, thumbnail.pixels);
+            assert!(cache.join(format!("{key:016x}.jpg")).is_file());
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// A picture for a tag: as it is within the side, else made that large
