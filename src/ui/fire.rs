@@ -1,14 +1,16 @@
 //! Fire: flames rising from the spectrum along the display's bottom, as
 //! Doom's fire was drawn. The picture is a coarse grid of heat (a pixel
-//! about `POINTS` points wide); `STEP_HZ` times a second each pixel pulls
+//! about `POINTS` points wide); at least `STEP_HZ` times a second each pixel pulls
 //! heat from the row below: one random number of four
 //! moves it a pixel aside (mostly to the left, a wind) and takes a step of
 //! heat off or not, so the shift and the cooling go together and the heat
 //! rises in licking tongues rather than as noise. Each destination is
 //! written, leaving no old heat floating between the flames. The bottom
 //! row is the source: each column the analyzer's level
-//! at its place across (the bass on the left), flickering, and every beat
-//! throws it higher. Shown as a texture over the display, the heat in the
+//! at its place across (the bass on the left). Travelling ripples in the
+//! source break it into tongues, and gusts bend them as they rise. Beats
+//! speed up the rise and reduce cooling, throwing the flames higher.
+//! Shown as a texture over the display, the heat in the
 //! visualization's colours, the hottest drawn towards white. Paused, it
 //! stands; stopped, it burns out.
 
@@ -22,8 +24,13 @@ pub const BANDS: usize = 48;
 /// Points a pixel of the fire, and its pixels at most across.
 const POINTS: f32 = 3.0;
 const MAX_WIDTH: usize = 400;
-/// The heat rises a pixel this many times a second.
-const STEP_HZ: f32 = 60.0;
+/// The heat rises a pixel at least this many times a second, faster
+/// with the sound and especially on beats.
+const STEP_HZ: f32 = 110.0;
+const KICK_SPEED: f32 = 0.8;
+const LEVEL_SPEED: f32 = 0.2;
+/// A beat reduces heat loss so its plume reaches higher too.
+const KICK_REACH: f32 = 0.4;
 /// The source's full heat reaches this share of the height on average.
 const REACH: f32 = 0.95;
 /// A level under this lights nothing; over it the source's heat grows to
@@ -44,6 +51,8 @@ pub struct Fire {
     source: Vec<f32>,
     /// Steps owed (fractions carried on).
     owed: f32,
+    /// The simulation clock, frozen along with the flame when paused.
+    time: f32,
     beat: Beat,
     rng: Rng,
     lit: bool,
@@ -68,6 +77,7 @@ impl Fire {
             height: 0,
             source: Vec::new(),
             owed: 0.0,
+            time: 0.0,
             beat: Beat::default(),
             rng: Rng::default(),
             lit: false,
@@ -105,11 +115,14 @@ impl Fire {
         if !self.lit && self.source.iter().all(|&s| s <= 0.0) {
             return;
         }
-        self.owed += dt * STEP_HZ;
-        let steps = (self.owed as usize).min(4);
+        let hz = STEP_HZ * (1.0 + KICK_SPEED * self.beat.kick + LEVEL_SPEED * self.beat.level);
+        self.owed += dt * hz;
+        // The UI caps dt at 0.1 s: enough steps even during a beat on
+        // a slow frame, instead of slowing the flame down to four rows.
+        let steps = (self.owed as usize).min(24);
         self.owed -= self.owed.floor();
         for _ in 0..steps {
-            self.step();
+            self.step(1.0 / hz);
         }
         self.changed |= steps > 0;
     }
@@ -117,12 +130,20 @@ impl Fire {
     /// Pulls heat from the row below, with Doom's coupled drift and
     /// cooling. Every destination is written: scattering left holes
     /// holding old heat, which looked like floating grains.
-    fn step(&mut self) {
+    fn step(&mut self, dt: f32) {
+        self.time += dt;
         let (w, h) = (self.width, self.height);
         // Half a step lost a row on average: full heat reaches `REACH` of
         // the height.
-        let cooling = 2.0 / (REACH * h as f32);
+        let cooling = 2.0 / (REACH * h as f32) * (1.0 - KICK_REACH * self.beat.kick);
         for y in 1..h {
+            // A shared gust per row bends whole tongues, rather than
+            // shaking unrelated pixels. Fractional drift stays smooth.
+            let rise = 1.0 - y as f32 / h as f32;
+            let wind = (self.time * 2.7).sin() * 0.9
+                + (self.time * 5.1 + rise * 5.0).sin() * (0.35 + 0.65 * rise);
+            let drift = wind.floor() as isize;
+            let blend = wind - wind.floor();
             let mut bits = 0u64;
             for x in 0..w {
                 if x % 32 == 0 {
@@ -130,8 +151,10 @@ impl Fire {
                 }
                 let r = (bits & 3) as usize;
                 bits >>= 2;
-                let from = (x + r).saturating_sub(1).min(w - 1);
-                let v = 0.75 * self.heat[y * w + from] + 0.25 * self.heat[y * w + x];
+                let from = x as isize + r as isize - 1 + drift;
+                let at = |x: isize| self.heat[y * w + x.clamp(0, w as isize - 1) as usize];
+                let carried = at(from) * (1.0 - blend) + at(from + 1) * blend;
+                let v = 0.85 * carried + 0.15 * self.heat[y * w + x];
                 let lost = (r & 1) as f32 * cooling;
                 self.heat[(y - 1) * w + x] = (v - lost).max(0.0);
             }
@@ -139,8 +162,14 @@ impl Fire {
         let bottom = (h - 1) * w;
         let mut lit = false;
         for x in 0..w {
-            let flicker = 0.9 + 0.1 * self.rng.unit();
-            self.heat[bottom + x] = self.source[x] * flicker;
+            // Coherent patches of hot and cool fuel travel across the
+            // base. Even sustained notes produce growing and shrinking
+            // tongues, with fine flicker only over that larger motion.
+            let place = x as f32;
+            let broad = (place * 0.28 - self.time * 6.0).sin();
+            let fine = (place * 0.72 + self.time * 13.0 + broad * 1.4).sin();
+            let flicker = (0.8 + 0.25 * broad + 0.18 * fine) * self.rng.between(0.95, 1.0);
+            self.heat[bottom + x] = (self.source[x] * flicker).min(1.0);
         }
         for &v in &self.heat {
             if v > 0.003 {
@@ -254,8 +283,10 @@ mod tests {
         assert!(r[0] < r[r.len() - 1]);
         // Paused, it stands.
         let before = f.heat.clone();
+        let time = f.time;
         f.feed(Some(&loud), false, 0.02, size);
         assert_eq!(f.heat, before);
+        assert_eq!(f.time, time);
         // Quiet bands light nothing; stopped, it burns out.
         for _ in 0..200 {
             f.feed(None, true, 0.02, size);
@@ -300,9 +331,42 @@ mod tests {
         f.feed(None, true, 0.0, vec2(300.0, 90.0));
         f.heat.fill(1.0);
         for _ in 0..=f.height {
-            f.step();
+            f.step(1.0 / STEP_HZ);
         }
         assert!(f.heat.iter().all(|&v| v == 0.0));
         assert!(!f.active());
+    }
+
+    #[test]
+    fn the_flame_reaches_the_middle_within_a_fifth_of_a_second() {
+        let mut f = Fire::new();
+        let size = vec2(300.0, 90.0);
+        for _ in 0..10 {
+            f.feed(Some(&[0.9; BANDS]), true, 0.02, size);
+        }
+        assert!(rows(&f)[f.height / 2] > 0.05);
+        assert!(f.heat.iter().all(|&v| (0.0..=1.0).contains(&v)));
+    }
+
+    #[test]
+    fn a_bass_beat_throws_a_plume_above_the_steady_flame() {
+        let size = vec2(300.0, 90.0);
+        let steady = [0.5; BANDS];
+        let mut pulse = steady;
+        pulse[..BANDS / 6].fill(0.95);
+        let warm = || {
+            let mut f = Fire::new();
+            for _ in 0..100 {
+                f.feed(Some(&steady), true, 0.02, size);
+            }
+            f
+        };
+        let (mut calm, mut beat) = (warm(), warm());
+        for _ in 0..10 {
+            calm.feed(Some(&steady), true, 0.02, size);
+            beat.feed(Some(&pulse), true, 0.02, size);
+        }
+        let high_heat = |f: &Fire| f.heat[..f.width * (f.height / 2)].iter().sum::<f32>();
+        assert!(high_heat(&beat) > high_heat(&calm) + 5.0);
     }
 }
