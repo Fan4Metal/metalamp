@@ -766,6 +766,9 @@ impl InfoView {
             .frame(egui::Frame::NONE)
             .backdrop_color(egui::Color32::from_black_alpha(225))
             .show(ctx, |ui| {
+                // The caption's centred layout otherwise keeps the area's
+                // previous width, leaving a resized image off-centre.
+                ui.set_width(size.x);
                 let image = ui.add(
                     egui::Image::new((texture.id(), size))
                         .corner_radius(8.0)
@@ -2447,6 +2450,85 @@ mod tests {
         assert_eq!(words("MusicBrainzTrackId"), "MusicBrainz Track ID");
         assert_eq!(words("AcoustIdFingerprint"), "AcoustID Fingerprint");
         assert_eq!(words("Barcode"), "Barcode");
+    }
+
+    /// The zoomed artwork and its caption share the window's centre,
+    /// including after a resize and for portrait and landscape covers.
+    #[test]
+    fn zoomed_cover_and_caption_are_centred() {
+        for pixels in [[600, 600], [300, 900], [900, 300], [80, 80]] {
+            let ctx = egui::Context::default();
+            let texture = ctx.load_texture(
+                "zoom_test",
+                egui::ColorImage::filled(pixels, egui::Color32::RED),
+                Default::default(),
+            );
+            let note = "600×600 · JPEG · 140.31 KB";
+            let mut info = InfoView {
+                zoom: Some(Zoom {
+                    small: Some(texture.clone()),
+                    big: None,
+                    job: None,
+                }),
+                ..Default::default()
+            };
+            for (loaded, window) in [
+                (false, vec2(2227.0, 1622.0)),
+                (true, vec2(2227.0, 1622.0)),
+                (true, vec2(900.0, 700.0)),
+                (true, vec2(760.0, 400.0)),
+            ] {
+                if loaded {
+                    info.zoom.as_mut().unwrap().big = Some((texture.clone(), note.into()));
+                }
+                let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, window);
+                let mut out = egui::FullOutput::default();
+                for _ in 0..4 {
+                    out = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(screen),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            egui::Modal::new(egui::Id::new("file_info")).show(ui.ctx(), |ui| {
+                                ui.set_width(WIDTH);
+                                ui.add_space(400.0);
+                                info.show_zoom(ui.ctx());
+                            });
+                        },
+                    );
+                    out.textures_delta.clear();
+                }
+                if !loaded {
+                    continue;
+                }
+                let image = out
+                    .shapes
+                    .iter()
+                    .find(|s| s.shape.texture_id() == texture.id())
+                    .expect("the cover was painted")
+                    .shape
+                    .visual_bounding_rect();
+                let caption = out
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Text(t) if t.galley.text() == note => {
+                            Some(t.galley.rect.translate(t.pos.to_vec2()))
+                        }
+                        _ => None,
+                    })
+                    .expect("the caption was painted");
+                for rect in [image, caption] {
+                    assert!(
+                        (rect.center().x - screen.center().x).abs() <= 1.0,
+                        "{pixels:?} in {window:?}: {rect:?}"
+                    );
+                    assert!(screen.contains_rect(rect), "{rect:?} outside {screen:?}");
+                }
+                assert!(caption.top() >= image.bottom());
+            }
+        }
     }
 
     /// The hero's cover in the file info's modal, driven headless frame by
