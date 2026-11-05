@@ -28,7 +28,7 @@ MetalAMP is an audio player for Windows built around a media library: the music 
 - **Gapless playback**: the next track is opened before the current one ends, and MP3 files are cut to their music by their LAME tags (see [Playback](#playback)).
 - **Formats of Windows**: MP3, AAC (M4A), FLAC, WMA and WAV, decoded by Media Foundation; M3U and M3U8 playlists.
 - **Sound processing**: the same loudness for every track, a ten-band equalizer, an enhancer, crossfade and a limiter, all off by default (see [Sound processing](#sound-processing)).
-- **Visualizations**: spectrum analyzers, ridges, a spectrogram, synthwave, lightning, a vortex, a waveform, an oscilloscope, the notes and a piano (see [Visualizations](#visualizations)).
+- **Visualizations**: spectrum analyzers, ridges, a spectrogram, synthwave, lightning, a vortex, fire, sparks, an aurora, a waveform, an oscilloscope, a goniometer, the notes, a piano and guitar strings (see [Visualizations](#visualizations)).
 - **A playlist** beside the library, kept between runs, and saved playlists (see [The playlist](#the-playlist)).
 - **Library statistics**: the numbers of tracks, albums, artists and genres, the length and size, the plays, and charts of the bit rates, formats, years, genres, artists and the tracks played most (see [Statistics](#statistics)).
 - **File info and tags**: every field of a track's tag, its cover and its audio properties, in a window opened by a click on the player's cover or `I`, where the tags of one file or of several are also edited (see [File info](#file-info)).
@@ -229,8 +229,12 @@ The display right of the player shows the sound heard. A click on it goes on to 
 - **Synthwave**: a flight over a grid towards a striped sun, between mountains raised by the spectrum.
 - **Lightning**: bolts striking from a glowing core on the beats.
 - **Vortex**: the waves heard flying out from the middle in swirling trails that fade, thrown outwards on the beats, as the pictures of Winamp's MilkDrop.
+- **Fire**: flames rising from the spectrum along the bottom, as the fire of Doom, thrown higher on the beats.
+- **Sparks**: a fountain of sparks, each band of the spectrum throwing them its own way (the bass to the left), and a sheaf on each beat; they fall back, bounce and cool.
+- **Aurora**: curtains of light swaying over the spectrum, streaked by drifting rays.
 - **Waveform** rolling from the right, and an **oscilloscope**.
-- **Notes**: the twelve notes with their octaves added up (which notes sound now), or a **piano**'s keys lit by the notes heard.
+- **Goniometer**: the stereo field as a studio's meter shows it, a glowing trace (a mono sound is a line straight up, a wide one a cloud), with the balance of the channels and their correlation beside it.
+- **Notes**: the twelve notes with their octaves added up (which notes sound now), or a **piano**'s keys lit by the notes heard, or **guitar strings**: the loudest notes played on a guitar's neck, a string to a note as a hand would play them, each ringing from its fret.
 - **No visualization** shows the program's name in the display (in the narrow player of the player and playlist layout, nothing); the switch under **Visualization** in the settings window turns the visualization off altogether: the display then shows the program's name (in the narrow player, nothing) and takes no clicks.
 - **Colours** are chosen apart from the theme: the accent's shades, a rainbow across the frequencies, green to red by the level as in Winamp, fire, the colours of the cover of the track playing (up to three, across the frequencies, changing smoothly with the track; the accent's shades for a track without a cover), or the shades of a colour of one's own.
 
