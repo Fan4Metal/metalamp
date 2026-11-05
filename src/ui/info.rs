@@ -139,7 +139,20 @@ pub struct InfoView {
     cover_job: Option<Receiver<CoverDone>>,
     /// What became of the last of them: a text and whether it is an error.
     cover_note: Option<(String, bool)>,
+    /// The cover shown large over the window (a click on it).
+    zoom: Option<Zoom>,
 }
+
+/// The cover shown large: the window's preview at first, then the picture
+/// itself, read on a thread.
+struct Zoom {
+    small: Option<TextureHandle>,
+    big: Option<(TextureHandle, String)>,
+    job: Option<Receiver<Option<(egui::ColorImage, String)>>>,
+}
+
+/// The largest side of a cover shown large, in pixels.
+const ZOOM_SIDE: u32 = 2560;
 
 /// What a cover's thread did.
 enum CoverDone {
@@ -184,6 +197,8 @@ enum Act {
     /// To a file, or to all of them.
     Go(Option<usize>),
     Cover(CoverAct),
+    /// The cover shown large.
+    Zoom,
 }
 
 #[derive(Default, PartialEq)]
@@ -625,6 +640,7 @@ impl InfoView {
         match act {
             Act::Close => {
                 self.open = false;
+                self.zoom = None;
                 self.editing = false;
                 self.then = None;
                 // A write under way goes on and is reported.
@@ -641,6 +657,150 @@ impl InfoView {
             Act::Save => self.save(ctx, None),
             Act::Go(to) => self.go(ctx, to),
             Act::Cover(act) => self.cover_act(ctx, act),
+            Act::Zoom => self.zoom_in(ctx),
+        }
+    }
+
+    /// The picture of the cover shown, as it is: a new one waiting, else
+    /// the tag's, else the folder's (as `details` finds the cover).
+    fn cover_bytes(&self) -> Option<CoverSource> {
+        let new = self
+            .form
+            .as_ref()
+            .filter(|_| self.editing)
+            .and_then(|f| f.cover.as_ref());
+        match new.map(|c| &c.change) {
+            Some(CoverChange::Set(data)) => return Some(CoverSource::Bytes(Arc::clone(data))),
+            Some(CoverChange::Remove) => return None,
+            None => {}
+        }
+        let (path, details) = self.shown.as_ref()?;
+        let details = details.as_ref().ok()?;
+        match &details.tag_cover {
+            Some(bytes) => Some(CoverSource::Bytes(Arc::new(bytes.clone()))),
+            None => Some(CoverSource::Folder(path.parent()?.to_path_buf())),
+        }
+    }
+
+    /// The cover shown large; its picture read on a thread, the preview
+    /// shown meanwhile.
+    fn zoom_in(&mut self, ctx: &egui::Context) {
+        let small = match self
+            .form
+            .as_ref()
+            .filter(|_| self.editing)
+            .and_then(|f| f.cover.as_ref())
+        {
+            Some(new) => new.preview.clone(),
+            None => self.cover.as_ref().map(|(_, t)| t.clone()),
+        };
+        let Some(source) = self.cover_bytes() else {
+            return;
+        };
+        let (tx, rx) = channel();
+        let ctx = ctx.clone();
+        let spawned = std::thread::Builder::new()
+            .name("cover zoom".into())
+            .spawn(move || {
+                let _ = tx.send(source.picture());
+                ctx.request_repaint();
+            });
+        if let Err(e) = spawned {
+            log::warn!("no cover thread: {e}");
+        }
+        self.zoom = Some(Zoom {
+            small,
+            big: None,
+            job: Some(rx),
+        });
+    }
+
+    /// The cover large over the window while it is open: the picture fit
+    /// to the window (a small one at most twice its size), its size and
+    /// format under it. A click, Esc or Enter closes it.
+    fn show_zoom(&mut self, ctx: &egui::Context) {
+        let Some(zoom) = &mut self.zoom else { return };
+        if let Some(rx) = &zoom.job {
+            match rx.try_recv() {
+                Ok(read) => {
+                    zoom.job = None;
+                    let options = egui::TextureOptions::LINEAR
+                        .with_mipmap_mode(Some(egui::TextureFilter::Linear));
+                    zoom.big = read.map(|(image, note)| {
+                        (ctx.load_texture("file_info_zoom", image, options), note)
+                    });
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => zoom.job = None,
+            }
+        }
+        let texture = zoom
+            .big
+            .as_ref()
+            .map(|(t, _)| t)
+            .or(zoom.small.as_ref())
+            .cloned();
+        let Some(texture) = texture else {
+            // Nothing could be read: nothing to show.
+            if zoom.job.is_none() {
+                self.zoom = None;
+            }
+            return;
+        };
+        let note = zoom.big.as_ref().map(|(_, n)| n.clone());
+        let reading = zoom.job.is_some();
+        let room = ctx.content_rect().size() * 0.9 - vec2(0.0, 24.0);
+        let natural = texture.size_vec2() / ctx.pixels_per_point();
+        // The preview is small: its picture's own size is not known yet.
+        let most = if zoom.big.is_some() {
+            natural * 2.0
+        } else {
+            room
+        };
+        let scale = (room.x / natural.x)
+            .min(room.y / natural.y)
+            .min(most.x / natural.x)
+            .max(0.01);
+        let size = natural * scale;
+        let modal = egui::Modal::new(egui::Id::new("file_info_zoom"))
+            .frame(egui::Frame::NONE)
+            .backdrop_color(egui::Color32::from_black_alpha(225))
+            .show(ctx, |ui| {
+                let image = ui.add(
+                    egui::Image::new((texture.id(), size))
+                        .corner_radius(8.0)
+                        .sense(egui::Sense::click()),
+                );
+                if reading {
+                    egui::Spinner::new().size(28.0).paint_at(
+                        ui,
+                        egui::Rect::from_center_size(image.rect.center(), vec2(28.0, 28.0)),
+                    );
+                }
+                ui.vertical_centered(|ui| {
+                    ui.add_space(8.0);
+                    if let Some(note) = note {
+                        egui::Frame::NONE
+                            .fill(egui::Color32::from_black_alpha(180))
+                            .corner_radius(6.0)
+                            .inner_margin(egui::Margin::symmetric(10, 4))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    RichText::new(note)
+                                        .color(egui::Color32::from_white_alpha(220)),
+                                );
+                            });
+                    }
+                });
+                image.clicked()
+            });
+        let keys = ctx.input_mut(|i| {
+            i.consume_key(egui::Modifiers::NONE, Key::Escape)
+                | i.consume_key(egui::Modifiers::NONE, Key::Enter)
+                | i.consume_key(egui::Modifiers::NONE, Key::Space)
+        });
+        if modal.inner || modal.backdrop_response.clicked() || keys {
+            self.zoom = None;
         }
     }
 
@@ -844,6 +1004,10 @@ impl InfoView {
     /// tags" edit; editing, Esc gives up and Enter (no field holding it)
     /// saves.
     fn keys(&self, ctx: &egui::Context, keys: &Keymap, acts: &mut Vec<Act>) {
+        // The cover shown large takes the keys.
+        if self.zoom.is_some() {
+            return;
+        }
         if self.editing {
             if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape)) {
                 acts.push(Act::Cancel);
@@ -876,6 +1040,17 @@ impl InfoView {
         if let Some(path) = self.cover_file.take() {
             self.cover_act(ctx, CoverAct::File(path));
         }
+        // `METALAMP_INFO_ZOOM=1`: the cover large once it is read (GUI
+        // checks, with `METALAMP_INFO`).
+        if self.zoom.is_none()
+            && self.cover.is_some()
+            && ctx.cumulative_frame_nr() < 300
+            && std::env::var_os("METALAMP_INFO_ZOOM").is_some()
+            && !ctx.data(|d| d.get_temp::<bool>(egui::Id::new("info_zoomed")).unwrap_or(false))
+        {
+            ctx.data_mut(|d| d.insert_temp(egui::Id::new("info_zoomed"), true));
+            self.zoom_in(ctx);
+        }
         let fresh = std::mem::take(&mut self.fresh);
         if fresh {
             let room = ctx.content_rect().size();
@@ -896,6 +1071,7 @@ impl InfoView {
                 .show(ctx, |ui| {
                     let height = ctx.content_rect().height();
                     self.content(ui, Some(height), &mut acts);
+                    self.show_zoom(ctx);
                 });
             if !fresh {
                 self.keys(ctx, keys, &mut acts);
@@ -967,6 +1143,7 @@ impl InfoView {
                     );
                     self.content(ui, None, acts);
                 });
+            self.show_zoom(&ctx);
             if !fresh {
                 self.keys(&ctx, keys, acts);
             }
@@ -1835,6 +2012,44 @@ fn made_note(made: &crate::covers::ForTag) -> String {
 /// A picture file this large is not taken for a cover.
 const MAX_PICTURE: u64 = 64 << 20;
 
+/// Where the cover shown large comes from.
+enum CoverSource {
+    /// The picture as it is (the tag's, or a new one's as written).
+    Bytes(Arc<Vec<u8>>),
+    /// The picture of this folder (`covers::in_folder`).
+    Folder(PathBuf),
+}
+
+impl CoverSource {
+    /// The picture at most `ZOOM_SIDE` a side, and a line of its size,
+    /// format and bytes: `1500×1500 · JPEG · 512 KB`.
+    fn picture(self) -> Option<(egui::ColorImage, String)> {
+        let bytes = match self {
+            CoverSource::Bytes(b) => b,
+            CoverSource::Folder(folder) => {
+                let path = crate::covers::in_folder(&folder)?;
+                if std::fs::metadata(&path).ok()?.len() > MAX_PICTURE {
+                    return None;
+                }
+                Arc::new(std::fs::read(path).ok()?)
+            }
+        };
+        let picture = crate::guard::catch(Path::new("cover"), || crate::covers::decode(&bytes))??;
+        let (w, h) = (picture.width(), picture.height());
+        let format = match image::guess_format(&bytes) {
+            Ok(image::ImageFormat::Png) => "PNG",
+            _ => "JPEG",
+        };
+        let note = format!("{w}×{h} · {format} · {}", format::size(bytes.len() as u64));
+        let picture = if w.max(h) > ZOOM_SIDE {
+            picture.resize(ZOOM_SIDE, ZOOM_SIDE, image::imageops::FilterType::Triangle)
+        } else {
+            picture
+        };
+        Some((crate::covers::color_image(&picture), note))
+    }
+}
+
 /// `work` on a thread of its own, its answer woken for.
 fn spawn_cover(
     ctx: &egui::Context,
@@ -1854,9 +2069,10 @@ fn spawn_cover(
     rx
 }
 
-/// The hero's cover, opening its menu on a click or the right button;
-/// darkened under the pointer, outlined in the accent while pictures are
-/// dragged over the window, with a spinner while one is read.
+/// The hero's cover: a click shows it large (without one, opens the
+/// menu), the right button opens its menu; darkened under the pointer,
+/// outlined in the accent while pictures are dragged over the window,
+/// with a spinner while one is read.
 fn cover_button(ui: &mut Ui, cover: Option<&TextureHandle>, menu: &CoverMenu, acts: &mut Vec<Act>) {
     use crate::ui::icons::{self, Icon};
     let resp = cover_box(ui, cover, COVER, egui::Sense::click());
@@ -1869,26 +2085,46 @@ fn cover_button(ui: &mut Ui, cover: Option<&TextureHandle>, menu: &CoverMenu, ac
             ui,
             egui::Rect::from_center_size(rect.center(), vec2(24.0, 24.0)),
         );
-    } else if (menu.dropping && menu.writable) || resp.hovered() {
+    } else if menu.dropping && menu.writable {
         painter.rect_filled(rect, 8.0, shade);
         let mark = egui::Color32::from_white_alpha(230);
         icons::paint(painter, Icon::Image, rect.center(), 32.0, mark, shade);
-        if menu.dropping {
-            painter.rect_stroke(
-                rect.shrink(1.0),
-                8.0,
-                egui::Stroke::new(2.0, palette::accent()),
-                egui::StrokeKind::Inside,
-            );
+        painter.rect_stroke(
+            rect.shrink(1.0),
+            8.0,
+            egui::Stroke::new(2.0, palette::accent()),
+            egui::StrokeKind::Inside,
+        );
+    } else if resp.hovered() {
+        // A cover: a lighter shade with a magnifier, as a picture to look
+        // at; none: the picture's mark, as a place to put one.
+        let mark = egui::Color32::from_white_alpha(230);
+        if cover.is_some() {
+            let shade = egui::Color32::from_black_alpha(60);
+            painter.rect_filled(rect, 8.0, shade);
+            icons::paint(painter, Icon::ZoomIn, rect.center(), 32.0, mark, shade);
+        } else {
+            painter.rect_filled(rect, 8.0, shade);
+            icons::paint(painter, Icon::Image, rect.center(), 32.0, mark, shade);
         }
     }
-    let resp = resp.on_hover_text(tr!(
-        "A click opens the cover's menu; a picture can be dropped here",
-        "Щелчок открывает меню обложки; сюда можно перетащить картинку"
-    ));
+    let resp = resp.on_hover_text(if cover.is_some() {
+        tr!(
+            "A click shows the cover large; the right button opens its menu; a picture can be dropped here",
+            "Щелчок показывает обложку крупно; правая кнопка открывает её меню; сюда можно перетащить картинку"
+        )
+    } else {
+        tr!(
+            "A click opens the cover's menu; a picture can be dropped here",
+            "Щелчок открывает меню обложки; сюда можно перетащить картинку"
+        )
+    });
+    if resp.clicked() && cover.is_some() && !menu.busy {
+        acts.push(Act::Zoom);
+    }
     // One menu for both buttons: a context menu of its own would share its
     // id and close it.
-    let toggle = resp.clicked() || resp.secondary_clicked();
+    let toggle = resp.secondary_clicked() || (resp.clicked() && cover.is_none());
     egui::Popup::menu(&resp)
         .open_memory(toggle.then_some(egui::containers::SetOpenCommand::Toggle))
         // The size is chosen with the menu kept open; the other items

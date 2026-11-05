@@ -177,7 +177,8 @@ Chosen in the settings window (General, **Tags**):
 <details>
 <summary>Changing the cover</summary>
 
-- **The cover's menu**: a click on the cover (or the right button) opens its menu with **Choose a picture…**, the folder's picture (for example `cover.jpg`, when the folder has one) and **Remove the cover**; a JPEG or PNG file dropped on the window does the same. Outside editing, these start it.
+- **The cover large**: a click on the cover shows it large over the window, with its size in pixels, its format and its size in bytes; a click, `Esc` or `Enter` closes it.
+- **The cover's menu**: the right button on the cover (or a click, when there is no cover) opens its menu with **Choose a picture…**, the folder's picture (for example `cover.jpg`, when the folder has one) and **Remove the cover**; a JPEG or PNG file dropped on the window does the same. Outside editing, these start it.
 - **Writing**: the new cover is shown at once and written with the fields by **Save**, as the front cover of the file shown or of all the files at once, in place of the cover the tag had; the tag's other pictures (a back cover, a booklet) are kept.
 - **Size**: the same menu sets the largest side of a cover in the tag: as it is, 500, 1000 (the default) or 1500 pixels; a larger picture is made that large and written as JPEG, so that each track of an album does not carry megabytes of it. The choice is kept, and a new cover waiting to be saved is made again for it; under the title the window says the picture's size and the size it will be written at.
 - **Save as folder.jpg** in the same menu writes the cover shown into the files' folder at once (**Replace folder.jpg** when the folder has one); the album grid shows a folder's picture before the tag's, so this also changes the album's cover in the library.
