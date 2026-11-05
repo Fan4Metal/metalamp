@@ -241,7 +241,13 @@ impl Summary {
                 s.no_genre += 1;
             }
 
-            let came = t.added_or_mtime();
+            // A file's time in the future (a wrong clock where it was
+            // made) counts as now: the chart runs each month up to the
+            // last, and one in 2099 squeezed the library's into its start.
+            let came = match t.added_or_mtime() {
+                came if now > 0 => came.min(now),
+                came => came,
+            };
             if came > 0 {
                 *added.entry(month_of(came)).or_default() += 1;
             }
@@ -423,6 +429,19 @@ mod tests {
             added: 1_579_046_400 + u64::from(year % 3) * 40 * 86_400,
             ..Track::default()
         }
+    }
+
+    /// A file's time in the future counts as now: the months run up to
+    /// now, not to 2099.
+    #[test]
+    fn a_time_in_the_future_is_now() {
+        let mut late = t(r"D:\M\z\1.mp3", "Z", "Z", 2001, "");
+        late.added = 4_070_908_800; // 2099-01-01
+        let library = Library::new(vec![t(r"D:\M\a\1.mp3", "A", "A", 2001, ""), late]);
+        let now = 1_700_000_000;
+        let s = Summary::of(&library, &Stats::default(), now);
+        assert_eq!(s.added.last().map(|a| a.0), Some(month_of(now)));
+        assert_eq!(s.added.iter().map(|(_, n)| n).sum::<u64>(), 2);
     }
 
     #[test]
