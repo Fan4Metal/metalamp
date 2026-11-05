@@ -440,6 +440,8 @@ impl InfoView {
         self.editing = edit;
         self.then = None;
         self.cover_note = None;
+        // The cover shown large was another file's.
+        self.zoom = None;
         let to = if edit && paths.len() > 1 {
             None
         } else {
