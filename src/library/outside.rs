@@ -25,6 +25,7 @@ type Read = (
 
 #[derive(Default)]
 pub struct Outside {
+    priority: crate::settings::CoverPriority,
     /// The file asked for last.
     path: Option<PathBuf>,
     /// Its track once read.
@@ -40,7 +41,12 @@ pub struct Outside {
 impl Outside {
     /// Follows the file heard that the library does not hold (`None`:
     /// none, or one it holds): a new one is read on a thread.
-    pub fn follow(&mut self, ctx: &egui::Context, path: Option<&Path>) {
+    pub fn follow(
+        &mut self,
+        ctx: &egui::Context,
+        path: Option<&Path>,
+        priority: crate::settings::CoverPriority,
+    ) {
         if let Some(rx) = &self.rx
             && let Ok((track, image, colours)) = rx.try_recv()
         {
@@ -50,9 +56,10 @@ impl Outside {
             self.cover =
                 image.map(|i| ctx.load_texture("outside_cover", i, TextureOptions::LINEAR));
         }
-        if self.path.as_deref() == path {
+        if self.path.as_deref() == path && self.priority == priority {
             return;
         }
+        self.priority = priority;
         self.path = path.map(Path::to_path_buf);
         self.track = None;
         self.rx = None;
@@ -68,7 +75,7 @@ impl Outside {
             .name("outside".into())
             .spawn(move || {
                 let read = crate::guard::catch(&path, || {
-                    let cover = crate::covers::large(&path, COVER_PX);
+                    let cover = crate::covers::large(&path, COVER_PX, priority);
                     let colours = cover
                         .as_ref()
                         .and_then(|c| crate::palette::cover_colours(&c.pixels));
@@ -102,7 +109,7 @@ impl Outside {
     /// Reads the file followed again (its tags were written).
     pub fn read_again(&mut self, ctx: &egui::Context) {
         if let Some(path) = self.path.take() {
-            self.follow(ctx, Some(&path));
+            self.follow(ctx, Some(&path), self.priority);
         }
     }
 }

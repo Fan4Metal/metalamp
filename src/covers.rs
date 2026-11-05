@@ -4,7 +4,8 @@
 //! settings, named by a hash of the album and of its first file's time, so
 //! a changed file gets a new one. Without a thumbnail, the picture comes
 //! from the first track's tag with a picture, or else from the album's
-//! folder (`folder.jpg`, `cover.jpg`, …). An album without either gets an
+//! folder (`folder.jpg`, `cover.jpg`, …), in the chosen priority order.
+//! An album without either gets an
 //! empty `.none` file, so it is not looked for again.
 //!
 //! One worker thread does it all, the album asked for last first: the
@@ -18,11 +19,12 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex};
 
 use crate::library::{Album, Library};
+use crate::settings::CoverPriority;
 
 /// Thumbnails' longest side in pixels.
 const SIDE: u32 = 256;
-/// Version 1 prefers embedded artwork; older thumbnails preferred the folder.
-const CACHE_VERSION: u8 = 1;
+/// Version 2 separates the two source priorities; older caches used one policy.
+const CACHE_VERSION: u8 = 2;
 /// Textures kept: 256 KB each, 64 MB at most.
 const MAX_TEXTURES: usize = 256;
 /// A picture larger than this is not decoded (a bomb, or a scan of a
@@ -38,6 +40,7 @@ pub type CoverKey = u64;
 /// What the worker needs to find an album's cover.
 struct Job {
     key: CoverKey,
+    priority: CoverPriority,
     folder: PathBuf,
     /// The album's first track with a picture in its tag.
     tagged: Option<PathBuf>,
@@ -54,6 +57,7 @@ enum Found {
 }
 
 pub struct Covers {
+    priority: CoverPriority,
     queue: Arc<Queue>,
     rx: Receiver<Found>,
     textures: HashMap<CoverKey, (egui::TextureHandle, u64)>,
@@ -83,6 +87,7 @@ impl Covers {
             log::warn!("cannot start the covers' thread: {e}");
         }
         Covers {
+            priority: CoverPriority::default(),
             queue,
             rx,
             textures: HashMap::new(),
@@ -142,7 +147,7 @@ impl Covers {
         library: &Library,
         album: &Album,
     ) -> Option<egui::TextureHandle> {
-        let key = key_of(library, album);
+        let key = key_of(library, album, self.priority);
         if let Some((texture, shown)) = self.textures.get_mut(&key) {
             *shown = ctx.cumulative_frame_nr();
             return Some(texture.clone());
@@ -158,6 +163,7 @@ impl Covers {
             .map(|t| t.path.clone());
         let job = Job {
             key,
+            priority: self.priority,
             folder: album.folder.clone(),
             tagged,
         };
@@ -177,7 +183,7 @@ impl Covers {
     /// (or no colours: a transparent picture), `None` while not known yet
     /// (asked for by `get`).
     pub fn colours(&self, library: &Library, album: &Album) -> Option<Option<[egui::Color32; 3]>> {
-        let key = key_of(library, album);
+        let key = key_of(library, album, self.priority);
         if let Some(c) = self.colours.get(&key) {
             Some(Some(*c))
         } else if self.missing.contains(&key) || self.textures.contains_key(&key) {
@@ -193,20 +199,29 @@ impl Covers {
         self.missing.clear();
     }
 
+    /// Different priorities have different keys, including queued work,
+    /// so a late result cannot replace the newly selected source.
+    pub fn set_priority(&mut self, priority: CoverPriority) {
+        self.priority = priority;
+    }
+
     /// The covers of the albums in `folder` made again (a `folder.jpg`
     /// was saved there): its time is newer than their thumbnails.
     pub fn look_again_in(&mut self, library: &Library, folder: &Path) {
         for album in library.albums.iter().filter(|a| a.folder == folder) {
-            let key = key_of(library, album);
-            self.textures.remove(&key);
-            self.colours.remove(&key);
-            self.missing.remove(&key);
+            for priority in CoverPriority::ALL {
+                let key = key_of(library, album, priority);
+                self.textures.remove(&key);
+                self.colours.remove(&key);
+                self.missing.remove(&key);
+            }
         }
     }
 
     /// Whether `album` is known to have no cover.
     pub fn is_missing(&self, library: &Library, album: &Album) -> bool {
-        self.missing.contains(&key_of(library, album))
+        self.missing
+            .contains(&key_of(library, album, self.priority))
     }
 }
 
@@ -227,7 +242,10 @@ pub fn prune(library: Arc<Library>) {
             let kept: HashSet<String> = library
                 .albums
                 .iter()
-                .map(|a| format!("{:016x}", key_of(&library, a)))
+                .flat_map(|a| {
+                    CoverPriority::ALL
+                        .map(|priority| format!("{:016x}", key_of(&library, a, priority)))
+                })
                 .collect();
             let Ok(entries) = std::fs::read_dir(&dir) else {
                 return;
@@ -255,13 +273,13 @@ pub fn prune(library: Arc<Library>) {
     }
 }
 
-/// The album's key in the cache: the cache version, its artist and title,
+/// The album's key in the cache: the cache version and priority, its artist and title,
 /// and its first file's path and time (a retagged or replaced file gets a
 /// new cover).
-fn key_of(library: &Library, album: &Album) -> CoverKey {
+fn key_of(library: &Library, album: &Album, priority: CoverPriority) -> CoverKey {
     let first = album.tracks.first().map(|&t| &library.tracks[t as usize]);
     let mut h = Fnv::default();
-    h.write(&[CACHE_VERSION]);
+    h.write(&[CACHE_VERSION, priority as u8]);
     h.write(album.key.as_bytes());
     if let Some(t) = first {
         h.write(t.path.as_os_str().as_encoded_bytes());
@@ -341,7 +359,7 @@ fn cover(job: &Job, dir: Option<&Path>) -> Option<egui::ColorImage> {
     if none.as_ref().is_some_and(|p| current(p)) {
         return None;
     }
-    let picture = from_sources(job.tagged.as_deref(), &job.folder);
+    let picture = from_sources(job.tagged.as_deref(), &job.folder, job.priority);
     let Some(picture) = picture else {
         // Known to have none only when both places could be looked at: a
         // disk not plugged in yet is looked at again next time.
@@ -366,10 +384,10 @@ fn cover(job: &Job, dir: Option<&Path>) -> Option<egui::ColorImage> {
 }
 
 /// The cover of the track at `path` no larger than `side` pixels, as the
-/// thumbnails find it: its tag's picture, else its folder's (the mini
+/// thumbnails find it, in the chosen source priority (the mini
 /// player, which shows it larger than a thumbnail).
-pub fn large(path: &Path, side: u32) -> Option<egui::ColorImage> {
-    let picture = from_sources(Some(path), path.parent()?)?;
+pub fn large(path: &Path, side: u32, priority: CoverPriority) -> Option<egui::ColorImage> {
+    let picture = from_sources(Some(path), path.parent()?, priority)?;
     let picture = if picture.width().max(picture.height()) > side {
         picture.resize(side, side, image::imageops::FilterType::Triangle)
     } else {
@@ -378,17 +396,20 @@ pub fn large(path: &Path, side: u32) -> Option<egui::ColorImage> {
     Some(color_image(&picture))
 }
 
-/// Match the file info: embedded artwork first, with the folder as a
-/// fallback when the tag has no usable picture. Singles in one folder
-/// may each have their own cover.
-fn from_sources(tagged: Option<&Path>, folder: &Path) -> Option<image::DynamicImage> {
-    tagged
-        .and_then(embedded)
-        .and_then(|bytes| decode(&bytes))
-        .or_else(|| {
-            let path = in_folder(folder)?;
-            decode(&std::fs::read(path).ok()?)
-        })
+/// Prefer the selected source, with the other as a fallback when it has
+/// no usable picture. By default, singles sharing a folder keep their
+/// own embedded covers, as shown in the file info.
+fn from_sources(
+    tagged: Option<&Path>,
+    folder: &Path,
+    priority: CoverPriority,
+) -> Option<image::DynamicImage> {
+    let tag_picture = || decode(&tagged.and_then(embedded)?);
+    let folder_picture = || decode(&std::fs::read(in_folder(folder)?).ok()?);
+    match priority {
+        CoverPriority::Tags => tag_picture().or_else(folder_picture),
+        CoverPriority::Folder => folder_picture().or_else(tag_picture),
+    }
 }
 
 /// A picture made ready for a tag (`for_tag`).
@@ -601,7 +622,7 @@ mod tests {
     /// Singles sharing a folder keep their embedded covers, even when a
     /// folder picture and thumbnails made by the old policy are present.
     #[test]
-    fn embedded_covers_override_folder_and_old_thumbnails() {
+    fn source_priority_separates_covers_and_old_thumbnails() {
         use lofty::config::WriteOptions;
         use lofty::picture::{MimeType, Picture, PictureType};
         use lofty::prelude::TagExt;
@@ -661,29 +682,60 @@ mod tests {
             old_key.write(album.key.as_bytes());
             old_key.write(track.path.as_os_str().as_encoded_bytes());
             old_key.write(&track.mtime.to_le_bytes());
-            let key = key_of(&library, album);
-            assert_ne!(key, old_key.0);
             save_jpeg(
                 &decode(&folder).unwrap(),
                 &cache.join(format!("{:016x}.jpg", old_key.0)),
             );
-            let job = Job {
-                key,
-                folder: dir.clone(),
-                tagged: track.has_cover.then(|| track.path.clone()),
-            };
-            let expected = match album.title.as_str() {
-                "red" => egui::Color32::RED,
-                "blue" => egui::Color32::BLUE,
-                _ => egui::Color32::GREEN,
-            };
-            let thumbnail = cover(&job, Some(&cache)).unwrap();
-            assert_eq!(thumbnail.pixels[0], expected, "{}", album.title);
-            let large = large(&track.path, 400).unwrap();
-            let details = crate::library::details::read(&track.path).unwrap();
-            assert_eq!(large.pixels, thumbnail.pixels);
-            assert_eq!(details.cover.unwrap().pixels, thumbnail.pixels);
-            assert!(cache.join(format!("{key:016x}.jpg")).is_file());
+            assert_ne!(
+                key_of(&library, album, CoverPriority::Tags),
+                key_of(&library, album, CoverPriority::Folder),
+            );
+            for priority in CoverPriority::ALL {
+                let key = key_of(&library, album, priority);
+                assert_ne!(key, old_key.0);
+                let job = Job {
+                    key,
+                    priority,
+                    folder: dir.clone(),
+                    tagged: track.has_cover.then(|| track.path.clone()),
+                };
+                let expected = match (priority, album.title.as_str()) {
+                    (CoverPriority::Tags, "red") => egui::Color32::RED,
+                    (CoverPriority::Tags, "blue") => egui::Color32::BLUE,
+                    _ => egui::Color32::GREEN,
+                };
+                let thumbnail = cover(&job, Some(&cache)).unwrap();
+                assert_eq!(
+                    thumbnail.pixels[0], expected,
+                    "{} {priority:?}",
+                    album.title
+                );
+                let large = large(&track.path, 400, priority).unwrap();
+                assert_eq!(large.pixels, thumbnail.pixels);
+                if priority == CoverPriority::Tags {
+                    let details = crate::library::details::read(&track.path).unwrap();
+                    assert_eq!(details.cover.unwrap().pixels, thumbnail.pixels);
+                }
+                assert!(cache.join(format!("{key:016x}.jpg")).is_file());
+            }
+            // A missing or unreadable folder picture falls back to the tag.
+            if matches!(album.title.as_str(), "red" | "blue") {
+                let no_folder = dir.join("no_folder");
+                let embedded = from_sources(Some(&track.path), &no_folder, CoverPriority::Folder);
+                assert!(embedded.is_some());
+                std::fs::create_dir_all(&no_folder).unwrap();
+                std::fs::write(no_folder.join("folder.jpg"), b"not a picture").unwrap();
+                assert_eq!(
+                    color_image(&embedded.unwrap()).pixels,
+                    color_image(
+                        &from_sources(Some(&track.path), &no_folder, CoverPriority::Folder)
+                            .unwrap()
+                    )
+                    .pixels,
+                );
+                std::fs::remove_file(no_folder.join("folder.jpg")).unwrap();
+                std::fs::remove_dir(&no_folder).unwrap();
+            }
         }
         std::fs::remove_dir_all(&dir).unwrap();
     }

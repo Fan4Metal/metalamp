@@ -482,7 +482,8 @@ impl App {
             .or_else(|| self.player.queue.current_entry().map(|e| &e.path))
             .filter(|p| self.library.track_at(p).is_none())
             .cloned();
-        self.outside.follow(ctx, path.as_deref());
+        self.outside
+            .follow(ctx, path.as_deref(), self.settings.cover_priority);
     }
 
     /// The title and the second line of the player bar: the track heard,
@@ -611,7 +612,9 @@ impl App {
         let ctx = ui.ctx().clone();
         let (title, artist, _) = self.now_playing();
         let path = self.playing_or_current_path();
-        let cover = self.mini_cover.of(&ctx, path.as_deref());
+        let cover = self
+            .mini_cover
+            .of(&ctx, path.as_deref(), self.settings.cover_priority);
         let icon = crate::ui::app_icon(&ctx, 128.0, &mut self.mini_icon);
         let now = self.now_shown(&title, &artist, cover);
         let look = crate::ui::mini::Look {
@@ -1760,6 +1763,9 @@ impl eframe::App for App {
         self.poll_scan();
         self.follow_folders(ctx);
         self.follow_dropped();
+        self.library_view
+            .covers
+            .set_priority(self.settings.cover_priority);
         self.library_view.covers.poll(ctx);
         // Minimized, eframe runs a frame only when one is due, not when the
         // window's messages wake it (the tray, the media keys, a close):

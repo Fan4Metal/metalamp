@@ -143,6 +143,7 @@ impl Spin {
 /// The cover of the track heard, read whole on a thread of its own.
 #[derive(Default)]
 pub struct Cover {
+    priority: crate::settings::CoverPriority,
     /// The file asked for last.
     path: Option<PathBuf>,
     texture: Option<TextureHandle>,
@@ -152,7 +153,12 @@ pub struct Cover {
 impl Cover {
     /// The cover of `path` once read; the one before meanwhile (the next
     /// track of an album shows no gap).
-    pub fn of(&mut self, ctx: &egui::Context, path: Option<&Path>) -> Option<TextureHandle> {
+    pub fn of(
+        &mut self,
+        ctx: &egui::Context,
+        path: Option<&Path>,
+        priority: crate::settings::CoverPriority,
+    ) -> Option<TextureHandle> {
         if let Some(rx) = &self.rx
             && let Ok(image) = rx.try_recv()
         {
@@ -161,7 +167,8 @@ impl Cover {
                 TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear));
             self.texture = image.map(|i| ctx.load_texture("mini_cover", i, options));
         }
-        if self.path.as_deref() != path {
+        if self.path.as_deref() != path || self.priority != priority {
+            self.priority = priority;
             self.path = path.map(Path::to_path_buf);
             self.rx = None;
             match path {
@@ -175,7 +182,7 @@ impl Cover {
                             .name("mini cover".into())
                             .spawn(move || {
                                 let image = crate::guard::catch(&path, || {
-                                    crate::covers::large(&path, COVER_PX)
+                                    crate::covers::large(&path, COVER_PX, priority)
                                 })
                                 .flatten();
                                 let _ = tx.send(image);

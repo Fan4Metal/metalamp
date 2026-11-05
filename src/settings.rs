@@ -75,6 +75,8 @@ pub struct Settings {
     /// The side of a cover in the grid, in points (`library::MIN_COVER`
     /// to `MAX_COVER`).
     pub cover_size: f32,
+    /// Which source of album artwork is tried first in the library and player.
+    pub cover_priority: CoverPriority,
     /// The artists' column's width and the tracks' table's height, in
     /// points.
     pub artists_width: f32,
@@ -223,6 +225,27 @@ impl MediaKeys {
             MediaKeys::Always => tr!("Always", "Всегда"),
             MediaKeys::Window => tr!("While the player is active", "Когда активно окно плеера"),
             MediaKeys::Off => tr!("Never", "Никогда"),
+        }
+    }
+}
+
+/// Which cover is preferred when both the tag and the folder have one.
+/// The other source is used when the preferred picture is absent or unreadable.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CoverPriority {
+    #[default]
+    Tags,
+    Folder,
+}
+
+impl CoverPriority {
+    pub const ALL: [Self; 2] = [Self::Tags, Self::Folder];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Tags => tr!("Tags first", "Сначала из тегов"),
+            Self::Folder => tr!("Folder first", "Сначала из папки"),
         }
     }
 }
@@ -595,6 +618,7 @@ impl Default for Settings {
             view: String::new(),
             album_view: AlbumView::Grid,
             cover_size: 152.0,
+            cover_priority: CoverPriority::default(),
             artists_width: 260.0,
             tracks_height: 300.0,
             columns: HashMap::new(),
@@ -968,6 +992,7 @@ mod tests {
                 maximized: true,
             }),
             library_folders: vec![PathBuf::from(r"D:\Music")],
+            cover_priority: CoverPriority::Folder,
             ..Settings::default()
         };
         let json = serde_json::to_string(&settings).unwrap();
@@ -976,11 +1001,12 @@ mod tests {
         assert_eq!(partial.language, LangChoice::En);
         assert!(!partial.check_updates);
         assert_eq!(partial.window, None);
+        assert_eq!(partial.cover_priority, CoverPriority::Tags);
     }
 
     #[test]
     fn a_field_that_cannot_be_read_costs_no_other() {
-        let json = r#"{"theme":"ultraviolet","visualization":7,"media_keys":"later",
+        let json = r#"{"theme":"ultraviolet","visualization":7,"media_keys":"later","cover_priority":"later",
             "repeat":"twice","album_view":null,"dsp":{"bands":[1,2]},
             "library_folders":["D:\\Music"],"volume":35,"future":{"a":1}}"#;
         let s = Settings::from_json(json.as_bytes()).unwrap();
@@ -990,6 +1016,7 @@ mod tests {
         assert_eq!(s.theme, d.theme);
         assert_eq!(s.visualization, d.visualization);
         assert_eq!(s.media_keys, d.media_keys);
+        assert_eq!(s.cover_priority, CoverPriority::Tags);
         assert_eq!(s.repeat, d.repeat);
         assert_eq!(s.album_view, d.album_view);
         assert_eq!(s.dsp, d.dsp);

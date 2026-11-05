@@ -18,7 +18,8 @@ use crate::keymap::{Action, Chord, Group, Keymap};
 use crate::palette;
 use crate::palette::{Accent, Palette, Theme, Tint, VisualColours};
 use crate::settings::{
-    ApeTag, BarLayout, EqPreset, Id3Version, Id3v1Tag, MediaKeys, Settings, Visual, WindowLayout,
+    ApeTag, BarLayout, CoverPriority, EqPreset, Id3Version, Id3v1Tag, MediaKeys, Settings, Visual,
+    WindowLayout,
 };
 use crate::ui::icons::{self, Icon};
 use crate::update::{Status, Updates, release_url, version_of};
@@ -1176,7 +1177,34 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
             },
         );
     });
-    section(ui, tr!("Playlist", "Плейлист"), |ui| playlist_rows(ui, settings));
+    section(ui, tr!("Covers", "Обложки"), |ui| {
+        row(
+            ui,
+            tr!("Source priority", "Приоритет источника"),
+            Some(tr!(
+                "For the library and player. If the preferred source has no readable cover, the other is used. The tag editor always shows the file's embedded cover first.",
+                "В библиотеке и плеере. Если в выбранном источнике нет читаемой обложки, используется другой. Редактор тегов всегда сначала показывает встроенную обложку файла."
+            )),
+            CONTROL,
+            |ui| {
+                egui::ComboBox::from_id_salt("settings_cover_priority")
+                    .selected_text(settings.cover_priority.label())
+                    .width(CONTROL - 10.0)
+                    .show_ui(ui, |ui| {
+                        for priority in CoverPriority::ALL {
+                            ui.selectable_value(
+                                &mut settings.cover_priority,
+                                priority,
+                                priority.label(),
+                            );
+                        }
+                    });
+            },
+        );
+    });
+    section(ui, tr!("Playlist", "Плейлист"), |ui| {
+        playlist_rows(ui, settings)
+    });
     section(ui, tr!("Playback", "Воспроизведение"), |ui| {
         row(
             ui,
@@ -2535,6 +2563,7 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     }
     settings.language = d.language;
     settings.bar_layout = d.bar_layout;
+    settings.cover_priority = d.cover_priority;
     settings.window_layout = d.window_layout;
     settings.visualization = d.visualization;
     settings.playlist_visualization = d.playlist_visualization;
