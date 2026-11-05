@@ -382,6 +382,17 @@ impl Player {
         self.engine.heard_samples(n, out)
     }
 
+    /// As `heard_samples`, with their side (half the left less the right)
+    /// into `side`, for the goniometer.
+    pub fn heard_stereo(
+        &self,
+        n: usize,
+        out: &mut Vec<f32>,
+        side: &mut Vec<f32>,
+    ) -> Option<crate::audio::vis::Heard> {
+        self.engine.heard_stereo(n, out, side)
+    }
+
     pub fn duration_ms(&self) -> u64 {
         self.engine.duration_ms()
     }

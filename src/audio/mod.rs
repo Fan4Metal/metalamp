@@ -156,6 +156,20 @@ impl Engine {
             .latest(n, out)
     }
 
+    /// As `heard_samples`, with the side of the same frames into `side`.
+    pub fn heard_stereo(
+        &self,
+        n: usize,
+        out: &mut Vec<f32>,
+        side: &mut Vec<f32>,
+    ) -> Option<vis::Heard> {
+        self.shared
+            .vis
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .latest_stereo(n, out, side)
+    }
+
     /// The gain of what is heard, taken at the audio thread's next turn
     /// (within 10 ms while playing).
     pub fn set_gain(&self, gain: f32) {

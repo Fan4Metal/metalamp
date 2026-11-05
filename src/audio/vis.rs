@@ -1,5 +1,7 @@
 //! The tap for the visualization: a copy of the samples written to the
-//! device, mixed to mono, by their frame index, and the device's clock, so
+//! device, mixed to mono, by their frame index, with the difference of the
+//! first two channels (the side, for the goniometer), and the device's
+//! clock, so
 //! the UI can take the samples heard at this moment (the device plays
 //! what was written up to half a second ago).
 
@@ -18,6 +20,8 @@ pub struct Heard {
 
 pub struct Tap {
     buf: Vec<f32>,
+    /// Half the left less the right, by the same index (0 for mono).
+    side: Vec<f32>,
     /// The frame index (the device's count) past the last sample pushed.
     end: u64,
     /// How many of the last frames are valid (at most `CAP`).
@@ -31,6 +35,7 @@ impl Default for Tap {
     fn default() -> Self {
         Tap {
             buf: vec![0.0; CAP],
+            side: vec![0.0; CAP],
             end: 0,
             filled: 0,
             heard: 0,
@@ -52,7 +57,14 @@ impl Tap {
         let mut frames = 0;
         for frame in samples.chunks_exact(channels) {
             let mono = frame.iter().sum::<f32>() / channels as f32;
-            self.buf[(self.end % CAP as u64) as usize] = mono;
+            let side = if channels >= 2 {
+                (frame[0] - frame[1]) / 2.0
+            } else {
+                0.0
+            };
+            let at = (self.end % CAP as u64) as usize;
+            self.buf[at] = mono;
+            self.side[at] = side;
             self.end += 1;
             frames += 1;
         }
@@ -75,13 +87,29 @@ impl Tap {
     /// they end; `None` when fewer than `n` were heard since the device
     /// started.
     pub fn latest(&self, n: usize, out: &mut Vec<f32>) -> Option<Heard> {
+        self.latest_of(&self.buf, n, out)
+    }
+
+    /// As `latest`, with the side of the same frames into `side`.
+    pub fn latest_stereo(
+        &self,
+        n: usize,
+        out: &mut Vec<f32>,
+        side: &mut Vec<f32>,
+    ) -> Option<Heard> {
+        let heard = self.latest_of(&self.buf, n, out)?;
+        self.latest_of(&self.side, n, side);
+        Some(heard)
+    }
+
+    fn latest_of(&self, buf: &[f32], n: usize, out: &mut Vec<f32>) -> Option<Heard> {
         let end = self.heard.min(self.end);
         let oldest = self.end - self.filled;
         if end < oldest + n as u64 {
             return None;
         }
         out.clear();
-        out.extend((end - n as u64..end).map(|i| self.buf[(i % CAP as u64) as usize]));
+        out.extend((end - n as u64..end).map(|i| buf[(i % CAP as u64) as usize]));
         Some(Heard {
             rate: self.rate,
             end,
@@ -123,6 +151,22 @@ mod tests {
         assert_eq!(tap.latest(2, &mut out), None);
         tap.clear();
         assert_eq!(tap.latest(1, &mut out), None);
+    }
+
+    #[test]
+    fn keeps_the_side() {
+        let mut tap = Tap::default();
+        // Left 1, right 0.5: the mid 0.75, the side 0.25; mono has none.
+        tap.push(&[1.0, 0.5, 1.0, 0.5], 2, 0);
+        tap.set_heard(2, 44100);
+        let (mut mid, mut side) = (Vec::new(), Vec::new());
+        assert!(tap.latest_stereo(2, &mut mid, &mut side).is_some());
+        assert_eq!(mid, [0.75, 0.75]);
+        assert_eq!(side, [0.25, 0.25]);
+        tap.push(&[0.3], 1, 2);
+        tap.set_heard(3, 44100);
+        tap.latest_stereo(1, &mut mid, &mut side);
+        assert_eq!((mid[0], side[0]), (0.3, 0.0));
     }
 
     #[test]
