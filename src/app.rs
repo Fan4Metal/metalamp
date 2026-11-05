@@ -43,6 +43,8 @@ pub struct App {
     about: AboutDialog,
     /// The library's statistics (F6, the library bar's chart).
     statistics: crate::ui::statistics::StatisticsView,
+    /// The drops being walked, in their order (`take_dropped`).
+    dropped: std::collections::VecDeque<std::sync::mpsc::Receiver<Vec<PathBuf>>>,
     updates: Updates,
     /// The window's handle; `None` off Windows.
     hwnd: Option<isize>,
@@ -224,6 +226,7 @@ impl App {
             player_area: egui::Rect::NOTHING,
             about,
             statistics: crate::ui::statistics::StatisticsView::from_env(),
+            dropped: Default::default(),
             updates,
             hwnd,
             taskbar: hwnd.and_then(crate::taskbar::Taskbar::new),
@@ -1111,31 +1114,53 @@ impl App {
 
     /// Files and folders dropped on the window go to the playlist: a
     /// folder as the audio files in it and its subfolders (the library
-    /// takes folders only from its own menu, `Ctrl+Shift+O`).
+    /// takes folders only from its own menu, `Ctrl+Shift+O`). Walked on a
+    /// thread of their own (a large folder on a cold disk or the network
+    /// takes seconds), `follow_dropped` takes them in.
     fn take_dropped(&mut self, ctx: &egui::Context) {
         let dropped: Vec<PathBuf> = ctx.input(|i| {
             i.raw
                 .dropped_files
                 .iter()
                 .map(|f| f.path().to_path_buf())
+                // A picture dropped while the file info is open is its cover.
+                .filter(|p| !(self.file_info.open && crate::covers::is_picture(p)))
                 .collect()
         });
-        let mut files = Vec::new();
-        for path in dropped {
-            // A picture dropped while the file info is open is its cover.
-            if self.file_info.open && crate::covers::is_picture(&path) {
-                continue;
-            }
-            if path.is_dir() {
-                files.extend(audio_in_folder(&path));
-            } else {
-                files.push(path);
-            }
+        if dropped.is_empty() {
+            return;
         }
-        // Files dropped go to the playlist's end (played if stopped).
-        let files = expand_playlists(files);
-        if !files.is_empty() {
-            self.player.enqueue(files);
+        let (send, receive) = std::sync::mpsc::channel();
+        let ctx = ctx.clone();
+        let started = std::thread::Builder::new()
+            .name("dropped".into())
+            .spawn(move || {
+                let _ = send.send(files_of_dropped(dropped));
+                ctx.request_repaint();
+            });
+        match started {
+            Ok(_) => self.dropped.push_back(receive),
+            Err(e) => log::warn!("cannot walk the files dropped: {e}"),
+        }
+    }
+
+    /// The files of the drops walked, to the playlist's end in the order
+    /// they were dropped (played if stopped).
+    fn follow_dropped(&mut self) {
+        use std::sync::mpsc::TryRecvError;
+        while let Some(walk) = self.dropped.front() {
+            match walk.try_recv() {
+                Ok(files) => {
+                    self.dropped.pop_front();
+                    if !files.is_empty() {
+                        self.player.enqueue(files);
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    self.dropped.pop_front();
+                }
+            }
         }
     }
 
@@ -1734,6 +1759,7 @@ impl eframe::App for App {
         self.updates.poll();
         self.poll_scan();
         self.follow_folders(ctx);
+        self.follow_dropped();
         self.library_view.covers.poll(ctx);
         // Minimized, eframe runs a frame only when one is due, not when the
         // window's messages wake it (the tray, the media keys, a close):
@@ -2177,6 +2203,20 @@ fn load_playlist(
         player.queue.set_current(current);
     }
     (player.queue.revision, player.queue.current())
+}
+
+/// What plays of the paths dropped, in their order: a folder as its audio
+/// files (`audio_in_folder`), a playlist as its entries.
+fn files_of_dropped(dropped: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for path in dropped {
+        if path.is_dir() {
+            files.extend(audio_in_folder(&path));
+        } else {
+            files.push(path);
+        }
+    }
+    expand_playlists(files)
 }
 
 /// The audio files in `folder` and its subfolders in Explorer's order:
