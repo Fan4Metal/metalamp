@@ -13,6 +13,7 @@ mod id3v1;
 pub mod index;
 pub mod outside;
 pub mod scan;
+pub mod summary;
 pub mod tags;
 pub mod watch;
 

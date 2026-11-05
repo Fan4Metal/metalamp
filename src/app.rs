@@ -41,6 +41,8 @@ pub struct App {
     /// (the keys are read before the panels are laid out).
     player_area: egui::Rect,
     about: AboutDialog,
+    /// The library's statistics (F6, the library bar's chart).
+    statistics: crate::ui::statistics::StatisticsView,
     updates: Updates,
     /// The window's handle; `None` off Windows.
     hwnd: Option<isize>,
@@ -221,6 +223,7 @@ impl App {
             heard: Vec::new(),
             player_area: egui::Rect::NOTHING,
             about,
+            statistics: crate::ui::statistics::StatisticsView::from_env(),
             updates,
             hwnd,
             taskbar: hwnd.and_then(crate::taskbar::Taskbar::new),
@@ -404,6 +407,7 @@ impl App {
                 self.player.enqueue(paths);
             }
             LibraryAction::Settings => self.settings_dialog.toggle(),
+            LibraryAction::Statistics => self.statistics.toggle(),
             LibraryAction::Info(track) => {
                 if let Some(t) = self.library.tracks.get(track as usize) {
                     self.info_request = Some(t.path.clone());
@@ -1008,6 +1012,7 @@ impl App {
                 }
             }
             Cmd::Settings => self.settings_dialog.toggle(),
+            Cmd::Statistics => self.statistics.toggle(),
             Cmd::About => self.about.toggle(),
         }
     }
@@ -1808,6 +1813,7 @@ impl eframe::App for App {
         }
         // A modal takes the keys while it is open.
         let modal = self.about.open
+            || self.statistics.open
             || self.file_info.open
             || self.settings_dialog.open
             || self.view_editor.open;
@@ -2099,6 +2105,9 @@ impl eframe::App for App {
             self.outside.read_again(&ctx);
         }
         self.about.show(&ctx);
+        if let Some(action) = self.statistics.show(&ctx, &self.library, &self.stats) {
+            self.library_action(action, &ctx);
+        }
         if self
             .view_editor
             .show(&ctx, &mut self.settings, &self.library, &self.stats)

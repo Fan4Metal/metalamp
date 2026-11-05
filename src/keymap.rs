@@ -53,6 +53,7 @@ pub enum Cmd {
     GoTo(bool),
     /// The whole library (0) or a view, as its menu lists them.
     View(u8),
+    Statistics,
     Settings,
     About,
 }
@@ -429,6 +430,7 @@ actions! {
     View6 "view_6" Library Cmd::View(6), [Chord::ctrl(Key::Num7)];
     View7 "view_7" Library Cmd::View(7), [Chord::ctrl(Key::Num8)];
     View8 "view_8" Library Cmd::View(8), [Chord::ctrl(Key::Num9)];
+    Statistics "statistics" Library Cmd::Statistics, [Chord::key(Key::F6)];
     Settings "settings" Library Cmd::Settings, [Chord::key(Key::F5), Chord::ctrl(Key::P)];
     About "about" Library Cmd::About, [Chord::key(Key::F1)];
 }
@@ -513,6 +515,7 @@ impl Action {
             Action::View6 => tr!("The sixth view", "Шестое представление"),
             Action::View7 => tr!("The seventh view", "Седьмое представление"),
             Action::View8 => tr!("The eighth view", "Восьмое представление"),
+            Action::Statistics => tr!("Library statistics", "Статистика библиотеки"),
             Action::Settings => tr!("Settings", "Настройки"),
             Action::About => tr!("About", "О программе"),
         }

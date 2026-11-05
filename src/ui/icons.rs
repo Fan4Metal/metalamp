@@ -153,6 +153,8 @@ pub enum Icon {
     /// Two beamed notes, filled: a track without a cover, drawn large. Its
     /// parts overlap, so `color` is to be opaque.
     Notes,
+    /// Three columns of a chart on a base line: the library's statistics.
+    Chart,
 }
 
 impl Icon {
@@ -229,6 +231,7 @@ impl Icon {
         Icon::Mini,
         Icon::Playlists,
         Icon::Notes,
+        Icon::Chart,
     ];
 }
 
@@ -354,6 +357,20 @@ pub fn paint(painter: &Painter, icon: Icon, c: Pos2, size: f32, color: Color32, 
                 &[at(0.0, 0.0), at(2.8, 0.0), at(2.8, 9.4), at(0.0, 9.4)],
                 color,
             ));
+        }
+        Icon::Chart => {
+            // Filled columns of three heights, rounded at the top, standing
+            // on a line across.
+            let top = egui::CornerRadius {
+                nw: (0.9 * k).round() as u8,
+                ne: (0.9 * k).round() as u8,
+                sw: 0,
+                se: 0,
+            };
+            for (x, h) in [(-5.6, 5.5), (-1.4, 10.5), (2.8, 7.5)] {
+                painter.rect_filled(rect(x, 4.6 - h, 2.8, h), top, color);
+            }
+            painter.line_segment([p(-6.8, 5.9), p(6.8, 5.9)], line);
         }
         Icon::Info => {
             painter.circle_stroke(c, 6.0 * k, line);

@@ -74,6 +74,78 @@ pub fn size(bytes: u64) -> String {
     size_in(lang(), bytes)
 }
 
+/// A count with its thousands apart: `4,942` / `4 942` (a no-break space).
+pub fn number_in(lang: Lang, n: u64) -> String {
+    let digits = n.to_string();
+    let sep = match lang {
+        Lang::En => ",",
+        Lang::Ru => "\u{a0}",
+    };
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push_str(sep);
+        }
+        out.push(c);
+    }
+    out
+}
+
+pub fn number(n: u64) -> String {
+    number_in(lang(), n)
+}
+
+/// A count on a chart's axis: in full under 10,000, else in thousands or
+/// millions (`12K` / `12 тыс.`, `1.5M` / `1,5 млн`).
+pub fn compact_in(lang: Lang, n: u64) -> String {
+    if n < 10_000 {
+        return number_in(lang, n);
+    }
+    let (value, en, ru) = if n < 1_000_000 {
+        (n as f64 / 1000.0, "K", "\u{a0}тыс.")
+    } else {
+        (n as f64 / 1_000_000.0, "M", "\u{a0}млн")
+    };
+    let text = if value < 100.0 && value.fract() >= 0.05 {
+        format!("{value:.1}")
+    } else {
+        format!("{value:.0}")
+    };
+    match lang {
+        Lang::En => format!("{text}{en}"),
+        Lang::Ru => format!("{}{ru}", text.replace('.', ",")),
+    }
+}
+
+pub fn compact(n: u64) -> String {
+    compact_in(lang(), n)
+}
+
+/// A share in whole percent (a no-break space before the sign), a small
+/// one not shown as none and a nearly whole one not as whole: `0.4 %`,
+/// `37 %`, `99 %`.
+pub fn percent_in(lang: Lang, part: u64, whole: u64) -> String {
+    if whole == 0 {
+        return "0\u{a0}%".to_owned();
+    }
+    let p = part as f64 * 100.0 / whole as f64;
+    let text = if part > 0 && p < 1.0 {
+        format!("{p:.1}")
+    } else if part < whole {
+        format!("{:.0}", p.round().min(99.0))
+    } else {
+        "100".to_owned()
+    };
+    match lang {
+        Lang::En => format!("{text}\u{a0}%"),
+        Lang::Ru => format!("{}\u{a0}%", text.replace('.', ",")),
+    }
+}
+
+pub fn percent(part: u64, whole: u64) -> String {
+    percent_in(lang(), part, whole)
+}
+
 /// A short time in milliseconds with one decimal: `0.4 ms` / `0,4 мс`.
 pub fn millis_in(lang: Lang, secs: f64) -> String {
     let text = format!("{:.1}", secs * 1000.0);
@@ -197,6 +269,22 @@ mod tests {
         assert_eq!(size_in(Lang::En, 1536), "1.50 KB");
         assert_eq!(millis_in(Lang::Ru, 0.00042), "0,4 мс");
         assert_eq!(millis_in(Lang::En, 0.036), "36.0 ms");
+    }
+
+    #[test]
+    fn counts_and_shares() {
+        assert_eq!(number_in(Lang::En, 4942), "4,942");
+        assert_eq!(number_in(Lang::Ru, 1_234_567), "1\u{a0}234\u{a0}567");
+        assert_eq!(number_in(Lang::En, 999), "999");
+        assert_eq!(compact_in(Lang::En, 9999), "9,999");
+        assert_eq!(compact_in(Lang::En, 12_000), "12K");
+        assert_eq!(compact_in(Lang::En, 12_500), "12.5K");
+        assert_eq!(compact_in(Lang::Ru, 1_500_000), "1,5\u{a0}млн");
+        assert_eq!(percent_in(Lang::En, 1, 3), "33\u{a0}%");
+        assert_eq!(percent_in(Lang::Ru, 1, 300), "0,3\u{a0}%");
+        assert_eq!(percent_in(Lang::En, 999, 1000), "99\u{a0}%");
+        assert_eq!(percent_in(Lang::En, 5, 5), "100\u{a0}%");
+        assert_eq!(percent_in(Lang::En, 0, 0), "0\u{a0}%");
     }
 
     #[test]

@@ -17,6 +17,7 @@ pub mod playlist;
 pub mod settings;
 pub mod spectrum;
 pub mod start;
+pub mod statistics;
 pub mod status;
 pub mod synthwave;
 pub mod table;

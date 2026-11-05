@@ -68,6 +68,8 @@ pub enum LibraryAction {
     Info(TrackId),
     /// Open the settings window.
     Settings,
+    /// Open the library's statistics.
+    Statistics,
     /// Open the view editor for a new view.
     NewView,
     /// Open the view editor for the view of this name.
@@ -1171,6 +1173,19 @@ fn top_bar(
         .clicked()
         {
             actions.push(LibraryAction::Settings);
+        }
+        if crate::ui::icon_button(
+            ui,
+            Icon::Chart,
+            false,
+            &with_key(
+                tr!("Library statistics", "Статистика библиотеки"),
+                Cmd::Statistics,
+            ),
+        )
+        .clicked()
+        {
+            actions.push(LibraryAction::Statistics);
         }
         ui.add_space(8.0);
         let folders = crate::ui::icon_button(

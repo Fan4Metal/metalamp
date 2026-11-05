@@ -30,6 +30,7 @@ MetalAMP is an audio player for Windows built around a media library: the music 
 - **Sound processing**: the same loudness for every track, a ten-band equalizer, an enhancer, crossfade and a limiter, all off by default (see [Sound processing](#sound-processing)).
 - **Visualizations**: spectrum analyzers, ridges, a spectrogram, synthwave, lightning, a vortex, a waveform, an oscilloscope, the notes and a piano (see [Visualizations](#visualizations)).
 - **A playlist** beside the library, kept between runs, and saved playlists (see [The playlist](#the-playlist)).
+- **Library statistics**: the numbers of tracks, albums, artists and genres, the length and size, the plays, and charts of the bit rates, formats, years, genres, artists and the tracks played most (see [Statistics](#statistics)).
 - **File info and tags**: every field of a track's tag, its cover and its audio properties, in a window opened by a click on the player's cover or `I`, where the tags of one file or of several are also edited (see [File info](#file-info)).
 - **Mini player**: the cover, or a turning vinyl record, in a small window over the others (see [Mini player](#mini-player)).
 - **One window**: files opened from Explorer go to the window already open.
@@ -111,6 +112,27 @@ Albums are grouped by album artist (else artist) and album title, whatever the y
 - **A rule** is a field (genre, artist, album artist, album, title, year, folder, bit rate, length in minutes, days since the track came into the library, plays, days since the last play, rating, a cover in the tag), an operation (contains, is, starts with, is empty, less than, between, inside a folder…) and a value. Texts are compared without regard to case, and a text field's value has a menu of the values the library holds, so a genre is picked as the tags spell it.
 - **The editor** says, while it is open, how many artists, albums and tracks the rules leave.
 - **An example**: a view "Soundtracks" with the rule *genre contains soundtrack* and a view "Everything else" with *genre does not contain soundtrack* split the library in two; an artist with albums of both kinds is in both views, with the counts of each.
+
+</details>
+
+### Statistics
+
+The chart button in the library's bar (or `F6`) opens the library's statistics: tiles with the numbers of tracks, albums, artists and genres, the total length and size, the plays and the time heard, and charts under them. Every bar and slice shows its numbers under the pointer; a click on an artist or a track goes to it in the library. The cross, `Esc`, `Enter` or a click outside closes the window.
+
+<details>
+<summary>The charts</summary>
+
+- **Bit rate**: the tracks by bit rate, from under 128 kbps to 320 and lossless files.
+- **Formats**: the share of each kind of file, with its size.
+- **Albums by year**: from the earliest year to the latest.
+- **The library's growth**: the tracks in the library over the months, by when their files came into it (the files' time for a library's first reading).
+- **Track lengths**: the tracks by length in minutes.
+- **Genres** and **Artists**: the ten with the most tracks.
+- **Listening**: the share of the library played at least once, and the tracks played by how long ago they were last heard.
+- **Ratings**: the tracks by their stars.
+- **Played most**: the ten tracks and the ten artists heard most often.
+- **Tags**: the share of tracks whose tags have a year, a genre, an album artist, a track number and a cover.
+- **Sample rate**: the tracks by sample rate, and the numbers of stereo and mono ones.
 
 </details>
 
@@ -356,6 +378,7 @@ The keys below are the defaults; those of the player's actions can be changed in
 | `Ctrl+M` | Mini player: the cover with the least of the controls, over the other windows (again, or `Esc`: the whole window back); also the button left of the window's buttons |
 | `Ctrl+T` | Keep the window over the other windows (again: no longer) |
 | `F1` | About (also a click on the icon in the title row) |
+| `F6` | Library statistics (also the chart button in the library's bar) |
 | `F5`, `Ctrl+P` | Settings (also the gear in the library's bar) |
 
 </details>
