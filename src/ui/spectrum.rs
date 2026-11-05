@@ -177,7 +177,7 @@ impl Analyzer {
         let pitch = rect.width() / bands as f32;
         let bar_w = (pitch - BAR_GAP).max(1.0);
         let top_room = rect.height() - PEAK_HEIGHT;
-        let colours = palette::visual();
+        let colours = palette::visual_for(crate::settings::Visual::Spectrum);
         let mut mesh = Mesh::default();
         for (b, (&h, &(peak, _))) in self.bars.iter().zip(&self.peaks).enumerate() {
             let x0 = rect.left() + pitch * b as f32 + (pitch - bar_w) / 2.0;
@@ -224,7 +224,7 @@ impl Analyzer {
         let count = ((rect.height() + LED_GAP) / (LED_SEGMENT + LED_GAP)).max(1.0) as usize;
         // The segments stretched to fill the height.
         let step = (rect.height() + LED_GAP) / count as f32;
-        let colours = palette::visual();
+        let colours = palette::visual_for(crate::settings::Visual::Led);
         let mut mesh = Mesh::default();
         for (b, (&h, &(peak, _))) in self.bars.iter().zip(&self.peaks).enumerate() {
             let x0 = rect.left() + pitch * b as f32 + (pitch - bar_w) / 2.0;
@@ -263,7 +263,7 @@ impl Analyzer {
         let bar_w = (pitch - BAR_GAP).max(1.0);
         let cy = rect.center().y;
         let room = rect.height() / 2.0 - PEAK_HEIGHT - 0.5;
-        let colours = palette::visual();
+        let colours = palette::visual_for(crate::settings::Visual::Mirror);
         let mut mesh = Mesh::default();
         for (b, (&h, &(peak, _))) in self.bars.iter().zip(&self.peaks).enumerate() {
             let x0 = rect.left() + pitch * b as f32 + (pitch - bar_w) / 2.0;
@@ -318,7 +318,7 @@ impl Analyzer {
         tops.insert(0, pos2(rect.left(), tops[0].y));
         tops.push(pos2(rect.right(), tops[tops.len() - 1].y));
         let line = smooth(&tops, rect.top(), rect.bottom());
-        let colours = palette::visual();
+        let colours = palette::visual_for(crate::settings::Visual::Curve);
         let place = move |p: Pos2| ((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
         let level = move |p: Pos2| ((rect.bottom() - p.y) / room).clamp(0.0, 1.0);
         let mut mesh = Mesh::default();

@@ -217,7 +217,7 @@ impl Lightning {
 
     pub fn paint(&self, painter: &Painter, rect: Rect) {
         let painter = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
-        let colours = palette::visual();
+        let colours = palette::visual_for(crate::settings::Visual::Lightning);
         let centre = rect.center();
         let place = move |p: Pos2| ((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
 

@@ -152,7 +152,7 @@ impl Goniometer {
         let n = self.side;
         let half = n as f32 / 2.0;
         let gain = (FILL / self.peak.max(1e-4)).clamp(1.0, MOST_GAIN) * half;
-        let colours = palette::visual();
+        let colours = palette::visual_for(crate::settings::Visual::Goniometer);
         // Match the exposure to the phosphor decay, relative to 50 Hz.
         // Brightness then stays the same at different frame rates, as
         // well as at different audio sample rates.
@@ -215,7 +215,7 @@ impl Goniometer {
         if n == 0 {
             return;
         }
-        let colours = palette::visual();
+        let colours = palette::visual_for(crate::settings::Visual::Goniometer);
         let ground = palette::list_bg();
         let line = palette::text_weak().gamma_multiply(0.35);
         let d = rect.height().min(rect.width());

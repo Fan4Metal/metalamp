@@ -353,7 +353,9 @@ fn visual_display(
         // they are tried one after another.
         ui.separator();
         let mut colours = now.look.visual;
-        ui.horizontal(|ui| crate::ui::settings::visual_colours_row(ui, &mut colours, now.look));
+        ui.horizontal(|ui| {
+            crate::ui::settings::visual_colours_row(ui, &mut colours, now.look, now.visual)
+        });
         if colours != now.look.visual {
             cmds.push(BarCmd::VisualColours(colours));
         }

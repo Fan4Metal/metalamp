@@ -78,7 +78,7 @@ impl Aurora {
 
     pub fn paint(&self, painter: &Painter, rect: Rect) {
         let painter = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
-        let colours = palette::visual();
+        let colours = palette::visual_for(crate::settings::Visual::Aurora);
         let dark = colours.is_dark();
         let t = self.time;
         let (w, h) = (rect.width(), rect.height());

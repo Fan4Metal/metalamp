@@ -243,7 +243,7 @@ impl Vortex {
         if wave.is_empty() || w < 2 {
             return;
         }
-        let colours = palette::visual();
+        let colours = palette::visual_for(crate::settings::Visual::Vortex);
         let bright = palette::text_bright();
         let light = ((self.level - 0.1) / 0.8).clamp(0.0, 1.0);
         let weight = GAIN * (0.25 + 0.75 * light);

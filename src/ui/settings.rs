@@ -1165,14 +1165,15 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
             ui,
             tr!("Visualization's colours", "Цвета визуализации"),
             Some(tr!(
-                "Apart from the theme: the accent's shades, a rainbow across the frequencies, Winamp's green to red or fire by the level, the colours of the cover of the track playing across the frequencies (the accent's shades for a track without one), or one's own colour's shades.",
-                "Отдельно от темы: оттенки акцента, радуга по частотам, зелёный-жёлтый-красный как в Winamp или огонь по уровню, цвета обложки играющего трека по частотам (для трека без обложки — оттенки акцента), либо оттенки своего цвета."
+                "Apart from the theme: each visualization's own colours, chosen for it, the accent's shades, a rainbow across the frequencies, Winamp's green to red or fire by the level, the colours of the cover of the track playing across the frequencies (the accent's shades for a track without one), or one's own colour's shades.",
+                "Отдельно от темы: свои цвета у каждой визуализации, подобранные для неё, оттенки акцента, радуга по частотам, зелёный-жёлтый-красный как в Winamp или огонь по уровню, цвета обложки играющего трека по частотам (для трека без обложки — оттенки акцента), либо оттенки своего цвета."
             )),
             ACCENTS_WIDTH,
             |ui| {
                 let look = settings.look();
                 ui.add_enabled_ui(settings.visual_enabled, |ui| {
-                    visual_colours(ui, &mut settings.visual_colours, look);
+                    let visual = settings.visual();
+                    visual_colours(ui, &mut settings.visual_colours, look, visual);
                 });
             },
         );
@@ -2177,9 +2178,9 @@ fn playlist_rows(ui: &mut Ui, settings: &mut Settings) {
 
 /// The visualization's colours as round swatches, each painted with its
 /// gradient (`gradient_disc`: up the level, across the place), the chosen
-/// one ringed; last the user's own colour, its picker starting from the
-/// accent.
-fn visual_colours(ui: &mut Ui, colours: &mut VisualColours, look: palette::Look) {
+/// one ringed (`Own` showing `visual`'s); last the user's own colour, its
+/// picker starting from the accent.
+fn visual_colours(ui: &mut Ui, colours: &mut VisualColours, look: palette::Look, visual: Visual) {
     ui.spacing_mut().item_spacing.x = 5.0;
     let mut own = match *colours {
         VisualColours::Custom(c) => Accent::Custom(c),
@@ -2195,44 +2196,47 @@ fn visual_colours(ui: &mut Ui, colours: &mut VisualColours, look: palette::Look)
         *colours = VisualColours::Custom(c);
     }
     for &c in VisualColours::ALL.iter().rev() {
-        let (rect, response) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
-        let response = response.on_hover_text(c.label());
-        let mut shades = Palette::of(palette::Look { visual: c, ..look }).visual;
-        if c == VisualColours::Cover {
-            shades = palette::with_cover(shades);
-        }
-        swatch(ui, rect, *colours == c, response.hovered(), |p, centre, r| {
-            gradient_disc(p, centre, r, shades);
-        });
-        if response.clicked() {
-            *colours = c;
-        }
+        visual_swatch(ui, colours, c, look, visual);
     }
 }
 
 /// The visualization's colours in the display's menu, left to right: the
 /// ready ones, then the user's own once chosen (it is picked in the
-/// settings window).
+/// settings window); `Own` shows `visual`'s.
 pub(crate) fn visual_colours_row(
     ui: &mut Ui,
     colours: &mut VisualColours,
     look: palette::Look,
+    visual: Visual,
 ) {
     ui.spacing_mut().item_spacing.x = 5.0;
     let own = matches!(*colours, VisualColours::Custom(_)).then_some(*colours);
     for c in VisualColours::ALL.into_iter().chain(own) {
-        let (rect, response) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
-        let response = response.on_hover_text(c.label());
-        let mut shades = Palette::of(palette::Look { visual: c, ..look }).visual;
-        if c == VisualColours::Cover {
-            shades = palette::with_cover(shades);
-        }
-        swatch(ui, rect, *colours == c, response.hovered(), |p, centre, r| {
-            gradient_disc(p, centre, r, shades);
-        });
-        if response.clicked() {
-            *colours = c;
-        }
+        visual_swatch(ui, colours, c, look, visual);
+    }
+}
+
+/// The swatch of `c`, chosen by a click.
+fn visual_swatch(
+    ui: &mut Ui,
+    colours: &mut VisualColours,
+    c: VisualColours,
+    look: palette::Look,
+    visual: Visual,
+) {
+    let (rect, response) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
+    let response = response.on_hover_text(c.label());
+    let mut shades = Palette::of(palette::Look { visual: c, ..look }).visual;
+    match c {
+        VisualColours::Cover => shades = palette::with_cover(shades),
+        VisualColours::Own => shades = palette::with_own(shades, visual),
+        _ => {}
+    }
+    swatch(ui, rect, *colours == c, response.hovered(), |p, centre, r| {
+        gradient_disc(p, centre, r, shades);
+    });
+    if response.clicked() {
+        *colours = c;
     }
 }
 

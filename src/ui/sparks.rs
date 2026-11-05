@@ -171,7 +171,7 @@ impl Sparks {
 
     pub fn paint(&self, painter: &Painter, rect: Rect) {
         let painter = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
-        let colours = palette::visual();
+        let colours = palette::visual_for(crate::settings::Visual::Sparks);
         let dark = colours.is_dark();
         let hot = Color32::from_rgb(255, 247, 225);
         let mut mesh = Mesh::default();

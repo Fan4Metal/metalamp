@@ -524,7 +524,7 @@ impl Visualizer {
         let height = rect.height() * RIDGE_HEIGHT;
         let spacing = (rect.height() - height - 2.0) / (lines - 1).max(1) as f32;
         let ground = palette::list_bg();
-        let colours = palette::visual();
+        let colours = palette::visual_for(Visual::Ridges);
         let cx = rect.center().x;
         for (i, line) in self.ridges.iter().enumerate() {
             let age = n - 1 - i;
@@ -584,7 +584,7 @@ impl Visualizer {
         }
         let rise = STRATA_SPACING * STRATA_RISE;
         let ground = palette::list_bg();
-        let colours = palette::visual();
+        let colours = palette::visual_for(Visual::Strata);
         let left = rect.right() - (n - 1) as f32 * STRATA_PITCH;
         for band in (0..bands).rev() {
             let depth = band as f32 / (bands - 1).max(1) as f32;
@@ -630,7 +630,7 @@ impl Visualizer {
         let room = floor - rect.top() - 1.0;
         let pitch = rect.width() / 12.0;
         let bar_w = (pitch * 0.62).clamp(2.0, 36.0);
-        let colours = palette::visual();
+        let colours = palette::visual_for(Visual::Chroma);
         let loudest = self
             .notes
             .chroma
@@ -688,7 +688,7 @@ impl Visualizer {
         let keys_top = rect.bottom() - (rect.height() * PIANO_KEYS).max(8.0);
         let floor = keys_top - 2.0;
         let room = (floor - rect.top()).max(1.0);
-        let colours = palette::visual();
+        let colours = palette::visual_for(Visual::Piano);
         let level = |m: u8| {
             self.notes
                 .keys
@@ -820,7 +820,7 @@ impl Visualizer {
         painter.hline(rect.x_range(), cy, Stroke::new(1.0, palette::line()));
         let mut mesh = Mesh::default();
         let n = self.wave.len();
-        let colours = palette::visual();
+        let colours = palette::visual_for(Visual::Waveform);
         for (i, &[peak, rms]) in self.wave.iter().enumerate() {
             let x1 = rect.right() - WAVE_PITCH * (n - 1 - i) as f32;
             let x0 = (x1 - WAVE_PITCH).max(rect.left());
@@ -866,7 +866,7 @@ impl Visualizer {
         // A glow under the line, as a tube's trace; each point coloured by
         // its place (a rainbow along the line) or, when the colours tell
         // the level, by how far it swings.
-        let colours = palette::visual();
+        let colours = palette::visual_for(Visual::Scope);
         let colour_at = move |p: egui::Pos2, top: bool| {
             let place = (p.x - rect.left()) / rect.width();
             let level = if colours.by_level() {
@@ -895,7 +895,7 @@ impl Visualizer {
             return;
         };
         let cap = columns(rect.width(), GRAM_PITCH);
-        let visual = palette::visual();
+        let visual = palette::visual_for(Visual::Spectrogram);
         let ground = palette::list_bg();
         // Each band's colours, from the ground up: the floor's, the top's
         // and the peaks' at its place (a rainbow from the bass up), or

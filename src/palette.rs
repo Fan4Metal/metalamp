@@ -16,6 +16,8 @@ use std::sync::RwLock;
 use egui::Color32;
 use serde::{Deserialize, Serialize};
 
+use crate::settings::Visual;
+
 const fn rgb(r: u8, g: u8, b: u8) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
@@ -60,15 +62,19 @@ pub struct Look {
     pub visual: VisualColours,
 }
 
-/// The visualization's colours, apart from the theme's: the accent's
-/// shades (the default), a rainbow across the frequencies, Winamp's green
-/// to red by the level, fire by the level, the colours of the cover of the
-/// track playing (`set_cover`) across the frequencies, or the user's own
-/// colour's shades. Kept by name, `rainbow` or `#12AB9F`.
+/// The visualization's colours, apart from the theme's: each
+/// visualization's own (`Own`, the default: `scheme`), the accent's
+/// shades, a rainbow across the frequencies, Winamp's green to red by the
+/// level, fire by the level, the colours of the cover of the track playing
+/// (`set_cover`) across the frequencies, or the user's own colour's
+/// shades. Kept by name, `rainbow` or `#12AB9F`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub enum VisualColours {
+    /// Colours chosen for each visualization (`scheme`), the same on any
+    /// dark theme; made readable on a light one.
     #[default]
+    Own,
     Accent,
     Rainbow,
     Winamp,
@@ -94,7 +100,8 @@ impl From<VisualColours> for String {
 
 impl VisualColours {
     /// The ready ones (not the user's own).
-    pub const ALL: [VisualColours; 5] = [
+    pub const ALL: [VisualColours; 6] = [
+        VisualColours::Own,
         VisualColours::Accent,
         VisualColours::Rainbow,
         VisualColours::Winamp,
@@ -104,6 +111,7 @@ impl VisualColours {
 
     pub fn name(self) -> String {
         let name = match self {
+            VisualColours::Own => "own",
             VisualColours::Accent => "accent",
             VisualColours::Rainbow => "rainbow",
             VisualColours::Winamp => "winamp",
@@ -123,6 +131,10 @@ impl VisualColours {
 
     pub fn label(self) -> &'static str {
         match self {
+            VisualColours::Own => tr!(
+                "Each visualization's own",
+                "Свои у каждой визуализации"
+            ),
             VisualColours::Accent => tr!("Of the accent", "Из цвета акцента"),
             VisualColours::Rainbow => tr!("Rainbow", "Радуга"),
             VisualColours::Winamp => tr!("Winamp", "Как в Winamp"),
@@ -137,6 +149,278 @@ impl VisualColours {
 const WINAMP_STOPS: [(f32, u32); 3] = [(0.0, 0x1c9e2a), (0.55, 0xd9cf26), (1.0, 0xe2311d)];
 /// Fire, by the level: a dark red, orange, yellow.
 const FIRE_STOPS: [(f32, u32); 3] = [(0.0, 0x5e0b02), (0.5, 0xe2520c), (1.0, 0xffdc55)];
+
+/// A visualization's own colours: rows at levels from the floor (0) to the
+/// top (1), each a gradient across the place (the bass or the left edge
+/// first), and the peaks' across; `by_level` as `VisualPalette::by_level`.
+struct Scheme {
+    rows: &'static [(f32, &'static [u32])],
+    peak: &'static [u32],
+    by_level: bool,
+}
+
+/// The most rows and colours across a scheme may have.
+const MOST_ROWS: usize = 5;
+const MOST_ACROSS: usize = 7;
+
+/// The colours chosen for each visualization (`VisualColours::Own`), for a
+/// dark ground.
+fn scheme(visual: Visual) -> Scheme {
+    match visual {
+        // Neon: magenta at the bass, violet, cyan at the treble.
+        Visual::Spectrum | Visual::Off => Scheme {
+            rows: &[
+                (0.0, &[0x4a0f5e, 0x24166e, 0x08406a]),
+                (0.55, &[0xd61c9e, 0x6c3df2, 0x169fe0]),
+                (1.0, &[0xff6ad5, 0xa98cff, 0x6ff0ff]),
+            ],
+            peak: &[0xffe0f6, 0xece6ff, 0xe0fdff],
+            by_level: false,
+        },
+        // A hi-fi's meter: green, then yellow, orange and red at the top.
+        Visual::Led => Scheme {
+            rows: &[
+                (0.0, &[0x18c850]),
+                (0.5, &[0x5ee83a]),
+                (0.7, &[0xffd21e]),
+                (0.85, &[0xff8a1a]),
+                (1.0, &[0xff2e2e]),
+            ],
+            peak: &[0xffece0],
+            by_level: true,
+        },
+        // The sea: turquoise, azure, indigo.
+        Visual::Curve => Scheme {
+            rows: &[
+                (0.0, &[0x06324f, 0x063a5a, 0x1c2a60]),
+                (1.0, &[0x2cf0c8, 0x34b4ff, 0x8f80ff]),
+            ],
+            peak: &[0xd0fff4, 0xd4f0ff, 0xe6e0ff],
+            by_level: false,
+        },
+        // A sunset: amber, rose, violet.
+        Visual::Mirror => Scheme {
+            rows: &[
+                (0.0, &[0x5a1800, 0x580a2c, 0x2c0e58]),
+                (1.0, &[0xffab2e, 0xff3f80, 0xa95eff]),
+            ],
+            peak: &[0xffe6bf, 0xffcde2, 0xe9dbff],
+            by_level: false,
+        },
+        // Moonlight on ice: the lines bright, almost white.
+        Visual::Ridges => Scheme {
+            rows: &[
+                (0.0, &[0x1a4a86, 0x24589c, 0x363c98]),
+                (1.0, &[0xa8eeff, 0xeefaff, 0xcfc8ff]),
+            ],
+            peak: &[0xffffff],
+            by_level: false,
+        },
+        // Dusk: coral bass in front, orange, gold at the back.
+        Visual::Strata => Scheme {
+            rows: &[
+                (0.0, &[0x4a0e36, 0x52200c, 0x4c4410]),
+                (1.0, &[0xff5b7f, 0xffa040, 0xffe46a]),
+            ],
+            peak: &[0xffe0e8, 0xffecd6, 0xfff8d8],
+            by_level: false,
+        },
+        // A thermal camera's: violet, crimson, orange, pale yellow.
+        Visual::Spectrogram => Scheme {
+            rows: &[
+                (0.0, &[0x2c0a5e]),
+                (0.3, &[0x8a226a]),
+                (0.6, &[0xe65d2f]),
+                (1.0, &[0xfcf4a2]),
+            ],
+            peak: &[0xffffff],
+            by_level: true,
+        },
+        // Outrun: the sun from yellow to hot pink, the grid cyan at the
+        // sides and magenta in the middle.
+        Visual::Synthwave => Scheme {
+            rows: &[
+                (0.0, &[0x2a0a5a, 0x3a0a4a, 0x2a0a5a]),
+                (0.45, &[0xff2a8a, 0xff2a8a, 0xff2a8a]),
+                (0.85, &[0x3ad8ff, 0xff3cd0, 0x3ad8ff]),
+                (1.0, &[0xffe45c, 0xffb04a, 0xffe45c]),
+            ],
+            peak: &[0xfff2c8],
+            by_level: false,
+        },
+        // An electric arc: cyan at the ends, violet at the core.
+        Visual::Lightning => Scheme {
+            rows: &[
+                (0.0, &[0x10306a, 0x2a1a6a, 0x10306a]),
+                (1.0, &[0x5fdcff, 0xb08cff, 0x5fdcff]),
+            ],
+            peak: &[0xf0f6ff],
+            by_level: false,
+        },
+        // Psychedelic: pink, blue, mint.
+        Visual::Vortex => Scheme {
+            rows: &[
+                (0.0, &[0x40082a, 0x14205a, 0x06402e]),
+                (1.0, &[0xff4fa8, 0x6f7dff, 0x2effc4]),
+            ],
+            peak: &[0xffffff],
+            by_level: false,
+        },
+        // Flames: embers, red, orange, yellow, white-hot.
+        Visual::Fire => Scheme {
+            rows: &[
+                (0.0, &[0x2a0802]),
+                (0.3, &[0x9e1e04]),
+                (0.55, &[0xe85a0a]),
+                (0.8, &[0xffb22a]),
+                (1.0, &[0xfff2b0]),
+            ],
+            peak: &[0xfff8e6],
+            by_level: true,
+        },
+        // A welder's sparks: red-orange, amber, pale gold.
+        Visual::Sparks => Scheme {
+            rows: &[
+                (0.0, &[0x5a1a04, 0x5a3604, 0x56501c]),
+                (1.0, &[0xff5a1f, 0xffb52e, 0xfff27a]),
+            ],
+            peak: &[0xfff6e6],
+            by_level: false,
+        },
+        // The aurora's own: green, teal, violet higher up.
+        Visual::Aurora => Scheme {
+            rows: &[
+                (0.0, &[0x0a4a2a, 0x0a4646, 0x2e1452]),
+                (1.0, &[0x4dff9a, 0x3ff0e0, 0xc27cff]),
+            ],
+            peak: &[0xdcffe9, 0xd9fffa, 0xf0e0ff],
+            by_level: false,
+        },
+        // Indigo peaks round an ice-blue middle.
+        Visual::Waveform => Scheme {
+            rows: &[
+                (0.0, &[0x5a2ee0, 0x3a5ef0, 0x1e8ef0]),
+                (1.0, &[0xb48cff, 0x7cc8ff, 0x7ff6ff]),
+            ],
+            peak: &[0xffffff],
+            by_level: false,
+        },
+        // An oscilloscope's green phosphor, brighter as it swings.
+        Visual::Scope => Scheme {
+            rows: &[(0.0, &[0x14a040]), (1.0, &[0xb4ffcc])],
+            peak: &[0xe8fff0],
+            by_level: true,
+        },
+        // An amber phosphor, as a studio's meter.
+        Visual::Goniometer => Scheme {
+            rows: &[(0.0, &[0x5a2e00]), (1.0, &[0xffc860])],
+            peak: &[0xfff0c8],
+            by_level: false,
+        },
+        // A colour wheel round the twelve notes.
+        Visual::Chroma => Scheme {
+            rows: &[
+                (
+                    0.0,
+                    &[0x591b1b, 0x59401b, 0x40541b, 0x1b5438, 0x1b4659, 0x2a2559, 0x512059],
+                ),
+                (
+                    1.0,
+                    &[0xff4d4d, 0xffb84d, 0xb8f04d, 0x4df0a0, 0x4dc8ff, 0x7a6bff, 0xe85dff],
+                ),
+            ],
+            peak: &[0xffffff],
+            by_level: false,
+        },
+        // Stage light on the keys: cyan, blue, orchid up the keyboard.
+        Visual::Piano => Scheme {
+            rows: &[
+                (0.0, &[0x0e3e58, 0x22285e, 0x44205a]),
+                (1.0, &[0x3ddcff, 0x7a84ff, 0xdc72ff]),
+            ],
+            peak: &[0xffffff],
+            by_level: false,
+        },
+        // The strings: bronze wound ones, then gold, the plain steel ones.
+        Visual::Strings => Scheme {
+            rows: &[
+                (0.0, &[0x5a2a08, 0x5a400a, 0x3e4450]),
+                (1.0, &[0xff9a3c, 0xffd36b, 0xe4eeff]),
+            ],
+            peak: &[0xfff6e0],
+            by_level: false,
+        },
+    }
+}
+
+/// A scheme's colours as shown: as they are on a dark ground, made
+/// `readable` on a light one (bright lines would vanish on it).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct OwnShades {
+    levels: [f32; MOST_ROWS],
+    rows: [[Color32; MOST_ACROSS]; MOST_ROWS],
+    across: [usize; MOST_ROWS],
+    count: usize,
+    peak: [Color32; MOST_ACROSS],
+    peaks: usize,
+    by_level: bool,
+}
+
+impl OwnShades {
+    fn of(visual: Visual, dark: bool) -> OwnShades {
+        let s = scheme(visual);
+        let shown = |c: u32| if dark { hex(c) } else { readable(hex(c), false) };
+        let mut o = OwnShades {
+            levels: [0.0; MOST_ROWS],
+            rows: [[Color32::BLACK; MOST_ACROSS]; MOST_ROWS],
+            across: [1; MOST_ROWS],
+            count: s.rows.len().min(MOST_ROWS),
+            peak: [Color32::BLACK; MOST_ACROSS],
+            peaks: s.peak.len().clamp(1, MOST_ACROSS),
+            by_level: s.by_level,
+        };
+        for (i, (level, colours)) in s.rows.iter().take(MOST_ROWS).enumerate() {
+            o.levels[i] = *level;
+            o.across[i] = colours.len().clamp(1, MOST_ACROSS);
+            for (j, &c) in colours.iter().take(MOST_ACROSS).enumerate() {
+                o.rows[i][j] = shown(c);
+            }
+        }
+        for (j, &c) in s.peak.iter().take(MOST_ACROSS).enumerate() {
+            o.peak[j] = shown(c);
+        }
+        o
+    }
+
+    fn at(&self, level: f32, place: f32) -> Color32 {
+        let row = |i: usize| along_colours(&self.rows[i][..self.across[i]], place);
+        let n = self.count;
+        if n < 2 {
+            return row(0);
+        }
+        let i = (0..n - 1)
+            .position(|i| level <= self.levels[i + 1])
+            .unwrap_or(n - 2);
+        let (a, b) = (self.levels[i], self.levels[i + 1]);
+        mix(row(i), row(i + 1), ((level - a) / (b - a).max(1e-6)).clamp(0.0, 1.0))
+    }
+
+    fn peak(&self, place: f32) -> Color32 {
+        along_colours(&self.peak[..self.peaks], place)
+    }
+}
+
+/// The colour at `place` (0 to 1) of a gradient through `colours`, evenly
+/// spaced.
+fn along_colours(colours: &[Color32], place: f32) -> Color32 {
+    let n = colours.len();
+    if n < 2 {
+        return colours.first().copied().unwrap_or(Color32::BLACK);
+    }
+    let x = place.clamp(0.0, 1.0) * (n - 1) as f32;
+    let i = (x as usize).min(n - 2);
+    mix(colours[i], colours[i + 1], x - i as f32)
+}
 
 /// The visualization's colours in use: a colour for a height and a place
 /// across (`at`), and the peaks' (`peak`).
@@ -153,13 +437,20 @@ pub struct VisualPalette {
     /// The cover's colours made readable on the ground (`Cover`; none: no
     /// cover, the accent's shades).
     cover: Option<[Color32; 3]>,
+    /// The visualization's own colours (`Own`, `visual_for`; none: the
+    /// accent's shades).
+    own: Option<OwnShades>,
 }
 
 impl VisualPalette {
     /// The colours tell the level (Winamp's, fire), not only the height:
     /// a waveform's column, a scope's line are coloured by their loudness.
     pub fn by_level(self) -> bool {
-        matches!(self.colours, VisualColours::Winamp | VisualColours::Fire)
+        match self.colours {
+            VisualColours::Winamp | VisualColours::Fire => true,
+            VisualColours::Own => self.own.is_some_and(|o| o.by_level),
+            _ => false,
+        }
     }
 
     /// The ground is dark (light shows as light on it).
@@ -173,6 +464,10 @@ impl VisualPalette {
     pub fn at(self, level: f32, place: f32) -> Color32 {
         let level = level.clamp(0.0, 1.0);
         match self.colours {
+            VisualColours::Own => match &self.own {
+                Some(own) => own.at(level, place),
+                None => mix(self.low, self.high, level),
+            },
             VisualColours::Accent | VisualColours::Custom(_) => mix(self.low, self.high, level),
             VisualColours::Rainbow => {
                 let hue = rainbow(place);
@@ -201,6 +496,10 @@ impl VisualPalette {
     /// The peaks' colour at `place`.
     pub fn peak(self, place: f32) -> Color32 {
         match self.colours {
+            VisualColours::Own => match &self.own {
+                Some(own) => own.peak(place),
+                None => self.peak,
+            },
             VisualColours::Accent | VisualColours::Custom(_) => self.peak,
             VisualColours::Cover => match self.cover {
                 Some(colours) if self.dark => mix(across(colours, place), Color32::WHITE, 0.55),
@@ -266,12 +565,21 @@ pub fn icon_colour(own: Option<Accent>) -> Color32 {
     }
 }
 
-/// The visualization's colours in use: the cover's (`set_cover`) when
-/// they are chosen.
-pub fn visual() -> VisualPalette {
-    let mut v = current().visual;
+/// The colours of `visual` in use: the cover's (`set_cover`) or the
+/// visualization's own (`scheme`) when they are chosen.
+pub fn visual_for(visual: Visual) -> VisualPalette {
+    let mut v = with_own(current().visual, visual);
     if v.colours == VisualColours::Cover {
         v.cover = cover().map(|c| c.map(|c| readable(c, v.dark)));
+    }
+    v
+}
+
+/// `v` with `visual`'s own colours when they are chosen (also for the
+/// settings' swatch).
+pub fn with_own(mut v: VisualPalette, visual: Visual) -> VisualPalette {
+    if v.colours == VisualColours::Own {
+        v.own = Some(OwnShades::of(visual, v.dark));
     }
     v
 }
@@ -1174,6 +1482,7 @@ impl Palette {
             dark: p.dark,
             text: p.text,
             cover: None,
+            own: None,
         };
         p.on_accent = if luminance(p.accent) > 0.32 {
             hex(0x1a1b1f)
@@ -1255,6 +1564,7 @@ impl Palette {
             dark: true,
             text: Color32::WHITE,
             cover: None,
+            own: None,
         },
     };
 }
@@ -1377,7 +1687,7 @@ mod tests {
         for c in VisualColours::ALL.into_iter().chain([VisualColours::Custom(0x12ab9f)]) {
             assert_eq!(VisualColours::from_name(&c.name()), Some(c));
         }
-        assert_eq!(VisualColours::from(String::from("plaid")), VisualColours::Accent);
+        assert_eq!(VisualColours::from(String::from("plaid")), VisualColours::Own);
         let of = |visual| Palette::of(Look { visual, ..Look::default() }).visual;
         // The rainbow: red at the bass, violet at the top; the place
         // matters, not for the others.
@@ -1408,6 +1718,56 @@ mod tests {
         let (bass, top) = (cover.at(1.0, 0.0), cover.at(1.0, 1.0));
         assert!(bass.r() > bass.b() && top.b() > top.r(), "{bass:?} {top:?}");
         assert!(!cover.by_level());
+    }
+
+    /// Each visualization's own colours: a well-formed scheme, its own
+    /// (no two alike), as written on a dark ground and readable on a
+    /// light one; the fire and the spectrogram by the level.
+    #[test]
+    fn own_colours() {
+        let dark = Palette::of(Look::default()).visual;
+        let light = Palette::of(Look {
+            theme: Theme::Light,
+            ..Look::default()
+        })
+        .visual;
+        assert_eq!(dark.colours, VisualColours::Own);
+        let mut seen = Vec::new();
+        for v in Visual::ALL {
+            let s = scheme(v);
+            assert!((2..=MOST_ROWS).contains(&s.rows.len()), "{v:?}");
+            assert_eq!(s.rows[0].0, 0.0, "{v:?}");
+            assert_eq!(s.rows[s.rows.len() - 1].0, 1.0, "{v:?}");
+            assert!(s.rows.windows(2).all(|w| w[0].0 < w[1].0), "{v:?}");
+            assert!(s.rows.iter().all(|r| (1..=MOST_ACROSS).contains(&r.1.len())));
+            assert!((1..=MOST_ACROSS).contains(&s.peak.len()));
+            let own = with_own(dark, v);
+            let top = own.at(1.0, 0.0);
+            assert_eq!(top, hex(s.rows[s.rows.len() - 1].1[0]), "{v:?}");
+            if v != Visual::Off {
+                let shades: Vec<_> = (0..=4).map(|i| own.at(i as f32 / 4.0, 0.3)).collect();
+                assert!(!seen.contains(&shades), "{v:?} is like another");
+                seen.push(shades);
+            }
+            // On a light ground nothing is paler than the cover's bound.
+            let own = with_own(light, v);
+            for i in 0..=4 {
+                let c = own.at(i as f32 / 4.0, 0.5);
+                assert!(luminance(c) <= 0.23, "{v:?} {c:?}");
+            }
+        }
+        assert!(with_own(dark, Visual::Fire).by_level());
+        assert!(with_own(dark, Visual::Spectrogram).by_level());
+        assert!(!with_own(dark, Visual::Spectrum).by_level());
+        // Between rows and across: the LED's yellow in its middle, the
+        // notes' wheel red at C and violet towards B.
+        let led = with_own(dark, Visual::Led);
+        assert_eq!(led.at(0.7, 0.1), hex(0xffd21e));
+        let notes = with_own(dark, Visual::Chroma);
+        let (c, b) = (notes.at(1.0, 0.0), notes.at(1.0, 1.0));
+        assert!(c.r() > c.g() && c.r() > c.b() && b.b() > b.g(), "{c:?} {b:?}");
+        // Without a visualization named, the accent's shades.
+        assert_eq!(dark.at(1.0, 0.5), Palette::of(Look::default()).spectrum_high);
     }
 
     /// A cover's colours: the vivid ones first, apart from one another,

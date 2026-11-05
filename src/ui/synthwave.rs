@@ -108,7 +108,7 @@ impl Synthwave {
             return;
         }
         let painter = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
-        let colours = palette::visual();
+        let colours = palette::visual_for(crate::settings::Visual::Synthwave);
         let ground = palette::list_bg();
         let horizon = rect.top() + rect.height() * HORIZON;
         let floor = rect.bottom() - horizon;

@@ -190,7 +190,7 @@ impl Fire {
         if w == 0 || h == 0 {
             return;
         }
-        let colours = palette::visual();
+        let colours = palette::visual_for(crate::settings::Visual::Fire);
         let ground = palette::list_bg();
         if self.changed || self.texture.is_none() || self.drawn != Some((colours, ground)) {
             let bright = if colours.is_dark() {
