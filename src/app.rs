@@ -11,7 +11,7 @@ use egui::{Key, Modifiers};
 use crate::dialog::{self, Ask};
 use crate::library::Library;
 use crate::library::scan::{Scan, ScanMsg, Wake};
-use crate::settings::{Settings, WindowLayout, WindowPlace};
+use crate::settings::{PLAYLIST_SIZE, Settings, Shape, WindowLayout, WindowPlace};
 use crate::ui::about::AboutDialog;
 use crate::ui::settings::SettingsDialog;
 use crate::ui::title::{self, TitleCmd};
@@ -125,7 +125,7 @@ pub struct App {
     /// When the settings were last kept for the end of the session.
     kept_for_the_end: Instant,
     /// The window's layout as last applied (`apply_layout`).
-    applied_layout: WindowLayout,
+    applied_layout: crate::settings::Shape,
     /// The tray icon while the setting is on, and whether the window's
     /// taskbar button is taken away (minimized to it).
     tray: Option<crate::tray::Tray>,
@@ -183,6 +183,7 @@ impl App {
                 win::place(hwnd, Some(place.normal), settings.default_size(), maximized);
             }
             win::set_least(settings.min_size());
+            win::set_most_height(settings.most_height());
             let wake = ctx.clone();
             win::hook_window(hwnd, move || wake.request_repaint());
             crate::instance::listen(ctx, hwnd);
@@ -218,7 +219,7 @@ impl App {
         updates.start_if_due(ctx);
         let about = AboutDialog::default();
         let watcher = crate::library::watch::Watcher::start(&settings.library_folders, &wake);
-        let settings_layout = settings.window_layout;
+        let settings_layout = settings.shape();
         Self {
             settings,
             settings_dialog: SettingsDialog::from_env(),
@@ -682,6 +683,8 @@ impl App {
             repeat: self.player.queue.repeat,
             eq: self.settings.dsp.eq,
             stop_after: self.player.stop_after,
+            playlist: (self.settings.window_layout == WindowLayout::Playlist)
+                .then_some(!self.settings.player_only),
             cover,
         }
     }
@@ -779,6 +782,7 @@ impl App {
                     self.place_changed = Some(Instant::now());
                 }
                 BarCmd::Equalizer(button) => self.eq_window.toggle(button),
+                BarCmd::Playlist => self.fold_playlist(!self.settings.player_only),
             }
         }
     }
@@ -974,8 +978,13 @@ impl App {
                 self.place_changed = Some(Instant::now());
             }
             // The playlist is the window in the player and playlist layout.
+            // The playlist is the window in the player and playlist layout:
+            // folded away, the player bar alone; from the mini player, the
+            // whole window with the playlist.
             Cmd::Playlist if self.settings.window_layout == WindowLayout::Playlist => {
+                let fold = !self.settings.mini && !self.settings.player_only;
                 self.settings.mini = false;
+                self.fold_playlist(fold);
             }
             Cmd::Playlist => {
                 // From the mini player: the whole window with the playlist.
@@ -986,13 +995,14 @@ impl App {
             }
             Cmd::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
             // The mini player is not maximized.
-            Cmd::Maximize if self.settings.mini => {}
+            Cmd::Maximize if self.settings.mini || self.settings.shape() == Shape::Player => {}
             Cmd::Maximize => ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(
                 !frameless::is_maximized(ctx),
             )),
             Cmd::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             // The playlist's search without the library.
             Cmd::Search if self.settings.window_layout == WindowLayout::Playlist => {
+                self.fold_playlist(false);
                 self.playlist_view.focus_search = true;
                 self.settings.mini = false;
             }
@@ -1215,7 +1225,7 @@ impl App {
         if self.cloak.is_none()
             && !self.settings.mini
             && mini == Some(false)
-            && self.applied_layout == self.settings.window_layout
+            && self.applied_layout == self.settings.shape()
             && let Some((normal, maximized)) = win::placement(hwnd)
         {
             let place = WindowPlace { normal, maximized };
@@ -1482,8 +1492,12 @@ impl App {
     /// kept, the new one's put back (else its size at first, centred where
     /// the window was) with its least size; until the window has its size
     /// only the ground is painted (`growing`). The mini player waits.
+    ///
+    /// The playlist folded away or back (`Shape::Player` to or from
+    /// `Shape::Playlist`) keeps the window's left, top and width: only its
+    /// height changes, to the bar's or to the playlist's of before.
     fn apply_layout(&mut self, ctx: &egui::Context) {
-        let wanted = self.settings.window_layout;
+        let wanted = self.settings.shape();
         if self.applied_layout == wanted
             || self.settings.mini
             || self.applied_modes.is_some_and(|m| m.1)
@@ -1491,17 +1505,50 @@ impl App {
             return;
         }
         let Some(hwnd) = self.hwnd else { return };
-        if let Some((normal, maximized)) = win::placement(hwnd) {
-            let place = Some(WindowPlace { normal, maximized });
-            match self.applied_layout {
-                WindowLayout::Library => self.settings.window = place,
-                WindowLayout::Playlist => self.settings.playlist_window = place,
-            }
+        let before = win::placement(hwnd);
+        if let Some((normal, maximized)) = before {
+            *self.settings.place_of_mut(self.applied_layout) = Some(WindowPlace { normal, maximized });
         }
+        let folding = matches!(
+            (self.applied_layout, wanted),
+            (Shape::Playlist, Shape::Player) | (Shape::Player, Shape::Playlist)
+        );
         self.applied_layout = wanted;
         let least = self.settings.min_size();
         win::set_least(least);
+        win::set_most_height(self.settings.most_height());
         ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(least.into()));
+        ctx.send_viewport_cmd(egui::ViewportCommand::EnableButtons {
+            close: true,
+            minimized: true,
+            maximize: wanted != Shape::Player,
+        });
+        self.growing = Some(Instant::now());
+        self.place_changed = Some(Instant::now());
+        if folding {
+            if wanted == Shape::Player {
+                // Folded: the bar where it was, restored if maximized.
+                if let Some(([left, top, right, _], _)) = before
+                    && let Some(h) = win::most_height_pixels(hwnd)
+                {
+                    win::show_placed(hwnd, [left, top, right, top + h], false);
+                }
+            } else if let Some(r) = win::window_rect(hwnd) {
+                // Back: the playlist's height of before, on the screen.
+                let h = self
+                    .settings
+                    .playlist_window
+                    .map(|w| w.normal[3] - w.normal[1])
+                    .unwrap_or((PLAYLIST_SIZE[1] * ctx.pixels_per_point()) as i32);
+                let mut rect = [r[0], r[1], r[2], r[1] + h];
+                if let Some(work) = win::work_area_at(rect) {
+                    let dy = (work[3] - rect[3]).min(0).max(work[1] - rect[1]);
+                    rect = [rect[0], rect[1] + dy, rect[2], rect[3] + dy];
+                }
+                win::set_rect(hwnd, rect);
+            }
+            return;
+        }
         match self.settings.place() {
             Some(w) => win::show_placed(hwnd, w.normal, w.maximized),
             None => {
@@ -1520,8 +1567,16 @@ impl App {
                 }
             }
         }
-        self.growing = Some(Instant::now());
-        self.place_changed = Some(Instant::now());
+    }
+
+    /// In the player and playlist layout, the playlist folded away (the
+    /// window the player bar alone) or back; `apply_layout` changes the
+    /// window.
+    fn fold_playlist(&mut self, fold: bool) {
+        if self.settings.player_only != fold {
+            self.settings.player_only = fold;
+            self.place_changed = Some(Instant::now());
+        }
     }
 
     /// "Over the others" and the mini player applied to the window when
@@ -1597,7 +1652,7 @@ impl App {
             ctx.send_viewport_cmd(ViewportCommand::EnableButtons {
                 close: true,
                 minimized: true,
-                maximize: true,
+                maximize: self.settings.shape() != Shape::Player,
             });
             match self.settings.place() {
                 Some(w) => win::show_placed(hwnd, w.normal, w.maximized),
@@ -1697,7 +1752,8 @@ impl App {
         let update = self.updates.newer().map(str::to_owned);
         let maximized = frameless::is_maximized(&ctx);
         let title = self.window_title();
-        match title::row(ui, &title, maximized, &icon, update.as_deref()) {
+        let can_maximize = self.settings.shape() != Shape::Player;
+        match title::row(ui, &title, maximized, can_maximize, &icon, update.as_deref()) {
             Some(TitleCmd::Mini) => {
                 self.settings.mini = !self.settings.mini;
                 self.place_changed = Some(Instant::now());
@@ -1915,7 +1971,7 @@ impl eframe::App for App {
             self.pointer_keys(&ctx, over_player);
         }
         if !frameless::is_maximized(&ctx) {
-            frameless::resize_edges(root_ui);
+            frameless::resize_edges(root_ui, self.settings.shape() != Shape::Player);
         }
         // A window or a modal wants the whole window: the mini player
         // ends (it shows in the next frame).
@@ -1985,7 +2041,15 @@ impl eframe::App for App {
             .clone_from(&self.settings.playlist_format);
         self.playlist_view.numbers = self.settings.playlist_numbers;
         self.playlist_view.lengths = self.settings.playlist_lengths;
-        if alone {
+        if alone && self.settings.player_only {
+            // The player alone: nothing under the bar (the window's ground
+            // while it shrinks).
+            self.playlist_view.hidden();
+            egui::CentralPanel::no_frame().show(root_ui, |ui| {
+                ui.painter()
+                    .rect_filled(ui.max_rect(), 0.0, palette::list_bg());
+            });
+        } else if alone {
             let cover = self.playing_cover(&ctx);
             let shown_cover = self.settings.playlist_cover;
             let panel = egui::CentralPanel::no_frame().show(root_ui, |ui| {

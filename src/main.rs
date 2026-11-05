@@ -165,6 +165,8 @@ fn main() -> eframe::Result {
             .with_transparent(true)
             .with_inner_size(settings.default_size())
             .with_min_inner_size(settings.min_size())
+            // The player alone is not maximized (its height is the bar's).
+            .with_maximize_button(settings.most_height().is_none())
             .with_icon(window_icon()),
         // OpenGL starts fastest: a context in ~130 ms against ~240 ms for
         // wgpu on DX12 (measured in metalmd).

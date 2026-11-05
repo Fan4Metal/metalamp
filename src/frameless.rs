@@ -41,8 +41,9 @@ pub fn inside_edges(ctx: &egui::Context, rect: egui::Rect) -> egui::Rect {
 /// Strips along the edges and squares at the corners hand a drag to
 /// Windows (`ViewportCommand::BeginResize`), as a sizing frame would.
 /// Placed before the panels, so that their widgets near an edge still take
-/// clicks first. Not while maximized.
-pub fn resize_edges(ui: &mut Ui) {
+/// clicks first. Not while maximized. Without `vertical` (the player
+/// alone, as high as its bar) only the left and right edges.
+pub fn resize_edges(ui: &mut Ui, vertical: bool) {
     const CORNER: f32 = 14.0;
     let r = ui.ctx().content_rect();
     let grips = [
@@ -94,6 +95,7 @@ pub fn resize_edges(ui: &mut Ui) {
     let pointer = ui.ctx().pointer_hover_pos();
     let Some((direction, rect, icon)) = grips
         .into_iter()
+        .filter(|(d, _, _)| vertical || matches!(d, D::West | D::East))
         .find(|(_, rect, _)| pointer.is_some_and(|p| rect.contains(p)))
     else {
         return;

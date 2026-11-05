@@ -61,6 +61,8 @@ pub enum BarCmd {
     /// The equalizer's button clicked (its rect: the window opens under
     /// it).
     Equalizer(Rect),
+    /// The narrow bar's playlist button: the playlist folded away or back.
+    Playlist,
     /// The mini player's way back to the whole window.
     Whole,
     /// The mini player's names shown or not, its cover as it is or a
@@ -100,6 +102,9 @@ pub struct NowPlaying<'a> {
     pub eq: bool,
     /// Playing stops after the track heard (Shift+V): Stop is lit.
     pub stop_after: bool,
+    /// In the player and playlist layout, whether the playlist shows: the
+    /// toggles get its button (none: no button).
+    pub playlist: Option<bool>,
     pub cover: Option<egui::TextureHandle>,
     /// The narrow bar's line: "N. Artist – Title", the playlist's.
     pub heading: String,
@@ -920,8 +925,9 @@ pub(super) fn volume_slider(
     resp.on_hover_text(format!("{} %", now.volume));
 }
 
-/// The equalizer, repeat and shuffle toggles, laid right to left from
-/// `right` at height `cy`; where they end.
+/// The playlist (in the player and playlist layout), the equalizer, repeat
+/// and shuffle toggles, laid right to left from `right` at height `cy`;
+/// where they end.
 fn toggles(
     ui: &mut Ui,
     painter: &egui::Painter,
@@ -948,6 +954,16 @@ fn toggles(
         icons::paint(painter, icon, r.center(), 15.0, color, palette::bar_bg());
         resp.on_hover_text(tip).clicked().then_some(r)
     };
+    if let Some(shown) = now.playlist {
+        let tip = if shown {
+            tr!("Hide the playlist", "Скрыть плейлист")
+        } else {
+            tr!("Show the playlist", "Показать плейлист")
+        };
+        if toggle(ui, Icon::Contents, shown, &with_key(tip, Cmd::Playlist)).is_some() {
+            cmds.push(BarCmd::Playlist);
+        }
+    }
     let tip = if now.eq {
         tr!("Equalizer: on", "Эквалайзер: вкл.")
     } else {

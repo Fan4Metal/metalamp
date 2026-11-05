@@ -43,13 +43,18 @@ pub struct Settings {
     pub check_updates: bool,
     /// Unix seconds of the last update check that got an answer.
     pub last_update_check: u64,
-    /// The window's place with the library, and in the player and
-    /// playlist layout (`playlist_window`): each layout keeps its own.
+    /// The window's place with the library, in the player and playlist
+    /// layout (`playlist_window`) and as the player alone
+    /// (`player_window`): each shape keeps its own.
     pub window: Option<WindowPlace>,
     pub playlist_window: Option<WindowPlace>,
+    pub player_window: Option<WindowPlace>,
     /// The library, the player bar and the playlist beside it; or the
     /// player bar over the playlist alone, as the early Winamp.
     pub window_layout: WindowLayout,
+    /// In the player and playlist layout, the playlist folded away: the
+    /// window is the player bar alone (`Shape::Player`).
+    pub player_only: bool,
     /// The visualization at all (the settings' switch): off, its display
     /// is dark and takes no click; on, `visualization` is the one chosen,
     /// "none" among them.
@@ -434,6 +439,21 @@ impl WindowLayout {
 pub const PLAYLIST_MIN_SIZE: [f32; 2] = [440.0, 400.0];
 pub const PLAYLIST_SIZE: [f32; 2] = [440.0, 780.0];
 
+/// What the window is: the library's layout, the player and playlist
+/// layout, or that layout with the playlist folded away, the player bar
+/// alone (`Settings::player_only`). Each keeps its own place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shape {
+    Library,
+    Playlist,
+    Player,
+}
+
+/// The player alone's height in points: the title row and the narrow bar.
+pub fn player_height() -> f32 {
+    crate::ui::title::HEIGHT + crate::ui::player_bar::height(BarLayout::Winamp)
+}
+
 /// The seek keys' step by default and at most, in seconds.
 pub const DEFAULT_SEEK_STEP: u8 = 5;
 pub const MAX_SEEK_STEP: u8 = 60;
@@ -628,7 +648,9 @@ impl Default for Settings {
             last_update_check: 0,
             window: None,
             playlist_window: None,
+            player_window: None,
             window_layout: WindowLayout::default(),
+            player_only: false,
             visual_enabled: true,
             visual_click: true,
             visual_colours: Default::default(),
@@ -785,34 +807,61 @@ impl Settings {
     /// The settings in `bytes`, each field read on its own: one that
     /// cannot be read takes its default and costs no other. `None` when
     /// `bytes` is not a JSON object.
-    /// The place of the window in the layout chosen.
-    pub fn place(&self) -> Option<WindowPlace> {
+    /// What the window is in the layout chosen.
+    pub fn shape(&self) -> Shape {
         match self.window_layout {
-            WindowLayout::Library => self.window,
-            WindowLayout::Playlist => self.playlist_window,
+            WindowLayout::Library => Shape::Library,
+            WindowLayout::Playlist if self.player_only => Shape::Player,
+            WindowLayout::Playlist => Shape::Playlist,
+        }
+    }
+
+    /// The place of the window in the shape it has.
+    pub fn place(&self) -> Option<WindowPlace> {
+        self.place_of(self.shape())
+    }
+
+    pub fn place_of(&self, shape: Shape) -> Option<WindowPlace> {
+        match shape {
+            Shape::Library => self.window,
+            Shape::Playlist => self.playlist_window,
+            Shape::Player => self.player_window,
         }
     }
 
     pub fn place_mut(&mut self) -> &mut Option<WindowPlace> {
-        match self.window_layout {
-            WindowLayout::Library => &mut self.window,
-            WindowLayout::Playlist => &mut self.playlist_window,
+        self.place_of_mut(self.shape())
+    }
+
+    pub fn place_of_mut(&mut self, shape: Shape) -> &mut Option<WindowPlace> {
+        match shape {
+            Shape::Library => &mut self.window,
+            Shape::Playlist => &mut self.playlist_window,
+            Shape::Player => &mut self.player_window,
         }
     }
 
-    /// The window's least size in the layout chosen, in points.
+    /// The window's least size in the shape it has, in points.
     pub fn min_size(&self) -> [f32; 2] {
-        match self.window_layout {
-            WindowLayout::Library => crate::MIN_SIZE,
-            WindowLayout::Playlist => PLAYLIST_MIN_SIZE,
+        match self.shape() {
+            Shape::Library => crate::MIN_SIZE,
+            Shape::Playlist => PLAYLIST_MIN_SIZE,
+            Shape::Player => [PLAYLIST_MIN_SIZE[0], player_height()],
         }
     }
 
-    /// The window's size at first in the layout chosen, in points.
+    /// The window's greatest height in the shape it has, in points (none:
+    /// any): the player alone is as high as its bar.
+    pub fn most_height(&self) -> Option<f32> {
+        (self.shape() == Shape::Player).then(player_height)
+    }
+
+    /// The window's size at first in the shape it has, in points.
     pub fn default_size(&self) -> [f32; 2] {
-        match self.window_layout {
-            WindowLayout::Library => crate::DEFAULT_SIZE,
-            WindowLayout::Playlist => PLAYLIST_SIZE,
+        match self.shape() {
+            Shape::Library => crate::DEFAULT_SIZE,
+            Shape::Playlist => PLAYLIST_SIZE,
+            Shape::Player => [PLAYLIST_SIZE[0], player_height()],
         }
     }
 
@@ -973,8 +1022,20 @@ mod tests {
         assert_eq!(s.playlist_window, Some(place));
         assert_eq!(s.window, None);
         assert_eq!(s.min_size(), PLAYLIST_MIN_SIZE);
+        // The player alone: a place of its own, as high as the bar.
+        s.player_only = true;
+        assert_eq!(s.shape(), Shape::Player);
+        assert_eq!(s.place(), None);
+        assert_eq!(s.min_size()[1], player_height());
+        assert_eq!(s.most_height(), Some(player_height()));
+        s.player_only = false;
+        assert_eq!(s.place(), Some(place));
+        assert_eq!(s.most_height(), None);
         s.window_layout = WindowLayout::Library;
         assert_eq!(s.place(), None);
+        // Folded away only in the player and playlist layout.
+        s.player_only = true;
+        assert_eq!(s.shape(), Shape::Library);
         // An unknown layout reads as the library's.
         let s = Settings::from_json(br#"{"window_layout":"skin"}"#).unwrap();
         assert_eq!(s.window_layout, WindowLayout::Library);

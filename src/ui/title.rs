@@ -28,11 +28,13 @@ pub enum TitleCmd {
 }
 
 /// `update` is the tag of a newer release, shown as a button left of
-/// the window's own.
+/// the window's own; without `can_maximize` (the player alone) maximise is
+/// greyed and a double click does nothing.
 pub fn row(
     ui: &mut Ui,
     title: &str,
     maximized: bool,
+    can_maximize: bool,
     icon: &TextureHandle,
     update: Option<&str>,
 ) -> Option<TitleCmd> {
@@ -41,7 +43,7 @@ pub fn row(
     // First, under the buttons: what they leave drags the window.
     let drag = crate::frameless::drag_area(ui, rect, ui.id().with("title_drag"), Sense::CLICK);
     let mut cmd = None;
-    if super::double_clicked(&drag) {
+    if can_maximize && super::double_clicked(&drag) {
         cmd = Some(TitleCmd::ToggleMaximize);
     }
     let icon_rect =
@@ -99,7 +101,20 @@ pub fn row(
     for (kind, icon, tip) in buttons {
         let r = Rect::from_min_max(pos2(right - BUTTON, rect.top()), pos2(right, rect.bottom()));
         right = r.left();
-        let response = ui.interact(r, ui.id().with(("title_button", tip)), Sense::CLICK);
+        let enabled = can_maximize || kind != TitleCmd::ToggleMaximize;
+        let sense = if enabled { Sense::CLICK } else { Sense::hover() };
+        let response = ui.interact(r, ui.id().with(("title_button", tip)), sense);
+        if !enabled {
+            icons::paint(
+                ui.painter(),
+                icon,
+                r.center(),
+                12.0,
+                palette::text_weak().gamma_multiply(0.5),
+                palette::title_bg(),
+            );
+            continue;
+        }
         let hovered = response.hovered();
         if hovered {
             let fill = if kind == TitleCmd::Close {

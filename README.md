@@ -201,7 +201,7 @@ The window has two layouts (the settings window, General, **Window**): with the 
 <details>
 <summary>The player and playlist layout</summary>
 
-A narrow window with a player of its own on top (a display with the time over the visualization, the track's number, artist, title and length in a field, the bit rate and the rest, the volume, the seek bar and the buttons) and the playlist under it, without the library, the status line and covers; the library is still read, for the names. A double click on the track's field opens the file info. Each layout keeps its own size and place of the window. The settings, the file info and the equalizer open in windows of their own when the program's window is too small to hold them.
+A narrow window with a player of its own on top (a display with the time over the visualization, the track's number, artist, title and length in a field, the bit rate and the rest, the volume, the seek bar and the buttons) and the playlist under it, without the library, the status line and covers; the library is still read, for the names. A double click on the track's field opens the file info. The playlist button right of the equalizer (or `Alt+E`) folds the playlist away: the window becomes the player alone, as high as its bar, wider or narrower but not higher; the same button brings the playlist back at its height of before. Each layout, and the player alone, keeps its own size and place of the window. The settings, the file info and the equalizer open in windows of their own when the program's window is too small to hold them.
 
 </details>
 

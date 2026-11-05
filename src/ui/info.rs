@@ -1126,7 +1126,7 @@ impl InfoView {
             if ctx.input(|i| i.viewport().close_requested()) {
                 acts.push(Act::Close);
             }
-            crate::frameless::resize_edges(ui);
+            crate::frameless::resize_edges(ui, true);
             egui::CentralPanel::default()
                 .frame(
                     egui::Frame::NONE

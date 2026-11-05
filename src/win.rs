@@ -448,28 +448,48 @@ pub fn set_least(points: [f32; 2]) {
     }
 }
 
-/// The least size of [`set_least`] in pixels for `hwnd`, its frame
-/// included; none before it is set.
-fn least_pixels(hwnd: isize) -> Option<[i32; 2]> {
+/// The whole window's greatest height in points (f32 bits; 0: any), kept
+/// as its least size is: the player alone is as high as its bar.
+static MOST_HEIGHT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+pub fn set_most_height(points: Option<f32>) {
+    MOST_HEIGHT.store(
+        points.unwrap_or(0.0).to_bits(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+/// `points` in pixels for `hwnd`.
+fn scaled(hwnd: isize, points: f32) -> i32 {
     #[link(name = "user32")]
     unsafe extern "system" {
         fn GetDpiForWindow(hwnd: isize) -> u32;
     }
+    let scale = match unsafe { GetDpiForWindow(hwnd) } {
+        0 => 1.0,
+        dpi => dpi as f32 / 96.0,
+    };
+    (points * scale).round() as i32
+}
+
+/// The least size of [`set_least`] in pixels for `hwnd`, its frame
+/// included; none before it is set.
+fn least_pixels(hwnd: isize) -> Option<[i32; 2]> {
     let points = LEAST
         .each_ref()
         .map(|c| f32::from_bits(c.load(std::sync::atomic::Ordering::Relaxed)));
     if points[0] <= 0.0 {
         return None;
     }
-    let scale = match unsafe { GetDpiForWindow(hwnd) } {
-        0 => 1.0,
-        dpi => dpi as f32 / 96.0,
-    };
     let [bx, by] = border(hwnd);
-    Some([
-        (points[0] * scale).round() as i32 + bx,
-        (points[1] * scale).round() as i32 + by,
-    ])
+    Some([scaled(hwnd, points[0]) + bx, scaled(hwnd, points[1]) + by])
+}
+
+/// The greatest height of [`set_most_height`] in pixels for `hwnd`, its
+/// frame included; none when any height goes.
+pub fn most_height_pixels(hwnd: isize) -> Option<i32> {
+    let points = f32::from_bits(MOST_HEIGHT.load(std::sync::atomic::Ordering::Relaxed));
+    (points > 0.0).then(|| scaled(hwnd, points) + border(hwnd)[1])
 }
 
 pub fn set_mini(least: Option<i32>) {
@@ -905,11 +925,21 @@ unsafe extern "system" fn window_proc(
             } else {
                 least_pixels(hwnd as isize)
             };
-            if let Some([x, y]) = least {
+            let most = if mini > 0 {
+                None
+            } else {
+                most_height_pixels(hwnd as isize)
+            };
+            if least.is_some() || most.is_some() {
                 let result = unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
                 let info = unsafe { &mut *(lparam as *mut MINMAXINFO) };
-                info.ptMinTrackSize.x = x;
-                info.ptMinTrackSize.y = y;
+                if let Some([x, y]) = least {
+                    info.ptMinTrackSize.x = x;
+                    info.ptMinTrackSize.y = y;
+                }
+                if let Some(y) = most {
+                    info.ptMaxTrackSize.y = y.max(info.ptMinTrackSize.y);
+                }
                 return result;
             }
         }
