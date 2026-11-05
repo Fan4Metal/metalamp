@@ -217,7 +217,7 @@ A narrow window with a player of its own on top (a display with the time over th
 
 ### Visualizations
 
-The display right of the player shows the sound heard. A click on it goes on to the next visualization (unless **A click switches the visualization** is off in the settings), and the right button lists them, with the colours' swatches under the list; the layout with the library and the player and playlist alone each keep their own.
+The display right of the player shows the sound heard. A click on it goes on to the next visualization (unless **A click switches the visualization** is off in the settings), and the right button lists them, with the colours' swatches under the list; the layout with the library and the player and playlist alone each keep their own visualization and its colours.
 
 <details>
 <summary>The visualizations and their colours</summary>

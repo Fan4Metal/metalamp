@@ -62,8 +62,11 @@ pub struct Settings {
     /// A click on the visualization goes on to the next one (the right
     /// button lists them either way).
     pub visual_click: bool,
-    /// The visualization's colours, apart from the theme's.
+    /// The visualization's colours, apart from the theme's, with the
+    /// library and in the player and playlist layout (each its own:
+    /// `visual_colours_mut`, `look`).
     pub visual_colours: crate::palette::VisualColours,
+    pub playlist_visual_colours: crate::palette::VisualColours,
     /// The playlist's line of a track (`title_format`), and whether its
     /// rows show their numbers and lengths.
     pub playlist_format: String,
@@ -202,7 +205,10 @@ impl Settings {
             accent: self.accent,
             selection: self.selection,
             playing: self.playing,
-            visual: self.visual_colours,
+            visual: match self.window_layout {
+                WindowLayout::Library => self.visual_colours,
+                WindowLayout::Playlist => self.playlist_visual_colours,
+            },
         }
     }
 }
@@ -654,6 +660,7 @@ impl Default for Settings {
             visual_enabled: true,
             visual_click: true,
             visual_colours: Default::default(),
+            playlist_visual_colours: Default::default(),
             playlist_format: crate::title_format::DEFAULT.to_owned(),
             playlist_numbers: true,
             playlist_lengths: true,
@@ -880,6 +887,15 @@ impl Settings {
         }
     }
 
+    /// The visualization's colours of the window layout in use (`look`
+    /// reads them).
+    pub fn visual_colours_mut(&mut self) -> &mut crate::palette::VisualColours {
+        match self.window_layout {
+            WindowLayout::Library => &mut self.visual_colours,
+            WindowLayout::Playlist => &mut self.playlist_visual_colours,
+        }
+    }
+
     /// The visualization shown: the layout's while the switch is on, else
     /// none.
     pub fn visual_shown(&self) -> Visual {
@@ -980,6 +996,15 @@ mod tests {
         assert_eq!(s.visualization, Visual::Scope);
         s.window_layout = WindowLayout::Library;
         assert_eq!(s.visual_shown(), Visual::Scope);
+        // And its own colours.
+        use crate::palette::VisualColours;
+        *s.visual_colours_mut() = VisualColours::Fire;
+        s.window_layout = WindowLayout::Playlist;
+        assert_eq!(s.look().visual, VisualColours::Own);
+        *s.visual_colours_mut() = VisualColours::Rainbow;
+        assert_eq!(s.visual_colours, VisualColours::Fire);
+        s.window_layout = WindowLayout::Library;
+        assert_eq!(s.look().visual, VisualColours::Fire);
         // A click goes through "none" too.
         assert_eq!(Visual::Piano.next(), Visual::Strings);
         assert_eq!(Visual::Strings.next(), Visual::Off);

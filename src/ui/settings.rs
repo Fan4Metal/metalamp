@@ -1173,7 +1173,7 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
                 let look = settings.look();
                 ui.add_enabled_ui(settings.visual_enabled, |ui| {
                     let visual = settings.visual();
-                    visual_colours(ui, &mut settings.visual_colours, look, visual);
+                    visual_colours(ui, settings.visual_colours_mut(), look, visual);
                 });
             },
         );
@@ -2574,6 +2574,7 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     settings.visual_enabled = d.visual_enabled;
     settings.visual_click = d.visual_click;
     settings.visual_colours = d.visual_colours;
+    settings.playlist_visual_colours = d.playlist_visual_colours;
     settings.playlist_format = d.playlist_format;
     settings.playlist_numbers = d.playlist_numbers;
     settings.playlist_lengths = d.playlist_lengths;

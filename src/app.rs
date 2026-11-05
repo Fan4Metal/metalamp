@@ -694,7 +694,7 @@ impl App {
         let ctx = ui.ctx().clone();
         let (title, artist, _) = self.now_playing();
         let cover = self.playing_cover(&ctx);
-        if self.settings.visual_colours == palette::VisualColours::Cover {
+        if self.settings.look().visual == palette::VisualColours::Cover {
             let target = self.playing_cover_colours();
             if self.cover_fade.follow(target) {
                 ctx.request_repaint();
@@ -777,7 +777,7 @@ impl App {
                 }
                 BarCmd::VisualColours(c) => {
                     // Only the visualization's colours: egui's own stay.
-                    self.settings.visual_colours = c;
+                    *self.settings.visual_colours_mut() = c;
                     palette::set(self.settings.look());
                     self.place_changed = Some(Instant::now());
                 }
@@ -1514,6 +1514,8 @@ impl App {
             (Shape::Playlist, Shape::Player) | (Shape::Player, Shape::Playlist)
         );
         self.applied_layout = wanted;
+        // Each window layout has its own visualization's colours.
+        palette::set(self.settings.look());
         let least = self.settings.min_size();
         win::set_least(least);
         win::set_most_height(self.settings.most_height());
