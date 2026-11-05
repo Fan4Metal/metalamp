@@ -59,7 +59,7 @@ The portable archive holds an empty `metalamp.json`. While that file is next to 
 
 ### The library
 
-On the first start the window offers to add a music folder: `Ctrl+Shift+O`, or a folder dropped on the window. The library has three panes: the artists on the left, the albums (covers or a table) at the top right and the tracks under them; choosing an artist narrows the albums, an album the tracks. The search field (`Ctrl+F`) narrows all three panes as it is typed. A double click or `Enter` plays.
+On the first start the window offers to add a music folder: `Ctrl+Shift+O`, or **Add a folder…** in the folders' menu of the library bar. The library has three panes: the artists on the left, the albums (covers or a table) at the top right and the tracks under them; choosing an artist narrows the albums, an album the tracks. The search field (`Ctrl+F`) narrows all three panes as it is typed. A double click or `Enter` plays.
 
 <details>
 <summary>Reading the folders, the index, watching the folders</summary>
@@ -271,7 +271,7 @@ The sound can be processed on its way to the device, all of it off by default an
 
 ### The playlist
 
-The playlist on the right (`Alt+E` shows or hides it) lists "Artist – Title" with the length of each entry and the total at the bottom; its search field narrows the list (by the line, the artist, the title and the album). A double click or `Enter` plays an entry. Files dropped on the window are added to the playlist; `Ctrl+O` opens files instead of it. The playlist is kept between runs.
+The playlist on the right (`Alt+E` shows or hides it) lists "Artist – Title" with the length of each entry and the total at the bottom; its search field narrows the list (by the line, the artist, the title and the album). A double click or `Enter` plays an entry. Files and folders dropped on the window are added to the end of the playlist, a folder as the audio files in it and in its subfolders, in the order Explorer shows them (and played if nothing plays); `Ctrl+O` opens files instead of it. The playlist is kept between runs.
 
 <details>
 <summary>The line, dragging, the menu, the cover</summary>

@@ -1109,7 +1109,9 @@ impl App {
         self.ask(ctx, Ask::AddFolder, make, dialog::pick_folder);
     }
 
-    /// Folders dropped on the window go into the library.
+    /// Files and folders dropped on the window go to the playlist: a
+    /// folder as the audio files in it and its subfolders (the library
+    /// takes folders only from its own menu, `Ctrl+Shift+O`).
     fn take_dropped(&mut self, ctx: &egui::Context) {
         let dropped: Vec<PathBuf> = ctx.input(|i| {
             i.raw
@@ -1125,12 +1127,12 @@ impl App {
                 continue;
             }
             if path.is_dir() {
-                self.add_folder(path);
+                files.extend(audio_in_folder(&path));
             } else {
                 files.push(path);
             }
         }
-        // Files dropped go to the playlist (played if nothing plays).
+        // Files dropped go to the playlist's end (played if stopped).
         let files = expand_playlists(files);
         if !files.is_empty() {
             self.player.enqueue(files);
@@ -2034,8 +2036,8 @@ impl eframe::App for App {
                     return;
                 }
                 let hint = tr!(
-                    "Add a music folder with Ctrl+Shift+O or drop it here",
-                    "Добавьте папку с музыкой: Ctrl+Shift+O или перетащите её сюда"
+                    "Add a music folder to the library with Ctrl+Shift+O",
+                    "Добавьте папку с музыкой в библиотеку: Ctrl+Shift+O"
                 );
                 crate::ui::start::show(ui, &mut self.start_icon, hint);
             });
@@ -2177,6 +2179,30 @@ fn load_playlist(
     (player.queue.revision, player.queue.current())
 }
 
+/// The audio files in `folder` and its subfolders in Explorer's order:
+/// in each folder its subfolders first, then its files, each by name with
+/// numbers by value (`CD1` before `CD2`, `2 - …` before `10 - …`). The
+/// playlists in it are left out: their entries are files of the folder.
+fn audio_in_folder(folder: &std::path::Path) -> Vec<PathBuf> {
+    walkdir::WalkDir::new(folder)
+        .sort_by(|a, b| {
+            b.file_type()
+                .is_dir()
+                .cmp(&a.file_type().is_dir())
+                .then_with(|| {
+                    crate::format::natural_cmp(
+                        &a.file_name().to_string_lossy(),
+                        &b.file_name().to_string_lossy(),
+                    )
+                })
+        })
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file() && crate::filetypes::is_audio(e.path()))
+        .map(walkdir::DirEntry::into_path)
+        .collect()
+}
+
 /// Playlists among `files` replaced by their entries; only audio files
 /// stay.
 fn expand_playlists(files: Vec<PathBuf>) -> Vec<PathBuf> {
@@ -2243,5 +2269,48 @@ mod media_tests {
         // Late: a press of its own.
         let late = t + Duration::from_millis(400);
         assert!(!same_press(last, MediaKey::PlayPause, Via::Key, late));
+    }
+}
+
+#[cfg(test)]
+mod drop_tests {
+    use super::*;
+
+    #[test]
+    fn a_folder_dropped_is_its_audio_files_in_explorers_order() {
+        let root = std::env::temp_dir().join(format!("metalamp_drop_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let files = [
+            "Album/10 - Ten.mp3",
+            "Album/2 - Two.MP3",
+            "Album/cover.jpg",
+            "Album/list.m3u8",
+            "Album/CD2/1 - b.flac",
+            "Album/CD1/1 - a.flac",
+        ];
+        for f in files {
+            let path = root.join(f);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, b"").unwrap();
+        }
+        let found: Vec<String> = audio_in_folder(&root.join("Album"))
+            .iter()
+            .map(|p| {
+                p.strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        assert_eq!(
+            found,
+            [
+                "Album/CD1/1 - a.flac",
+                "Album/CD2/1 - b.flac",
+                "Album/2 - Two.MP3",
+                "Album/10 - Ten.mp3"
+            ]
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
