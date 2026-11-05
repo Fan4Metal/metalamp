@@ -335,7 +335,10 @@ fn visual_display(
     if response.clicked() && now.visual_click {
         cmds.push(BarCmd::Visual(now.visual.next()));
     }
-    egui::Popup::context_menu(&response).show(|ui| {
+    // An id of its own: the default one is the tooltip's, and with the
+    // tooltip shown the right button's click closed the menu it opened.
+    let menu = egui::Popup::context_menu(&response).id(response.id.with("visual_menu"));
+    menu.show(|ui| {
         ui.set_min_width(160.0);
         for v in Visual::ALL {
             if v.starts_group() {

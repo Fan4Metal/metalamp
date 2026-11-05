@@ -2122,11 +2122,17 @@ fn cover_button(ui: &mut Ui, cover: Option<&TextureHandle>, menu: &CoverMenu, ac
     if resp.clicked() && cover.is_some() && !menu.busy {
         acts.push(Act::Zoom);
     }
-    // One menu for both buttons: a context menu of its own would share its
-    // id and close it.
-    let toggle = resp.secondary_clicked() || (resp.clicked() && cover.is_none());
+    // The right button (a click without a cover) opens the menu at the
+    // pointer, as a context menu; a click while it is open closes it (a
+    // click outside). Its id is its own: `Popup::menu`'s is the one the
+    // tooltip's area takes (`Popup::default_response_id`), and with the
+    // tooltip shown the menu counted as open the frame before, so the
+    // click that opened it closed it at once.
+    let open = resp.secondary_clicked() || (resp.clicked() && cover.is_none());
     egui::Popup::menu(&resp)
-        .open_memory(toggle.then_some(egui::containers::SetOpenCommand::Toggle))
+        .id(resp.id.with("cover_menu"))
+        .open_memory(open.then_some(egui::containers::SetOpenCommand::Bool(true)))
+        .at_pointer_fixed()
         // The size is chosen with the menu kept open; the other items
         // close it.
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)

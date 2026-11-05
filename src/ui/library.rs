@@ -1292,7 +1292,10 @@ fn top_bar(
             };
             *changed = true;
         }
+        // An id of its own: the default one is the tooltip's, and with the
+        // tooltip shown the right button's click closed the menu it opened.
         egui::Popup::context_menu(&view)
+            .id(view.id.with("covers_menu"))
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
                 ui.set_min_width(220.0);
