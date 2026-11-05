@@ -207,13 +207,13 @@ fn scheme(visual: Visual) -> Scheme {
             peak: &[0xffe6bf, 0xffcde2, 0xe9dbff],
             by_level: false,
         },
-        // Moonlight on ice: the lines bright, almost white.
+        // Acid neon: mint at the bass, lime, lemon at the treble.
         Visual::Ridges => Scheme {
             rows: &[
-                (0.0, &[0x1a4a86, 0x24589c, 0x363c98]),
-                (1.0, &[0xa8eeff, 0xeefaff, 0xcfc8ff]),
+                (0.0, &[0x0a4a3a, 0x1e5a14, 0x4a5a0a]),
+                (1.0, &[0x3dffc0, 0x8aff5a, 0xe6ff4d]),
             ],
-            peak: &[0xffffff],
+            peak: &[0xe0fff4, 0xeeffe0, 0xfcffe0],
             by_level: false,
         },
         // Dusk: coral bass in front, orange, gold at the back.
