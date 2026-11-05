@@ -1,10 +1,12 @@
 //! Fire: flames rising from the spectrum along the display's bottom, as
 //! Doom's fire was drawn. The picture is a coarse grid of heat (a pixel
-//! about `POINTS` points wide); `STEP_HZ` times a second each pixel gives
-//! its heat to the one over it, as Doom did it: one random number of four
+//! about `POINTS` points wide); `STEP_HZ` times a second each pixel pulls
+//! heat from the row below: one random number of four
 //! moves it a pixel aside (mostly to the left, a wind) and takes a step of
 //! heat off or not, so the shift and the cooling go together and the heat
-//! rises in licking tongues rather than as noise. The bottom row is the source: each column the analyzer's level
+//! rises in licking tongues rather than as noise. Each destination is
+//! written, leaving no old heat floating between the flames. The bottom
+//! row is the source: each column the analyzer's level
 //! at its place across (the bass on the left), flickering, and every beat
 //! throws it higher. Shown as a texture over the display, the heat in the
 //! visualization's colours, the hottest drawn towards white. Paused, it
@@ -27,7 +29,7 @@ const REACH: f32 = 0.95;
 /// A level under this lights nothing; over it the source's heat grows to
 /// full at 1, raised to `POWER`.
 const FROM: f32 = 0.25;
-const POWER: f32 = 1.0;
+const POWER: f32 = 0.65;
 /// A beat's height adds this much heat to the whole source.
 const KICK_HEAT: f32 = 0.35;
 /// The source's heat falls the whole way in this long.
@@ -112,10 +114,9 @@ impl Fire {
         self.changed |= steps > 0;
     }
 
-    /// The heat a pixel up: each pixel's into the one over it, a pixel
-    /// to the right, the same, or one or two to the left, and a step of
-    /// heat lost with the odd ones (Doom's way); the bottom row from the
-    /// source, flickering a little.
+    /// Pulls heat from the row below, with Doom's coupled drift and
+    /// cooling. Every destination is written: scattering left holes
+    /// holding old heat, which looked like floating grains.
     fn step(&mut self) {
         let (w, h) = (self.width, self.height);
         // Half a step lost a row on average: full heat reaches `REACH` of
@@ -129,10 +130,10 @@ impl Fire {
                 }
                 let r = (bits & 3) as usize;
                 bits >>= 2;
-                let v = self.heat[y * w + x];
-                let to = (x + 1).saturating_sub(r).min(w - 1);
+                let from = (x + r).saturating_sub(1).min(w - 1);
+                let v = 0.75 * self.heat[y * w + from] + 0.25 * self.heat[y * w + x];
                 let lost = (r & 1) as f32 * cooling;
-                self.heat[(y - 1) * w + to] = (v - lost).max(0.0);
+                self.heat[(y - 1) * w + x] = (v - lost).max(0.0);
             }
         }
         let bottom = (h - 1) * w;
@@ -182,12 +183,15 @@ impl Fire {
                 let place = x as f32 / (w - 1).max(1) as f32;
                 // The colour's floor for the cooler half, its top for the
                 // hot core, then towards white.
-                let mut c = colours.at(v.powf(1.6), place);
+                let mut c = colours.at(v.powf(0.85), place);
+                if !colours.is_dark() {
+                    c = c.lerp_to_gamma(colours.peak(place), 0.3);
+                }
                 if v > 0.75 {
                     c = c.lerp_to_gamma(bright, (v - 0.75) / 0.25 * 0.6);
                 }
                 // Fading into the ground where it is cool.
-                let a = (v / 0.45).clamp(0.0, 1.0);
+                let a = (v / 0.28).clamp(0.0, 1.0);
                 *out = ground.lerp_to_gamma(c, a * a * (3.0 - 2.0 * a));
             }
             match &mut self.texture {
@@ -288,5 +292,17 @@ mod tests {
         assert_eq!(pixels_for(vec2(300.0, 90.0)), (100, 30));
         assert_eq!(pixels_for(vec2(4000.0, 90.0)).0, MAX_WIDTH);
         assert_eq!(pixels_for(vec2(0.0, 90.0)), (0, 0));
+    }
+
+    #[test]
+    fn no_old_heat_is_left_between_the_flames() {
+        let mut f = Fire::new();
+        f.feed(None, true, 0.0, vec2(300.0, 90.0));
+        f.heat.fill(1.0);
+        for _ in 0..=f.height {
+            f.step();
+        }
+        assert!(f.heat.iter().all(|&v| v == 0.0));
+        assert!(!f.active());
     }
 }

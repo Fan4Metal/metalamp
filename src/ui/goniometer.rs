@@ -85,12 +85,17 @@ impl Goniometer {
         if side < 8 || (heard.is_some() && !moved) {
             return;
         }
+        if dt <= 0.0 {
+            return;
+        }
         let dim = 0.5f32.powf(dt / HALF_S);
         if self.lit {
             let mut lit = false;
             for p in &mut self.pixels {
                 if p[3] > 0.0 {
-                    let left = p[3] * dim - 0.01;
+                    // The cutoff fades with elapsed time too, so a
+                    // faster display does not erase more light.
+                    let left = (p[3] + 0.05) * dim - 0.05;
                     if left <= 0.0 {
                         *p = [0.0; 4];
                     } else {
@@ -104,7 +109,7 @@ impl Goniometer {
             self.changed = true;
         }
         self.peak *= 0.5f32.powf(dt / PEAK_HALF_S);
-        let follow = (dt / METER_S).min(1.0);
+        let follow = 1.0 - (-dt / METER_S).exp();
         let Some((mid, wide)) = heard.filter(|(m, s)| !m.is_empty() && m.len() == s.len()) else {
             self.correlation -= self.correlation * follow;
             self.balance -= self.balance * follow;
@@ -123,28 +128,36 @@ impl Goniometer {
             ll += l * l;
             rr += r * r;
         }
-        if ll + rr > 1e-6 {
+        let audible = (ll + rr) / mid.len() as f32 > 1e-10;
+        let (correlation, balance) = if audible {
             let correlation = if ll * rr > 1e-12 {
                 lr / (ll * rr).sqrt()
             } else {
                 // One channel silent: unrelated.
                 0.0
             };
-            self.correlation += (correlation.clamp(-1.0, 1.0) - self.correlation) * follow;
-            self.balance += ((rr - ll) / (ll + rr) - self.balance) * follow;
+            (correlation.clamp(-1.0, 1.0), (rr - ll) / (ll + rr))
+        } else {
+            (0.0, 0.0)
+        };
+        self.correlation += (correlation - self.correlation) * follow;
+        self.balance += (balance - self.balance) * follow;
+        if audible {
+            self.draw(mid, wide, dt);
         }
-        self.draw(mid, wide);
     }
 
     /// The frames' trace into the picture, each joined to the one before.
-    fn draw(&mut self, mid: &[f32], wide: &[f32]) {
+    fn draw(&mut self, mid: &[f32], wide: &[f32], dt: f32) {
         let n = self.side;
         let half = n as f32 / 2.0;
         let gain = (FILL / self.peak.max(1e-4)).clamp(1.0, MOST_GAIN) * half;
         let colours = palette::visual();
-        // About as much light a frame whatever the rate: each frame's trace
-        // as bright as `LIGHT` over a line `TRACE` sides long.
-        let weight = (LIGHT * TRACE * n as f32 / mid.len() as f32).min(LIGHT);
+        // Match the exposure to the phosphor decay, relative to 50 Hz.
+        // Brightness then stays the same at different frame rates, as
+        // well as at different audio sample rates.
+        let exposure = (1.0 - 0.5f32.powf(dt / HALF_S)) / (1.0 - 0.5f32.powf(0.02 / HALF_S));
+        let weight = (LIGHT * TRACE * n as f32 / mid.len() as f32).min(LIGHT) * exposure;
         let mut last: Option<(f32, f32)> = None;
         for (&m, &s) in mid.iter().zip(wide) {
             // The left channel alone up the left diagonal.
@@ -420,5 +433,50 @@ mod tests {
             g.feed(None, true, 0.02, size);
         }
         assert!(!g.active());
+    }
+
+    #[test]
+    fn digital_silence_leaves_no_dot_and_releases_the_meters() {
+        let mut g = Goniometer::new();
+        let size = vec2(400.0, 100.0);
+        let (m, s) = tone(960, 1.0, 0.0);
+        for _ in 0..50 {
+            g.feed(Some((&m, &s)), true, 0.02, size);
+        }
+        assert!(g.balance < -0.9);
+        let silence = vec![0.0; 960];
+        for _ in 0..150 {
+            g.feed(Some((&silence, &silence)), true, 0.02, size);
+        }
+        assert!(!g.active());
+        assert!(g.pixels.iter().all(|p| p[3] == 0.0));
+    }
+
+    #[test]
+    fn exposure_and_decay_follow_time_instead_of_frame_count() {
+        let size = vec2(400.0, 100.0);
+        let run = |frames: usize| {
+            let mut g = Goniometer::new();
+            // A fixed point isolates exposure from the trace's geometry.
+            let m = [0.25; 960];
+            let s = [0.125; 960];
+            for _ in 0..frames {
+                g.feed(Some((&m, &s)), true, 1.0 / frames as f32, size);
+            }
+            let light = g.pixels.iter().map(|p| p[3]).sum::<f32>();
+            (g, light)
+        };
+        let (mut slow, a) = run(25);
+        let (mut fast, b) = run(100);
+        assert!((a - b).abs() / a.max(b) < 0.02, "{a} / {b}");
+        assert!((slow.balance - fast.balance).abs() < 1e-4);
+        for _ in 0..5 {
+            slow.feed(None, true, 0.04, size);
+        }
+        for _ in 0..20 {
+            fast.feed(None, true, 0.01, size);
+        }
+        let light = |g: &Goniometer| g.pixels.iter().map(|p| p[3]).sum::<f32>();
+        assert!((light(&slow) - light(&fast)).abs() / light(&slow).max(0.001) < 0.02);
     }
 }

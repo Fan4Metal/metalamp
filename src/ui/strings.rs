@@ -25,11 +25,10 @@ pub const OPEN: [u8; 6] = [40, 45, 50, 55, 59, 64];
 /// The strings' widths in points, the low E first.
 const WIDTHS: [f32; 6] = [2.2, 1.9, 1.6, 1.3, 1.0, 0.8];
 /// The frets: at least `FEWEST`, at most `MOST`, the narrowest at least
-/// `LEAST_FRET` points wide; the neck takes `NECK` of the width.
+/// `LEAST_FRET` points wide.
 const FEWEST: u8 = 5;
 const MOST: u8 = 19;
 const LEAST_FRET: f32 = 11.0;
-const NECK: f32 = 0.84;
 /// A note lights from this level, fully over `SPAN` more.
 const FROM: f32 = 0.35;
 const SPAN: f32 = 0.4;
@@ -56,7 +55,8 @@ pub struct Strings {
     /// The hand's place on the neck, in frets.
     hand: f32,
     frets: u8,
-    time: f32,
+    /// Continuous phases, so changing a fret does not jump the wave.
+    phases: [f32; 6],
 }
 
 impl Default for Strings {
@@ -71,7 +71,7 @@ impl Strings {
             ringing: [Ringing::default(); 6],
             hand: 0.0,
             frets: 12,
-            time: 0.0,
+            phases: [0.0; 6],
         }
     }
 
@@ -80,10 +80,14 @@ impl Strings {
     /// `width` points wide.
     pub fn feed(&mut self, keys: &[f32], moved: bool, dt: f32, width: f32) {
         self.frets = frets_for(width);
+        for r in &mut self.ringing {
+            if r.fret > self.frets {
+                r.level = 0.0;
+            }
+        }
         if !moved {
             return;
         }
-        self.time += dt;
         for r in &mut self.ringing {
             r.level = (r.level - dt / RING_S).max(0.0);
         }
@@ -105,19 +109,27 @@ impl Strings {
             let best = (0..6)
                 .filter(|&s| !taken[s] && m >= OPEN[s] && m - OPEN[s] <= self.frets)
                 .min_by(|&a, &b| {
-                    let off = |s: usize| (f32::from(m - OPEN[s]) - self.hand).abs();
+                    // Keep a sustained note on its string while the
+                    // hand moves, instead of making it hop to a neighbour.
+                    let off = |s: usize| {
+                        let same =
+                            self.ringing[s].level > 0.0 && OPEN[s] + self.ringing[s].fret == m;
+                        (f32::from(m - OPEN[s]) - self.hand).abs() - if same { 2.0 } else { 0.0 }
+                    };
                     off(a).total_cmp(&off(b))
                 });
             let Some(s) = best else { continue };
             taken[s] = true;
             let fret = m - OPEN[s];
             let r = &mut self.ringing[s];
-            if light >= r.level || r.fret == fret {
-                *r = Ringing {
-                    fret,
-                    level: light.max(r.level),
-                };
-            }
+            *r = Ringing {
+                fret,
+                level: if r.fret == fret {
+                    light.max(r.level)
+                } else {
+                    light
+                },
+            };
             if fret > 0 {
                 frets_played.0 += f32::from(fret) * light;
                 frets_played.1 += light;
@@ -130,6 +142,11 @@ impl Strings {
             // The hand's place: a little below the frets it plays.
             let wanted = (frets_played.0 / frets_played.1 - 1.5).max(0.0);
             self.hand += (wanted - self.hand) * (dt / HAND_S).min(1.0);
+        }
+        for (s, phase) in self.phases.iter_mut().enumerate() {
+            let note = OPEN[s] + self.ringing[s].fret;
+            let hz = (SWING_HZ * 2f32.powf(f32::from(note - OPEN[0]) / 24.0)).min(18.0);
+            *phase = (*phase + TAU * hz * dt).rem_euclid(TAU);
         }
     }
 
@@ -151,9 +168,9 @@ impl Strings {
         let spacing = (h - 2.0 * margin) / 5.0;
         let y_of = |s: usize| rect.bottom() - margin - spacing * s as f32;
         let nut = rect.left() + 8.0;
-        let neck_end = rect.left() + w * NECK;
         let bridge = rect.right() - 4.0;
-        let x_of = fret_places(nut, neck_end, self.frets);
+        let x_of = fret_places(nut, bridge, self.frets);
+        let neck_end = x_of[usize::from(self.frets)];
 
         // The fretboard, its frets and inlays.
         let board = Rect::from_min_max(
@@ -207,9 +224,7 @@ impl Strings {
             // The two first modes of the part from the fret to the
             // bridge, the second a third as wide and twice as fast.
             let swing = SWING * spacing * r.level;
-            let note = OPEN[s] + r.fret;
-            let hz = (SWING_HZ * 2f32.powf(f32::from(note - OPEN[0]) / 24.0)).min(18.0);
-            let phase = TAU * hz * self.time + s as f32;
+            let phase = self.phases[s];
             let (a1, a2) = (phase.sin(), (2.0 * phase + 1.0).sin() * 0.35);
             let steps = (((bridge - from) / 3.0) as usize).max(8);
             let points: Vec<Pos2> = (0..=steps)
@@ -244,21 +259,21 @@ impl Strings {
 
 /// How many frets fit a display `width` points wide.
 fn frets_for(width: f32) -> u8 {
-    let neck = (width * NECK - 8.0).max(1.0);
+    let scale = (width - 12.0).max(1.0);
     (FEWEST..=MOST)
         .rev()
         .find(|&n| {
-            let x = fret_places(0.0, neck, n);
+            let x = fret_places(0.0, scale, n);
             x[usize::from(n)] - x[usize::from(n) - 1] >= LEAST_FRET
         })
         .unwrap_or(FEWEST)
 }
 
-/// The places of the nut (0) and of each fret up to `frets`, the last at
-/// `end`: a real neck's, each fret the twelfth root of two narrower.
-fn fret_places(nut: f32, end: f32, frets: u8) -> Vec<f32> {
+/// The nut (0) and frets measured against the bridge: the twelfth fret
+/// is halfway along the vibrating length at every display width.
+fn fret_places(nut: f32, bridge: f32, frets: u8) -> Vec<f32> {
     let reach = |n: u8| 1.0 - 2f32.powf(-f32::from(n) / 12.0);
-    let scale = (end - nut) / reach(frets);
+    let scale = bridge - nut;
     (0..=frets).map(|n| nut + scale * reach(n)).collect()
 }
 
@@ -278,10 +293,10 @@ mod tests {
     #[test]
     fn the_frets_narrow_as_a_necks() {
         let x = fret_places(0.0, 100.0, 12);
-        assert!((x[12] - 100.0).abs() < 1e-3);
+        assert!((x[12] - 50.0).abs() < 1e-3);
         // The twelfth fret is halfway to the bridge: the first six frets
         // take more room than the next six.
-        assert!(x[6] > 50.0);
+        assert!(x[6] > 25.0);
         assert!(x[1] - x[0] > x[12] - x[11]);
         assert_eq!(frets_for(100.0), FEWEST);
         assert_eq!(frets_for(5000.0), MOST);
@@ -334,5 +349,25 @@ mod tests {
         let mut s = Strings::new();
         s.feed(&keys(&[(45, 0.3)]), true, 0.02, 700.0);
         assert!(!s.active());
+    }
+
+    #[test]
+    fn narrowing_the_neck_releases_notes_beyond_its_end() {
+        let mut s = Strings::new();
+        s.feed(&keys(&[(81, 1.0)]), true, 0.02, 700.0);
+        assert!(s.active());
+        s.feed(&keys(&[]), false, 0.02, 180.0);
+        assert!(!s.active());
+    }
+
+    #[test]
+    fn a_quieter_new_note_can_replace_a_ringing_note() {
+        let mut s = Strings::new();
+        s.feed(&keys(&[(40, 1.0)]), true, 0.02, 700.0);
+        // These notes can only use the low E near the nut. The previous
+        // note's release must not hide the next note of a melody.
+        s.feed(&keys(&[(42, 0.55)]), true, 0.02, 700.0);
+        assert_eq!(s.ringing[0].fret, 2);
+        assert!(s.ringing[0].level > 0.0);
     }
 }

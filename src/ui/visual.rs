@@ -1060,6 +1060,9 @@ mod tests {
             for _ in 0..300 {
                 end += 960;
                 let s = sound(end as usize, &mut seed);
+                // The scene must advance by 20 ms even in this tight
+                // loop; otherwise fire and sparks stay nearly empty.
+                v.last = Instant::now() - Duration::from_millis(20);
                 v.feed(
                     visual,
                     Some((&s, Heard { rate, end })),
@@ -1072,6 +1075,7 @@ mod tests {
             for _ in 0..frames {
                 end += 960;
                 let s = sound(end as usize, &mut seed);
+                v.last = Instant::now() - Duration::from_millis(20);
                 let t = Instant::now();
                 v.feed(
                     visual,

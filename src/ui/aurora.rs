@@ -64,7 +64,7 @@ impl Aurora {
                 ((level_at(l, place) - FROM) / (1.0 - FROM)).clamp(0.0, 1.0)
             });
             let speed = if wanted > *shown { RISE_S } else { FALL_S };
-            *shown += (wanted - *shown) * (dt / speed).min(1.0);
+            *shown += (wanted - *shown) * (1.0 - (-dt / speed).exp());
             if *shown < 0.002 {
                 *shown = 0.0;
             }
@@ -117,30 +117,48 @@ impl Aurora {
             for c in 0..=columns {
                 let u = c as f32 / columns as f32;
                 let x = rect.left() + u * w;
-                let level = level_at(&self.levels, u);
+                let level = level_at(&self.levels, (u + 0.035 * k).clamp(0.0, 1.0));
                 // The edge sways: two slow waves running either way.
                 let sway = 0.1 * (TAU * (u * 1.3 + 0.07 * k) + t * 0.35 * (1.0 + 0.3 * k)).sin()
                     + 0.05 * (TAU * u * 3.1 - t * 0.6 + k).sin();
-                let y = rect.top() + h * (edge + sway);
+                // Folds in the hem, with finer detail than the slow
+                // sway. The layers drift separately, giving them depth.
+                let fold = (TAU * u * (5.0 + k) + t * 0.45 + k * 1.7).sin();
+                let y = rect.top() + h * (edge + sway + fold * 0.018);
                 let tall = h * (0.2 + 0.65 * level) * (0.85 + 0.15 * (TAU * u * 2.0 + t).sin());
                 // Rays drifting along.
                 let rays = 0.45
                     + 0.55
                         * (0.5 + 0.5 * (TAU * u * 23.0 + t * 1.7 + 2.0 * k).sin())
                         * (0.5 + 0.5 * (TAU * u * 9.3 - t * 0.9 + k).sin());
-                let bright = level.powf(0.8) * rays * light;
+                let edge_fade = (u * 18.0).min((1.0 - u) * 18.0).min(1.0);
+                let bright = level.powf(0.65) * rays * light * edge_fade;
                 let place = (u * 0.8 + 0.1).min(1.0);
                 let low = colours.at(0.6 + 0.4 * level, place);
-                let high = colours.at(0.8, (place + further).min(1.0));
+                let low = if dark {
+                    low
+                } else {
+                    low.lerp_to_gamma(colours.peak(place), 0.3)
+                };
+                let rim = low.lerp_to_gamma(colours.peak(place), 0.35);
+                let high_place = (place + further).min(1.0);
+                let high = colours.at(0.8, high_place);
+                let high = if dark {
+                    high
+                } else {
+                    high.lerp_to_gamma(colours.peak(high_place), 0.3)
+                };
                 let clear = Color32::TRANSPARENT;
                 let base = mesh.vertices.len() as u32;
-                mesh.colored_vertex(pos2(x, y + 3.0), clear);
-                mesh.colored_vertex(pos2(x, y), glow(low, bright, dark));
-                mesh.colored_vertex(pos2(x, y - tall * 0.35), glow(high, bright * 0.55, dark));
+                mesh.colored_vertex(pos2(x, y + h * 0.035), clear);
+                mesh.colored_vertex(pos2(x, y + 1.0), glow(low, bright * 0.3, dark));
+                mesh.colored_vertex(pos2(x, y - 0.5), glow(rim, bright * 1.4, dark));
+                mesh.colored_vertex(pos2(x, y - tall * 0.12), glow(low, bright * 0.65, dark));
+                mesh.colored_vertex(pos2(x, y - tall * 0.4), glow(high, bright * 0.3, dark));
                 mesh.colored_vertex(pos2(x, y - tall), clear);
                 if c > 0 {
-                    for j in 0..3 {
-                        let (a, b) = (base - 4 + j, base + j);
+                    for j in 0..5 {
+                        let (a, b) = (base - 6 + j, base + j);
                         mesh.add_triangle(a, b, a + 1);
                         mesh.add_triangle(a + 1, b, b + 1);
                     }
@@ -177,5 +195,23 @@ mod tests {
         let quiet = vec![0.15; BANDS];
         a.feed(Some(&quiet), true, 0.02);
         assert!(!a.active());
+    }
+
+    #[test]
+    fn the_curtains_breathe_at_the_same_speed_at_different_frame_rates() {
+        let mut slow = Aurora::new();
+        let mut fast = Aurora::new();
+        for _ in 0..5 {
+            slow.feed(Some(&[0.8; BANDS]), true, 0.04);
+        }
+        for _ in 0..20 {
+            fast.feed(Some(&[0.8; BANDS]), true, 0.01);
+        }
+        assert!((slow.levels[0] - fast.levels[0]).abs() < 1e-5);
+        slow.feed(None, true, 0.04);
+        for _ in 0..4 {
+            fast.feed(None, true, 0.01);
+        }
+        assert!((slow.levels[0] - fast.levels[0]).abs() < 1e-5);
     }
 }

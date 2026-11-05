@@ -53,6 +53,7 @@ struct Spark {
 
 pub struct Sparks {
     sparks: Vec<Spark>,
+    size: Vec2,
     /// Sparks owed to each band (fractions carried on).
     owed: Vec<f32>,
     beat: Beat,
@@ -69,6 +70,7 @@ impl Sparks {
     pub fn new() -> Sparks {
         Sparks {
             sparks: Vec::new(),
+            size: Vec2::ZERO,
             owed: vec![0.0; BANDS],
             beat: Beat::default(),
             rng: Rng::default(),
@@ -80,52 +82,28 @@ impl Sparks {
     pub fn feed(&mut self, levels: Option<&[f32]>, moved: bool, dt: f32, size: Vec2) {
         if size.x < 8.0 || size.y < 8.0 {
             self.sparks.clear();
+            self.size = Vec2::ZERO;
             return;
         }
+        if self.size != size && self.size.x > 0.0 && self.size.y > 0.0 {
+            let scale = size / self.size;
+            for s in &mut self.sparks {
+                s.at = (s.at.to_vec2() * scale).to_pos2();
+                s.speed = s.speed * scale;
+            }
+        }
+        self.size = size;
         if levels.is_some() && !moved {
             return;
         }
         // Thrown up to the top in `RISE_S` at full level.
         let gravity = 2.0 * size.y / (RISE_S * RISE_S);
         let speed = gravity * RISE_S;
-        let mut left = dt;
-        while left > 0.0 {
-            let step = left.min(STEP_S);
-            left -= step;
-            for s in &mut self.sparks {
-                s.speed.y += gravity * step;
-                s.at += s.speed * step;
-                s.age += step;
-                if s.at.y > size.y && s.speed.y > 0.0 {
-                    s.at.y = size.y;
-                    s.speed.y *= -BOUNCE;
-                    s.speed.x *= BOUNCE_ACROSS;
-                }
-            }
-        }
-        self.sparks
-            .retain(|s| s.age < s.life && s.at.x > -STREAK_MOST && s.at.x < size.x + STREAK_MOST);
-
         let struck = self.beat.feed(levels, dt);
         // Across: the furthest bands land at the ends at three quarters of
         // full level, after twice the rise.
         let across = size.x / 2.0 / (2.0 * RISE_S) / 0.75;
         let from = pos2(size.x / 2.0, size.y);
-        if let Some(levels) = levels {
-            let n = levels.len().min(BANDS);
-            for (band, &level) in levels.iter().take(n).enumerate() {
-                let l = ((level - FROM) / (1.0 - FROM)).clamp(0.0, 1.0);
-                self.owed[band] += RATE * l * l * dt;
-                while self.owed[band] >= 1.0 {
-                    self.owed[band] -= 1.0;
-                    let place = (band as f32 + self.rng.unit()) / n as f32;
-                    let strength = (0.5 + 0.5 * l) * self.rng.between(0.75, 1.05);
-                    let way = vec2((2.0 * place - 1.0) * across, -speed);
-                    let at = from + vec2(self.rng.between(-4.0, 4.0), 0.0);
-                    self.throw(at, way * strength, place);
-                }
-            }
-        }
         if let Some(strength) = struck {
             for _ in 0..(BURST * strength) as usize {
                 let place = self.rng.unit();
@@ -133,6 +111,41 @@ impl Sparks {
                 let way = vec2((2.0 * place - 1.0) * across, -speed);
                 self.throw(from, way * v, place);
             }
+        }
+        // Emit throughout a slow frame as well as integrating it in
+        // small steps. Otherwise each frame launches one visible clump.
+        let mut left = dt;
+        while left > 0.0 {
+            let step = left.min(STEP_S);
+            left -= step;
+            if let Some(levels) = levels {
+                let n = levels.len().min(BANDS);
+                for (band, &level) in levels.iter().take(n).enumerate() {
+                    let l = ((level - FROM) / (1.0 - FROM)).clamp(0.0, 1.0);
+                    self.owed[band] += RATE * l * l * step;
+                    while self.owed[band] >= 1.0 {
+                        self.owed[band] -= 1.0;
+                        let place = (band as f32 + self.rng.unit()) / n as f32;
+                        let strength = (0.5 + 0.5 * l) * self.rng.between(0.75, 1.05);
+                        let way = vec2((2.0 * place - 1.0) * across, -speed);
+                        let at = from + vec2(self.rng.between(-4.0, 4.0), 0.0);
+                        self.throw(at, way * strength, place);
+                    }
+                }
+            }
+            for s in &mut self.sparks {
+                s.at += s.speed * step + vec2(0.0, gravity * step * step * 0.5);
+                s.speed.y += gravity * step;
+                s.age += step;
+                if s.at.y > size.y && s.speed.y > 0.0 {
+                    s.at.y = size.y;
+                    s.speed.y *= -BOUNCE;
+                    s.speed.x *= BOUNCE_ACROSS;
+                }
+            }
+            self.sparks.retain(|s| {
+                s.age < s.life && s.at.x > -STREAK_MOST && s.at.x < size.x + STREAK_MOST
+            });
         }
         if self.sparks.len() > MOST {
             let over = self.sparks.len() - MOST;
@@ -162,11 +175,32 @@ impl Sparks {
         let dark = colours.is_dark();
         let hot = Color32::from_rgb(255, 247, 225);
         let mut mesh = Mesh::default();
+        // The glowing source anchors the fountain; its light follows
+        // the music and dies with the last sparks.
+        let source_light = self.beat.level * 0.4 + self.beat.kick * 0.15;
+        if source_light > 0.0 {
+            let center = pos2(rect.center().x, rect.bottom());
+            let radius = vec2((rect.width() * 0.035).clamp(6.0, 24.0), 6.0);
+            let base = mesh.vertices.len() as u32;
+            mesh.colored_vertex(center, glow(colours.peak(0.5), source_light, dark));
+            for i in 0..=12 {
+                let a = std::f32::consts::PI * i as f32 / 12.0;
+                mesh.colored_vertex(
+                    center + vec2(a.cos(), -a.sin()) * radius,
+                    Color32::TRANSPARENT,
+                );
+                if i > 0 {
+                    mesh.add_triangle(base, base + i, base + i + 1);
+                }
+            }
+        }
         for s in &self.sparks {
             let t = s.age / s.life;
             let colour = colours.at(1.0 - 0.25 * t, s.place);
             let colour = if dark && t < 0.3 {
                 hot.lerp_to_gamma(colour, t / 0.3)
+            } else if !dark {
+                colour.lerp_to_gamma(colours.peak(s.place), 0.3)
             } else {
                 colour
             };
@@ -175,8 +209,8 @@ impl Sparks {
             let tail_by = s.speed * STREAK_S;
             let tail = head - tail_by * (STREAK_MOST / tail_by.length().max(STREAK_MOST)).min(1.0);
             segment(&mut mesh, tail, head, 4.0, glow(colour, 0.2 * fade, dark));
-            segment(&mut mesh, tail, head, 1.2, glow(colour, 0.8 * fade, dark));
-            let head_colour = if dark { hot } else { colour };
+            segment(&mut mesh, tail, head, 1.4, glow(colour, 0.95 * fade, dark));
+            let head_colour = colour;
             mesh.add_colored_rect(
                 Rect::from_center_size(head, vec2(2.2, 2.2)),
                 glow(head_colour, fade, dark),
@@ -204,8 +238,13 @@ fn segment(mesh: &mut Mesh, a: Pos2, b: Pos2, width: f32, colour: Color32) {
     };
     let normal = way.rot90() * (width / 2.0);
     let i = mesh.vertices.len() as u32;
-    for p in [a + normal, b + normal, b - normal, a - normal] {
-        mesh.colored_vertex(p, colour);
+    for (p, c) in [
+        (a + normal * 0.25, Color32::TRANSPARENT),
+        (b + normal, colour),
+        (b - normal, colour),
+        (a - normal * 0.25, Color32::TRANSPARENT),
+    ] {
+        mesh.colored_vertex(p, c);
     }
     mesh.add_triangle(i, i + 1, i + 2);
     mesh.add_triangle(i, i + 2, i + 3);
@@ -267,5 +306,26 @@ mod tests {
             s.feed(Some(&loud), true, 0.05, size);
         }
         assert!(s.sparks.len() <= MOST);
+    }
+
+    #[test]
+    fn a_slow_frame_spreads_out_emission() {
+        let mut s = Sparks::new();
+        s.feed(Some(&[1.0; BANDS]), true, 0.1, vec2(400.0, 100.0));
+        let oldest = s.sparks.iter().map(|p| p.age).fold(0.0, f32::max);
+        let youngest = s.sparks.iter().map(|p| p.age).fold(1.0, f32::min);
+        assert!(oldest > 0.05 && oldest - youngest > 0.03);
+    }
+
+    #[test]
+    fn resizing_keeps_the_fountain_in_the_display() {
+        let mut s = Sparks::new();
+        s.feed(None, true, 0.0, vec2(800.0, 100.0));
+        s.throw(pos2(400.0, 40.0), vec2(80.0, -50.0), 0.5);
+        // Resizing a paused scene changes only its scale, not its age.
+        s.feed(Some(&[0.0; BANDS]), false, 0.02, vec2(300.0, 50.0));
+        assert_eq!(s.sparks[0].at, pos2(150.0, 20.0));
+        assert_eq!(s.sparks[0].speed, vec2(30.0, -25.0));
+        assert_eq!(s.sparks[0].age, 0.0);
     }
 }
