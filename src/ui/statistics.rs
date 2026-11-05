@@ -61,6 +61,9 @@ pub struct StatisticsView {
     took: Duration,
     /// Scrolled to this offset at start (`METALAMP_STATISTICS=<offset>`).
     scroll: Option<f32>,
+    /// No library is shown (the player and playlist layout): the artists
+    /// and tracks lead nowhere. Set by the app each frame.
+    pub no_library: bool,
 }
 
 /// Where a click takes the library.
@@ -68,6 +71,12 @@ pub struct StatisticsView {
 enum Go {
     Artist(AlbumId),
     Track(AlbumId, TrackId),
+}
+
+/// Whether the rows lead to the library, and where the one clicked does.
+struct Going {
+    allowed: bool,
+    to: Option<Go>,
 }
 
 impl Go {
@@ -135,7 +144,10 @@ impl StatisticsView {
         // Over the first frames: the first ones do not know the content's
         // height yet, to which the offset is held.
         let scroll = self.scroll.filter(|_| ctx.cumulative_frame_nr() < 20);
-        let mut go = None;
+        let mut go = Going {
+            allowed: !self.no_library,
+            to: None,
+        };
         let mut close = false;
         let modal = egui::Modal::new(Id::new("statistics"))
             .frame(
@@ -154,10 +166,10 @@ impl StatisticsView {
                         i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
                             || i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
                     }));
-        if close || go.is_some() {
+        if close || go.to.is_some() {
             self.open = false;
         }
-        go.map(Go::action)
+        go.to.map(Go::action)
     }
 }
 
@@ -169,7 +181,7 @@ fn page(
     library: &Library,
     took: Duration,
     scroll: Option<f32>,
-    go: &mut Option<Go>,
+    go: &mut Going,
 ) -> bool {
     let size = super::modal_size(ui.ctx(), SIZE, 12.0);
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
@@ -252,7 +264,7 @@ fn page(
 }
 
 /// The tiles and the cards, laid out in the content's width.
-fn content(ui: &mut Ui, s: &Summary, library: &Library, go: &mut Option<Go>) {
+fn content(ui: &mut Ui, s: &Summary, library: &Library, go: &mut Going) {
     if s.tracks == 0 {
         ui.add_space(80.0);
         ui.vertical_centered(|ui| {
@@ -655,7 +667,7 @@ fn format_colour(name: &str, dark: bool) -> Color32 {
 }
 
 /// One card: its title and note, and its chart.
-fn draw(ui: &Ui, kind: Kind, rect: Rect, s: &Summary, library: &Library, go: &mut Option<Go>) {
+fn draw(ui: &Ui, kind: Kind, rect: Rect, s: &Summary, library: &Library, go: &mut Going) {
     let id = Id::new("statistics").with(kind);
     match kind {
         Kind::Bitrates => {
@@ -1392,7 +1404,7 @@ struct Row {
 /// per row from a common start (at most 12 points thick, rounded at its
 /// end) with its value after it; the row under the pointer lit, with its
 /// tip; a click on a row that leads somewhere goes there.
-fn hbars(ui: &Ui, rect: Rect, id: Id, rows: &[Row], labels: f32, go: &mut Option<Go>) {
+fn hbars(ui: &Ui, rect: Rect, id: Id, rows: &[Row], labels: f32, go: &mut Going) {
     let painter = ui.painter();
     let font = FontId::proportional(12.5);
     let row_h = (rect.height() / rows.len().max(1) as f32).min(ROW);
@@ -1418,12 +1430,13 @@ fn hbars(ui: &Ui, rect: Rect, id: Id, rows: &[Row], labels: f32, go: &mut Option
     let room = (rect.right() - value_w - bar_left).max(10.0);
     let (accent, lit) = (palette::accent(), palette::accent_hover());
     for (i, r) in rows.iter().enumerate() {
+        let leads = r.go.filter(|_| go.allowed);
         let row = Rect::from_min_size(
             pos2(rect.left(), rect.top() + i as f32 * row_h),
             vec2(rect.width(), row_h),
         );
         let area = row.expand2(vec2(8.0, 0.0));
-        let sense = if r.go.is_some() {
+        let sense = if leads.is_some() {
             Sense::click()
         } else {
             Sense::hover()
@@ -1524,11 +1537,11 @@ fn hbars(ui: &Ui, rect: Rect, id: Id, rows: &[Row], labels: f32, go: &mut Option
         let mut resp = resp.on_hover_ui_at_pointer(|ui| {
             ui.label(&r.tip);
         });
-        if r.go.is_some() {
+        if leads.is_some() {
             resp = resp.on_hover_cursor(CursorIcon::PointingHand);
         }
         if resp.clicked() {
-            *go = r.go;
+            go.to = leads;
         }
     }
 }

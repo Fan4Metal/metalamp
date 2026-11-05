@@ -1222,8 +1222,6 @@ impl App {
         }
     }
 
-    /// Copy what lives elsewhere (the update check, the player) into the
-    /// settings.
     /// "Go to album" or "Go to artist" in the library; the keys go back to
     /// its panes.
     fn go_to(
@@ -1274,6 +1272,8 @@ impl App {
         self.settings.current_view().map(|v| v.name.as_str())
     }
 
+    /// Copy what lives elsewhere (the update check, the player) into the
+    /// settings.
     fn sync_settings(&mut self) {
         self.settings.check_updates = self.updates.enabled;
         self.settings.last_update_check = self.updates.last_check;
@@ -2139,6 +2139,7 @@ impl eframe::App for App {
             self.outside.read_again(&ctx);
         }
         self.about.show(&ctx);
+        self.statistics.no_library = self.settings.window_layout == WindowLayout::Playlist;
         if let Some(action) = self.statistics.show(&ctx, &self.library, &self.stats) {
             self.library_action(action, &ctx);
         }
