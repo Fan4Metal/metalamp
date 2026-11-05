@@ -2129,14 +2129,25 @@ fn cover_button(ui: &mut Ui, cover: Option<&TextureHandle>, menu: &CoverMenu, ac
     // tooltip shown the menu counted as open the frame before, so the
     // click that opened it closed it at once.
     let open = resp.secondary_clicked() || (resp.clicked() && cover.is_none());
-    egui::Popup::menu(&resp)
-        .id(resp.id.with("cover_menu"))
+    let menu_id = resp.id.with("cover_menu");
+    let shown = egui::Popup::menu(&resp)
+        .id(menu_id)
         .open_memory(open.then_some(egui::containers::SetOpenCommand::Bool(true)))
         .at_pointer_fixed()
         // The size is chosen with the menu kept open; the other items
         // close it.
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| cover_items(ui, menu, acts));
+    // Kept right over the window, as its sublayer (set each frame: egui
+    // forgets sublayers at the end of a pass). Both are foreground areas;
+    // a press on the window raises it, and egui keeps the order of those
+    // raised together, so the right button's press, which reaches egui in
+    // the frame the menu opens (`App::raw_input_hook`), left a menu opened
+    // before under the window after any click on it: open, not seen.
+    if let Some(shown) = shown {
+        ui.ctx()
+            .set_sublayer(ui.layer_id(), shown.response.layer_id);
+    }
 }
 
 /// The cover's menu: another picture (a file, the folder's), none, the one
@@ -2436,5 +2447,135 @@ mod tests {
         assert_eq!(words("MusicBrainzTrackId"), "MusicBrainz Track ID");
         assert_eq!(words("AcoustIdFingerprint"), "AcoustID Fingerprint");
         assert_eq!(words("Barcode"), "Barcode");
+    }
+
+    /// The hero's cover in the file info's modal, driven headless frame by
+    /// frame; the right button's press comes with its release in one
+    /// frame, as `App::raw_input_hook` gives it to egui.
+    struct Cover {
+        ctx: egui::Context,
+        time: f64,
+        rect: egui::Rect,
+        texture: Option<TextureHandle>,
+    }
+
+    impl Cover {
+        fn new() -> Cover {
+            let mut c = Cover {
+                ctx: egui::Context::default(),
+                time: 0.0,
+                rect: egui::Rect::NOTHING,
+                texture: None,
+            };
+            c.rest(3);
+            c
+        }
+
+        fn frame(&mut self, events: Vec<egui::Event>) {
+            self.time += 0.05;
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    vec2(1000.0, 800.0),
+                )),
+                time: Some(self.time),
+                events,
+                ..Default::default()
+            };
+            let (mut rect, mut texture) = (self.rect, self.texture.clone());
+            let mut out = self.ctx.run_ui(input, |ui| {
+                let ctx = ui.ctx().clone();
+                let t = texture
+                    .get_or_insert_with(|| {
+                        let image = egui::ColorImage::filled([8, 8], egui::Color32::RED);
+                        ctx.load_texture("cover", image, Default::default())
+                    })
+                    .clone();
+                egui::Modal::new(egui::Id::new("file_info")).show(&ctx, |ui| {
+                    ui.set_width(WIDTH);
+                    let menu = CoverMenu {
+                        writable: true,
+                        folder: None,
+                        changed: false,
+                        removable: true,
+                        savable: false,
+                        dropping: false,
+                        busy: false,
+                        note: None,
+                        side: CoverSide::Original,
+                    };
+                    let row = ui.horizontal_top(|ui| {
+                        cover_button(ui, Some(&t), &menu, &mut Vec::new());
+                    });
+                    rect = egui::Rect::from_min_size(row.response.rect.min, vec2(COVER, COVER));
+                    ui.add_space(300.0);
+                });
+            });
+            out.textures_delta.clear();
+            (self.rect, self.texture) = (rect, texture);
+        }
+
+        fn rest(&mut self, frames: usize) {
+            for _ in 0..frames {
+                self.frame(vec![]);
+            }
+        }
+
+        fn click(&mut self, at: egui::Pos2, button: egui::PointerButton) {
+            let event = |pressed| egui::Event::PointerButton {
+                pos: at,
+                button,
+                pressed,
+                modifiers: Default::default(),
+            };
+            if button == egui::PointerButton::Secondary {
+                self.frame(vec![
+                    egui::Event::PointerMoved(at),
+                    event(true),
+                    event(false),
+                ]);
+            } else {
+                self.frame(vec![egui::Event::PointerMoved(at), event(true)]);
+                self.frame(vec![event(false)]);
+            }
+            self.rest(4);
+        }
+
+        /// The menu is open and on top where it opens (right of and under
+        /// the pointer at `at`), not under the window.
+        fn menu_seen(&self, at: egui::Pos2) -> bool {
+            egui::Popup::is_any_open(&self.ctx)
+                && self
+                    .ctx
+                    .layer_id_at(at + vec2(30.0, 15.0))
+                    .is_some_and(|l| l.id != egui::Id::new("file_info"))
+        }
+    }
+
+    #[test]
+    fn the_covers_menu_opens_over_the_window_every_time() {
+        let mut c = Cover::new();
+        let at = c.rect.center();
+        // The pointer resting on the cover: its tooltip shows.
+        c.frame(vec![egui::Event::PointerMoved(at)]);
+        c.rest(20);
+        for _ in 0..3 {
+            c.click(at, egui::PointerButton::Secondary);
+            assert!(c.menu_seen(at), "opened by the right button");
+            c.rest(20);
+        }
+        // A left click on the window closes the menu and raises the window
+        // over the menu's layer; opened again, the menu is over it.
+        for _ in 0..3 {
+            c.click(at + vec2(300.0, 200.0), egui::PointerButton::Primary);
+            assert!(
+                !egui::Popup::is_any_open(&c.ctx),
+                "closed by a click outside"
+            );
+            c.frame(vec![egui::Event::PointerMoved(at)]);
+            c.rest(20);
+            c.click(at, egui::PointerButton::Secondary);
+            assert!(c.menu_seen(at), "opened again over the window");
+        }
     }
 }
