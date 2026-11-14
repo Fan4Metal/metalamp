@@ -1,13 +1,16 @@
 //! The sound processing between the decoder and the device, on the audio
 //! thread, a block at a time: the track's loudness gain (`normalize`),
-//! the ten-band equalizer, the enhancer, and a look-ahead limiter after
-//! them whenever any of them is on, so nothing clips (unless `limiter` is
+//! the ten-band equalizer, the enhancer, the balance and mono
+//! (`channels.rs`, on whether the rest is or not), and a look-ahead
+//! limiter after them whenever any of the first three is on, so nothing
+//! clips (unless `limiter` is
 //! turned off: then what goes past full scale is clipped by Windows, as in
 //! the players of old, and a raised preamp is heard). `DspSettings` is
 //! what the settings window edits (`settings.dsp`); the engine gets a
 //! copy with `Cmd::Dsp` and keeps the filters' state across changes.
 
 pub mod biquad;
+pub mod channels;
 pub mod enhancer;
 pub mod eq;
 pub mod limiter;
@@ -43,6 +46,10 @@ pub struct DspSettings {
     pub warmth: u8,
     /// The look-ahead limiter after the rest; on by default.
     pub limiter: bool,
+    /// -100 (the left alone) to 100 (the right alone); 0: both.
+    pub balance: i8,
+    /// Both channels carry their mean.
+    pub mono: bool,
 }
 
 impl Default for DspSettings {
@@ -58,12 +65,15 @@ impl Default for DspSettings {
             width: 0,
             warmth: 0,
             limiter: true,
+            balance: 0,
+            mono: false,
         }
     }
 }
 
 impl DspSettings {
-    /// Anything to do at all.
+    /// Anything to do but the balance and mono (`channels.rs`, which go
+    /// on alone, and need no limiter).
     pub fn active(&self) -> bool {
         self.normalize || self.eq || self.enhancer
     }
@@ -102,6 +112,7 @@ pub struct Chain {
     eq: eq::Equalizer,
     enhancer: enhancer::Enhancer,
     limiter: limiter::Limiter,
+    channels_stage: channels::Channels,
     /// The track gain applied now; it slides to the one asked for.
     gain: f32,
     slide: f32,
@@ -117,6 +128,11 @@ impl Chain {
             eq: eq::Equalizer::new(rate, channels, settings.preamp, &settings.bands),
             enhancer: enhancer::Enhancer::new(rate, channels, settings.amounts()),
             limiter: limiter::Limiter::new(rate, channels, db_to_gain(CEILING_DB)),
+            channels_stage: {
+                let mut c = channels::Channels::new(rate, channels);
+                c.settle(settings.balance, settings.mono);
+                c
+            },
             gain: 1.0,
             // A gain change takes about 300 ms.
             slide: 1.0 - (-1.0 / (rate as f32 * 0.3)).exp(),
@@ -168,6 +184,7 @@ impl Chain {
     pub fn process(&mut self, samples: &mut [f32], track_gain: f32) {
         let s = &self.settings;
         if !s.active() {
+            self.channels_stage.process(samples, s.balance, s.mono);
             return;
         }
         if s.normalize {
@@ -191,6 +208,7 @@ impl Chain {
         if s.enhancer {
             self.enhancer.process(samples);
         }
+        self.channels_stage.process(samples, s.balance, s.mono);
         if s.limiter {
             self.limiter.process(samples);
         }
@@ -232,6 +250,27 @@ mod tests {
         // 1, after a second it is 0.5.
         assert!(s[2 * 300] > 0.49, "{}", s[2 * 300]);
         assert!((s[2 * 48000 - 1] - 0.25).abs() < 0.01);
+    }
+
+    /// The balance and mono work with the rest off, and do not bring the
+    /// limiter in: a level over its ceiling passes.
+    #[test]
+    fn balance_and_mono_go_on_alone() {
+        let settings = DspSettings {
+            balance: -50,
+            mono: true,
+            ..Default::default()
+        };
+        assert!(!settings.active());
+        let mut c = Chain::new(48000, 2, &settings);
+        let mut s: Vec<f32> = (0..100).flat_map(|_| [1.0, 0.9]).collect();
+        c.process(&mut s, 1.0);
+        // The mean 0.95 on both, the right halved.
+        assert!(
+            (s[0] - 0.95).abs() < 1e-6 && (s[1] - 0.475).abs() < 1e-6,
+            "{:?}",
+            &s[..2]
+        );
     }
 
     /// The peak in dBFS of a stereo 1 kHz sine at `level` dBFS through a

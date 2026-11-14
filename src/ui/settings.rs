@@ -1452,6 +1452,29 @@ fn processing(
             |ui| switch(ui, &mut dsp.limiter),
         );
     });
+    section(ui, tr!("Channels", "Каналы"), |ui| {
+        row(
+            ui,
+            tr!("Balance", "Баланс"),
+            Some(tr!(
+                "Turns one side down: towards the left, the right is quieter, and the other way.",
+                "Приглушает одну сторону: влево — тише правый канал, вправо — левый."
+            )),
+            CONTROL,
+            |ui| balance(ui, &mut dsp.balance),
+        );
+        divider(ui);
+        row(
+            ui,
+            tr!("Mono", "Моно"),
+            Some(tr!(
+                "Both channels carry the same sound, the two mixed: for one earphone, or speakers far apart.",
+                "Оба канала звучат одинаково, смесью двух: для одного наушника или далеко разнесённых колонок."
+            )),
+            50.0,
+            |ui| switch(ui, &mut dsp.mono),
+        );
+    });
     section(ui, tr!("Equalizer", "Эквалайзер"), |ui| {
         ui.add_space(8.0);
         equalizer(ui, dsp, presets, naming);
@@ -1572,6 +1595,44 @@ pub(crate) fn limiter_hint() -> &'static str {
 }
 
 /// A row with a slider of 0 to 10.
+/// The balance's slider (-100 to 100, the side named and how far) and a
+/// round arrow back to the middle.
+fn balance(ui: &mut Ui, value: &mut i8) {
+    // The row lays its control out from the right: the arrow at the end.
+    if tool(
+        ui,
+        tr!("Back to the middle", "Вернуть в центр"),
+        *value != 0,
+        Icon::RotateLeft,
+    )
+    .clicked()
+    {
+        *value = 0;
+    }
+    ui.spacing_mut().slider_width = CONTROL - 70.0 - TOOL;
+    ui.add(
+        egui::Slider::new(value, -100..=100)
+            .custom_formatter(|v, _| match v.round() as i32 {
+                0 => tr!("Centre", "Центр").to_owned(),
+                v if v < 0 => format!("{} {}", tr!("L", "Л"), -v),
+                v => format!("{} {v}", tr!("R", "П")),
+            })
+            .custom_parser(|text| {
+                let t = text.trim().to_lowercase();
+                let number = |rest: &str| rest.trim().parse::<f64>().ok();
+                if let Some(rest) = t.strip_prefix('l').or_else(|| t.strip_prefix('л')) {
+                    number(rest).map(|v| -v)
+                } else if let Some(rest) = t.strip_prefix('r').or_else(|| t.strip_prefix('п')) {
+                    number(rest)
+                } else if t == "centre" || t == "center" || t == "центр" {
+                    Some(0.0)
+                } else {
+                    number(&t)
+                }
+            }),
+    );
+}
+
 fn amount(ui: &mut Ui, title: &str, hint: &str, value: &mut u8) {
     row(ui, title, Some(hint), CONTROL, |ui| {
         ui.spacing_mut().slider_width = CONTROL - 50.0;

@@ -264,9 +264,10 @@ Media Foundation, the media framework of Windows, decodes the files, and the WAS
 The sound can be processed on its way to the device, all of it off by default and switched on in the settings window (Sound). The spectrum analyzer shows the result.
 
 <details>
-<summary>Loudness, equalizer, enhancer, crossfade, limiter</summary>
+<summary>Loudness, balance and mono, equalizer, enhancer, crossfade, limiter</summary>
 
 - **The same loudness for every track** measures a track after EBU R128 in the background before its first play (the measurement is kept, so each track is read once) and brings it to −18 LUFS, a quiet track only as far as its peaks allow.
+- **Balance and mono**: the balance turns one side down (towards the left, the right channel is quieter, and the other way); mono gives both channels the same sound, the two mixed, for one earphone or speakers far apart. Both change smoothly and need no limiter.
 - **Equalizer**: the ten classic bands and a preamp, Flat and the classic presets (Rock, Pop, Classical and the rest) and the user's own, saved under a name.
 - **Enhancer**: four amounts of 0 to 10: bass (a shelf under 100 Hz and the harmonics of the bass, which small speakers make heard as bass they cannot play), clarity (the air over 6 kHz an MP3's low-pass took away), width (a wider stereo image, the bass kept in the middle) and warmth (a soft rounding of the peaks, as tape does).
 - **Crossfade** (up to 12 seconds, off by default) fades the end of a track into the start of the next; between the tracks of one folder it is left out unless asked for, so an album still plays without gaps. A track chosen while another plays (Next, Previous, a double click) can fade in as the other fades out, up to 5 seconds (off by default: the other fades out over 30 milliseconds).
@@ -318,7 +319,7 @@ The settings window (`F5`, or `Ctrl+P`, or the gear in the library's bar) lists 
 <summary>Sound</summary>
 
 - **Output device**: Windows' default, which follows the device chosen in Windows, or one of the devices present; a chosen device that is absent when a track starts is replaced by the default one until it is back.
-- **Loudness** (normalisation and the limiter), **Between tracks** (crossfade), **Equalizer** and **Enhancer** (see [Sound processing](#sound-processing)).
+- **Loudness** (normalisation and the limiter), **Channels** (balance and mono), **Between tracks** (crossfade), **Equalizer** and **Enhancer** (see [Sound processing](#sound-processing)).
 
 </details>
 
