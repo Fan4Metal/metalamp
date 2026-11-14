@@ -310,6 +310,22 @@ struct Segment {
 /// polls every 10 ms at Pro Audio priority).
 const WRITE_AHEAD: f32 = 0.15;
 
+/// How long what is heard fades to silence before it is cut (a pause, a
+/// stop, a seek, another track) and back in after (a resume, the place
+/// sought), in seconds: a wave cut where it stands is a click.
+const FADE_S: f32 = 0.03;
+
+/// How long silence is held after a fade out before the output stops: the
+/// stream's volume is applied where the audio engine mixes, once a period
+/// (10 ms), and the last step has to be mixed before the stream stops.
+const FADE_SETTLE: Duration = Duration::from_millis(20);
+
+/// The gain of a fade at `x` (0: silent, 1: whole): a raised cosine, so
+/// neither end is a corner.
+pub fn fade_shape(x: f32) -> f32 {
+    0.5 - 0.5 * (x.clamp(0.0, 1.0) * std::f32::consts::PI).cos()
+}
+
 struct Player<'a> {
     events: &'a Sender<Event>,
     shared: &'a Shared,
@@ -341,6 +357,12 @@ struct Player<'a> {
     /// ahead as its buffer goes, so opening them again (300 ms for an
     /// AAC, `Decoder::reacquire`) is not heard as a gap.
     holding: bool,
+    /// Where a fade in or out stands (0 to 1, `fade_shape`'s), over the
+    /// volume asked for: 1 but while one runs, 0 after a fade out.
+    level: f32,
+    /// The output's next start fades in: a resume, a place sought within
+    /// a track (its start is the track's own).
+    fade_in: bool,
 }
 
 fn run(
@@ -384,6 +406,8 @@ fn run(
         dsp,
         chain: None,
         holding: false,
+        level: 1.0,
+        fade_in: false,
     };
     loop {
         let busy = p.decoding.is_some() && !p.paused;
@@ -490,6 +514,7 @@ impl Player<'_> {
                 }
             }
             Cmd::Pause => {
+                self.fade_out();
                 self.paused = true;
                 // The wait for the last frames to be heard starts again
                 // after the pause, not counting it.
@@ -499,11 +524,10 @@ impl Player<'_> {
                 }
             }
             Cmd::Resume => {
-                self.paused = false;
-                if self.started
-                    && let Some(out) = &mut self.out
-                {
-                    let _ = out.start();
+                let paused = std::mem::replace(&mut self.paused, false);
+                if self.started && paused {
+                    self.fade_in = true;
+                    let _ = self.start_output();
                 }
             }
             Cmd::Stop => self.stop(),
@@ -621,7 +645,65 @@ impl Player<'_> {
         }
     }
 
+    /// The volume of what is heard now: the one asked for, under a fade.
+    fn gain_now(&self) -> f32 {
+        f32::from_bits(self.shared.gain.load(Relaxed)) * fade_shape(self.level)
+    }
+
+    /// Moves the fade to `to` over `FADE_S`, a step a millisecond, the
+    /// thread waiting meanwhile (the device holds `WRITE_AHEAD`). A
+    /// device that fails a step ends it.
+    fn ramp(&mut self, to: f32) {
+        let from = self.level;
+        let began = Instant::now();
+        loop {
+            let t = (began.elapsed().as_secs_f32() / FADE_S).min(1.0);
+            self.level = from + (to - from) * t;
+            let gain = self.gain_now();
+            let Some(out) = self.out.as_mut() else { break };
+            if out.set_gain(gain).is_err() || t >= 1.0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        self.level = to;
+    }
+
+    /// What is heard faded to silence before it is cut: nothing when
+    /// nothing is (stopped, paused, muted, every frame written heard).
+    fn fade_out(&mut self) {
+        if !self.started || self.paused || self.gain_now() == 0.0 {
+            return;
+        }
+        let Some(out) = self.out.as_mut() else { return };
+        if !out.heard().is_ok_and(|heard| heard < self.written) {
+            return;
+        }
+        self.ramp(0.0);
+        std::thread::sleep(FADE_SETTLE);
+    }
+
+    /// Starts the output, from silence when `fade_in` asks (taken), else
+    /// at the volume asked for.
+    fn start_output(&mut self) -> windows::core::Result<()> {
+        let fade_in = std::mem::take(&mut self.fade_in);
+        self.level = if fade_in { 0.0 } else { 1.0 };
+        let gain = self.gain_now();
+        let Some(out) = self.out.as_mut() else {
+            return Ok(());
+        };
+        out.set_gain(gain)?;
+        out.start()?;
+        self.started = true;
+        if fade_in {
+            self.ramp(1.0);
+        }
+        Ok(())
+    }
+
     fn stop(&mut self) {
+        self.fade_out();
+        self.fade_in = false;
         self.decoding = None;
         self.next = None;
         self.fade = None;
@@ -642,6 +724,10 @@ impl Player<'_> {
 
     /// Start `open` from `from_ms`, dropping what was written.
     fn begin(&mut self, mut open: Open, from_ms: u64) {
+        // The sound before (another track, another place) fades out; a
+        // place within the track fades in, its start is its own.
+        self.fade_out();
+        self.fade_in = from_ms > 0;
         let format = (open.decoder.rate, open.decoder.channels);
         // A decoder already under way (the track heard begun again, a
         // seek to its start among them) is sought even to 0.
@@ -798,10 +884,11 @@ impl Player<'_> {
                     }
                 }
             }
-            let out = self.out.as_mut().expect("checked above");
             // The device applies the gain to what it plays, so a change is
             // heard at once, not after the buffer written ahead.
-            out.set_gain(f32::from_bits(self.shared.gain.load(Relaxed)))?;
+            let gain = self.gain_now();
+            let out = self.out.as_mut().expect("checked above");
+            out.set_gain(gain)?;
             // Only `WRITE_AHEAD` of the device's buffer is kept filled.
             let room = out.room()? as usize;
             let held = (out.buffer_frames() as usize).saturating_sub(room);
@@ -826,8 +913,7 @@ impl Player<'_> {
                 self.written += frames as u64;
             }
             if !self.started && self.written > 0 {
-                self.out.as_mut().expect("checked above").start()?;
-                self.started = true;
+                self.start_output()?;
             }
         }
 
@@ -1084,6 +1170,8 @@ impl Player<'_> {
     /// The output failed or the default device changed: open it again and
     /// go on from where the track heard was.
     fn recover(&mut self) {
+        // The device before, when it still plays (the default changed).
+        self.fade_out();
         self.out = None;
         if self.heard().is_some() {
             self.restart_heard(self.shared.position_ms.load(Relaxed));
@@ -1104,6 +1192,22 @@ mod tests {
         assert_eq!(fade_gains(0.0), (1.0, 0.0));
         let (a, b) = fade_gains(1.0);
         assert!(a.abs() < 1e-6 && (b - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_fade_has_no_corners() {
+        assert_eq!(fade_shape(0.0), 0.0);
+        assert_eq!(fade_shape(1.0), 1.0);
+        assert!((fade_shape(0.5) - 0.5).abs() < 1e-6);
+        assert_eq!(fade_shape(-1.0), 0.0);
+        assert_eq!(fade_shape(2.0), 1.0);
+        // Flat at both ends, rising throughout.
+        let d = 1e-3;
+        assert!(fade_shape(d) < 1e-5 && 1.0 - fade_shape(1.0 - d) < 1e-5);
+        for i in 0..100 {
+            let x = i as f32 / 100.0;
+            assert!(fade_shape(x + 0.01) > fade_shape(x));
+        }
     }
 
     #[test]
@@ -1520,5 +1624,241 @@ mod tests {
         }
         engine.send(Cmd::Stop);
         assert!(started, "no Started for a play sought at once");
+    }
+
+    /// A WAV of a 440 Hz sine at half scale, 48 kHz stereo 16-bit, `secs`
+    /// long, faded in and out over 20 ms (its own ends make no click).
+    fn sine_wav(path: &std::path::Path, secs: u32) {
+        const RATE: u32 = 48_000;
+        let frames = RATE * secs;
+        let fade = RATE / 50;
+        let mut data = Vec::with_capacity(frames as usize * 4);
+        for i in 0..frames {
+            let edge = i.min(frames - 1 - i);
+            let env = (edge as f32 / fade as f32).min(1.0);
+            let x = 0.5 * env * (std::f32::consts::TAU * 440.0 * i as f32 / RATE as f32).sin();
+            let s = (x * 32767.0) as i16;
+            data.extend_from_slice(&s.to_le_bytes());
+            data.extend_from_slice(&s.to_le_bytes());
+        }
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&RATE.to_le_bytes());
+        wav.extend_from_slice(&(RATE * 4).to_le_bytes());
+        wav.extend_from_slice(&4u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        wav.extend_from_slice(&data);
+        std::fs::write(path, wav).unwrap();
+    }
+
+    /// The id of the active endpoint of `flow` whose name holds `part`.
+    fn endpoint_named(flow: windows::Win32::Media::Audio::EDataFlow, part: &str) -> Option<String> {
+        use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
+        use windows::Win32::Media::Audio::{
+            DEVICE_STATE_ACTIVE, IMMDeviceEnumerator, MMDeviceEnumerator,
+        };
+        use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, STGM_READ};
+        let _com = mf::com_init_mta();
+        unsafe {
+            let enumerator: IMMDeviceEnumerator =
+                CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).ok()?;
+            let all = enumerator
+                .EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE)
+                .ok()?;
+            for i in 0..all.GetCount().ok()? {
+                let device = all.Item(i).ok()?;
+                let name = device
+                    .OpenPropertyStore(STGM_READ)
+                    .and_then(|s| s.GetValue(&PKEY_Device_FriendlyName))
+                    .map(|v| v.to_string())
+                    .unwrap_or_default();
+                if name.contains(part) {
+                    let id = device.GetId().ok()?;
+                    let text = id.to_string().ok();
+                    windows::Win32::System::Com::CoTaskMemFree(Some(id.0 as *const _));
+                    return text;
+                }
+            }
+            None
+        }
+    }
+
+    /// What a capture device records (VB-Audio's virtual cable: what is
+    /// played into its input comes out here), its first channel and rate.
+    struct Recorder {
+        stop: Arc<AtomicBool>,
+        thread: Option<JoinHandle<(u32, Vec<f32>)>>,
+    }
+
+    impl Recorder {
+        fn start(id: String) -> Recorder {
+            let stop = Arc::new(AtomicBool::new(false));
+            let flag = Arc::clone(&stop);
+            let (ready, started) = channel();
+            let thread = std::thread::spawn(move || {
+                let _com = mf::com_init_mta();
+                capture(&id, &flag, &ready).expect("capture")
+            });
+            started.recv().expect("the capture started");
+            Recorder {
+                stop,
+                thread: Some(thread),
+            }
+        }
+
+        fn finish(mut self) -> (u32, Vec<f32>) {
+            self.stop.store(true, Relaxed);
+            self.thread.take().unwrap().join().unwrap()
+        }
+    }
+
+    fn capture(
+        id: &str,
+        stop: &AtomicBool,
+        ready: &Sender<()>,
+    ) -> windows::core::Result<(u32, Vec<f32>)> {
+        use windows::Win32::Media::Audio::{
+            AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, IAudioCaptureClient,
+            IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator,
+        };
+        use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, CoTaskMemFree};
+        unsafe {
+            let enumerator: IMMDeviceEnumerator =
+                CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
+            let device = enumerator.GetDevice(&windows::core::HSTRING::from(id))?;
+            let client: IAudioClient = device.Activate(CLSCTX_ALL, None)?;
+            let format = client.GetMixFormat()?;
+            let rate = (*format).nSamplesPerSec;
+            let channels = usize::from((*format).nChannels);
+            let bits = (*format).wBitsPerSample;
+            assert_eq!(bits, 32, "a float mix format");
+            client.Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 2_000_000, 0, format, None)?;
+            CoTaskMemFree(Some(format as *const _));
+            let capture: IAudioCaptureClient = client.GetService()?;
+            client.Start()?;
+            let _ = ready.send(());
+            let mut out = Vec::new();
+            while !stop.load(Relaxed) {
+                std::thread::sleep(Duration::from_millis(5));
+                while capture.GetNextPacketSize()? > 0 {
+                    let mut data = std::ptr::null_mut();
+                    let mut frames = 0u32;
+                    let mut flags = 0u32;
+                    capture.GetBuffer(&mut data, &mut frames, &mut flags, None, None)?;
+                    let silent = flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0;
+                    let samples =
+                        std::slice::from_raw_parts(data.cast::<f32>(), frames as usize * channels);
+                    out.extend(
+                        (0..frames as usize)
+                            .map(|f| if silent { 0.0 } else { samples[f * channels] }),
+                    );
+                    capture.ReleaseBuffer(frames)?;
+                }
+            }
+            client.Stop()?;
+            Ok((rate, out))
+        }
+    }
+
+    /// Where a captured sine bends sharply (a click): the second difference
+    /// over `ratio` of the loudest sample (a 440 Hz sine's own is 0.0033 of
+    /// it at 48 kHz), as (ms into the capture, its size over the loudest),
+    /// one per 5 ms.
+    fn clicks(rate: u32, x: &[f32], ratio: f32) -> Vec<(u64, f32)> {
+        let top = x.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        let mut found: Vec<(u64, f32)> = Vec::new();
+        let gap = rate as usize / 200;
+        let mut last = None;
+        for n in 2..x.len() {
+            let d = (x[n] - 2.0 * x[n - 1] + x[n - 2]).abs() / top.max(1e-9);
+            if d > ratio {
+                let ms = n as u64 * 1000 / u64::from(rate);
+                match last {
+                    Some(at) if n - at < gap => {
+                        let e = found.last_mut().unwrap();
+                        e.1 = e.1.max(d);
+                    }
+                    _ => found.push((ms, d)),
+                }
+                last = Some(n);
+            }
+        }
+        found
+    }
+
+    /// Pause, resume, seek and stop heard without a click: a sine played
+    /// into VB-Audio's virtual cable and recorded from its other end
+    /// bends no sharper than a sine does. Nothing reaches the speakers.
+    #[test]
+    #[ignore = "needs VB-Audio Virtual Cable; plays a tone into it for about 4 s"]
+    fn engine_pauses_without_a_click() {
+        use windows::Win32::Media::Audio::{eCapture, eRender};
+        let input = endpoint_named(eRender, "CABLE Input").expect("VB-Audio's CABLE Input");
+        let output = endpoint_named(eCapture, "CABLE Output").expect("VB-Audio's CABLE Output");
+        let dir = std::env::temp_dir().join(format!("metalamp_click_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("sine.wav");
+        sine_wav(&file, 60);
+        let engine = Engine::start(egui::Context::default(), input, dsp::DspSettings::default());
+        // Silence into the cable while the recording starts.
+        engine.set_gain(0.0);
+        engine.send(Cmd::Play {
+            id: 0,
+            path: file.clone(),
+            gain: 1.0,
+        });
+        let recorder = Recorder::start(output);
+        engine.send(Cmd::Stop);
+        std::thread::sleep(Duration::from_millis(200));
+        let t = std::time::Instant::now();
+        engine.set_gain(0.5);
+        engine.send(Cmd::Play {
+            id: 1,
+            path: file,
+            gain: 1.0,
+        });
+        let pause = |ms: u64| std::thread::sleep(Duration::from_millis(ms));
+        pause(700);
+        // (what, the position heard, ms since the play): where to look.
+        let mut marks = Vec::new();
+        let at = |what: &'static str, marks: &mut Vec<(&str, u64, u128)>| {
+            marks.push((what, engine.position_ms(), t.elapsed().as_millis()));
+        };
+        at("pause", &mut marks);
+        engine.send(Cmd::Pause);
+        pause(400);
+        at("resume", &mut marks);
+        engine.send(Cmd::Resume);
+        pause(600);
+        at("seek", &mut marks);
+        engine.send(Cmd::Seek(7_013));
+        pause(600);
+        at("stop", &mut marks);
+        engine.send(Cmd::Stop);
+        pause(300);
+        drop(engine);
+        let (rate, x) = recorder.finish();
+        if let Ok(to) = std::env::var("METALAMP_CAPTURE") {
+            let bytes: Vec<u8> = x.iter().flat_map(|v| v.to_le_bytes()).collect();
+            std::fs::write(to, bytes).unwrap();
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+        println!("{marks:?}");
+        println!(
+            "captured {} ms at {rate} Hz",
+            x.len() as u64 * 1000 / u64::from(rate)
+        );
+        let found = clicks(rate, &x, 0.01);
+        for (ms, d) in &found {
+            println!("a bend at {ms} ms: {d:.4} of the peak");
+        }
+        assert!(found.is_empty(), "{} clicks", found.len());
     }
 }
