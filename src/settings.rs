@@ -133,6 +133,10 @@ pub struct Settings {
     /// between the tracks of one folder too (else albums play gapless).
     pub crossfade: u8,
     pub crossfade_in_albums: bool,
+    /// The crossfade into a track chosen while another plays (Next,
+    /// Previous, a double click), in seconds (0: none, the sound before
+    /// fades out over 30 ms).
+    pub crossfade_manual: f32,
     /// How far the seek keys (Shift+Left/Right, the arrows over the
     /// player bar) go, in seconds (1–`MAX_SEEK_STEP`).
     pub seek_step: u8,
@@ -695,6 +699,7 @@ impl Default for Settings {
             eq_presets: Vec::new(),
             crossfade: 0,
             crossfade_in_albums: false,
+            crossfade_manual: 0.0,
             seek_step: DEFAULT_SEEK_STEP,
             volume_step: DEFAULT_VOLUME_STEP,
             media_keys: MediaKeys::default(),

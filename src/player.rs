@@ -17,6 +17,10 @@ use crate::queue::{Queue, Repeat};
 /// The longest crossfade, in seconds.
 pub const MAX_CROSSFADE: u8 = 12;
 
+/// The longest crossfade on a track chosen while another plays, in
+/// seconds.
+pub const MAX_MANUAL_CROSSFADE: f32 = 5.0;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
     Stopped,
@@ -48,6 +52,9 @@ pub struct Player {
     /// folder too (else an album plays gapless).
     crossfade_ms: u64,
     crossfade_in_albums: bool,
+    /// The crossfade into a track chosen while another plays (ms; 0: the
+    /// sound before fades out and the track starts).
+    manual_crossfade_ms: u64,
     /// Stop when the track heard ends (Shift+V): nothing is preloaded;
     /// off again once it has stopped.
     pub stop_after: bool,
@@ -99,6 +106,7 @@ impl Player {
             stop_after: false,
             crossfade_ms: 0,
             crossfade_in_albums: false,
+            manual_crossfade_ms: 0,
             loudness,
             dsp,
         }
@@ -164,10 +172,16 @@ impl Player {
         self.last_play = token;
         self.preloaded = None;
         let gain = self.gain_for(&entry.path);
+        let fade_ms = if self.status == Status::Playing {
+            self.manual_crossfade_ms
+        } else {
+            0
+        };
         self.engine.send(Cmd::Play {
             id: token,
             path: entry.path,
             gain,
+            fade_ms,
         });
         // The place the last run left this entry at.
         if let Some((id, ms)) = self.resume.take()
@@ -248,6 +262,12 @@ impl Player {
         self.crossfade_in_albums = in_albums;
         self.preloaded = None;
         self.refresh_preload();
+    }
+
+    /// The crossfade into a track chosen while another plays, in seconds
+    /// (0: none).
+    pub fn set_manual_crossfade(&mut self, seconds: f32) {
+        self.manual_crossfade_ms = (seconds.clamp(0.0, MAX_MANUAL_CROSSFADE) * 1000.0) as u64;
     }
 
     /// The crossfade into `next` from the current entry (ms): none between

@@ -218,8 +218,15 @@ impl SettingsDialog {
         }
         changed.device = settings.output_device != before.output_device;
         changed.dsp = settings.dsp != before.dsp;
-        changed.crossfade = (settings.crossfade, settings.crossfade_in_albums)
-            != (before.crossfade, before.crossfade_in_albums);
+        changed.crossfade = (
+            settings.crossfade,
+            settings.crossfade_in_albums,
+            settings.crossfade_manual,
+        ) != (
+            before.crossfade,
+            before.crossfade_in_albums,
+            before.crossfade_manual,
+        );
         changed.look = settings.look() != before.look();
         changed.keys = settings.keys != before.keys;
         changed.any = *settings != before || updates.enabled != checking;
@@ -1406,7 +1413,11 @@ fn sound(ui: &mut Ui, settings: &mut Settings, devices: &[Device], naming: &mut 
         &mut settings.dsp,
         &mut settings.eq_presets,
         naming,
-        (&mut settings.crossfade, &mut settings.crossfade_in_albums),
+        (
+            &mut settings.crossfade,
+            &mut settings.crossfade_in_albums,
+            &mut settings.crossfade_manual,
+        ),
     );
 }
 
@@ -1416,7 +1427,7 @@ fn processing(
     dsp: &mut DspSettings,
     presets: &mut Vec<EqPreset>,
     naming: &mut Option<String>,
-    crossfade: (&mut u8, &mut bool),
+    crossfade: (&mut u8, &mut bool, &mut f32),
 ) {
     section(ui, tr!("Loudness", "Громкость"), |ui| {
         row(
@@ -1475,6 +1486,25 @@ fn processing(
                 )),
                 50.0,
                 |ui| ui.add_enabled_ui(*crossfade.0 > 0, |ui| switch(ui, crossfade.1)),
+            );
+            divider(ui);
+            row(
+                ui,
+                tr!("On a track chosen", "При выборе трека"),
+                Some(tr!(
+                    "A track chosen while another plays (Next, Previous, a double click) fades in as the other fades out, this many seconds; 0: the other fades out at once.",
+                    "Трек, выбранный во время игры другого (Следующий, Предыдущий, двойной щелчок), плавно вступает, пока тот затихает, за столько секунд; 0 — прежний трек сразу затихает."
+                )),
+                CONTROL,
+                |ui| {
+                    ui.spacing_mut().slider_width = CONTROL - 70.0;
+                    ui.add(
+                        egui::Slider::new(crossfade.2, 0.0..=crate::player::MAX_MANUAL_CROSSFADE)
+                            .step_by(0.1)
+                            .fixed_decimals(1)
+                            .suffix(tr!(" s", " с")),
+                    );
+                },
             );
         },
     );
@@ -2592,6 +2622,7 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     settings.dsp = d.dsp;
     settings.crossfade = d.crossfade;
     settings.crossfade_in_albums = d.crossfade_in_albums;
+    settings.crossfade_manual = d.crossfade_manual;
     settings.seek_step = d.seek_step;
     settings.volume_step = d.volume_step;
     settings.tray = d.tray;

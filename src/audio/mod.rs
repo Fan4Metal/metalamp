@@ -43,11 +43,13 @@ use output::{Output, Wasapi};
 #[derive(Debug)]
 pub enum Cmd {
     /// Play `path` from its start; `id` names it in the events; `gain`
-    /// is its loudness gain (1 when not known).
+    /// is its loudness gain (1 when not known); `fade_ms`, a crossfade
+    /// into it from the track heard (0: none, the sound before cut).
     Play {
         id: u64,
         path: PathBuf,
         gain: f32,
+        fade_ms: u64,
     },
     /// The track to play after the current one, without a gap (or none),
     /// with its loudness gain and the crossfade into it (ms; 0: none).
@@ -273,7 +275,13 @@ impl Open {
 /// A crossfade under way: the track ending (`from`) and the next one
 /// (`Player::decoding`) decoded side by side and mixed into the ring.
 struct Fade {
-    from: Open,
+    /// What goes on decoding the sound ending after what `a` holds; none
+    /// when only `a` is left of it (a manual change in the middle of
+    /// another fade, or after the last track's end was decoded).
+    from: Option<Open>,
+    /// The id and loudness gain of the sound ending.
+    id: u64,
+    gain: f32,
     /// Its length in frames, and the frames mixed so far.
     len: u64,
     done: u64,
@@ -457,12 +465,22 @@ impl Player<'_> {
 
     fn handle(&mut self, cmd: Cmd) {
         match cmd {
-            Cmd::Play { id, path, gain } => {
+            Cmd::Play {
+                id,
+                path,
+                gain,
+                fade_ms,
+            } => {
                 // What was preloaded came after the track played so far;
                 // the one after this is preloaded anew once it starts.
                 self.next = None;
                 match Decoder::open(&path) {
-                    Ok(decoder) => self.begin(Open::new(id, path, decoder, gain, 0), 0),
+                    Ok(decoder) => {
+                        let open = Open::new(id, path, decoder, gain, 0);
+                        if let Some(open) = self.cross_into(open, fade_ms) {
+                            self.begin(open, 0);
+                        }
+                    }
                     Err(e) => {
                         // Not the track before going on meanwhile.
                         self.stop();
@@ -542,9 +560,12 @@ impl Player<'_> {
                     }
                 }
                 if let Some(fade) = &mut self.fade
-                    && fade.from.id == id
+                    && fade.id == id
                 {
-                    fade.from.gain = gain;
+                    fade.gain = gain;
+                    if let Some(from) = &mut fade.from {
+                        from.gain = gain;
+                    }
                 }
                 for seg in self.segments.iter_mut().filter(|s| s.id == id) {
                     seg.gain = gain;
@@ -586,17 +607,16 @@ impl Player<'_> {
         self.decoding
             .iter_mut()
             .chain(self.next.iter_mut())
-            .chain(self.fade.iter_mut().map(|f| &mut f.from))
+            .chain(self.fade.iter_mut().filter_map(|f| f.from.as_mut()))
     }
 
     /// A decoder released (`Cmd::Release`) waits: nothing more is decoded
     /// meanwhile.
     fn waiting(&self) -> bool {
         self.decoding.as_ref().is_some_and(|d| d.decoder.released())
-            || self
-                .fade
-                .as_ref()
-                .is_some_and(|f| !f.a_ended && f.from.decoder.released())
+            || self.fade.as_ref().is_some_and(|f| {
+                !f.a_ended && f.from.as_ref().is_some_and(|o| o.decoder.released())
+            })
     }
 
     /// The files released opened again, each going on from the frame it
@@ -611,7 +631,11 @@ impl Player<'_> {
             .iter_mut()
             .map(|o| (0, o))
             .chain(self.next.iter_mut().map(|o| (1, o)))
-            .chain(self.fade.iter_mut().map(|f| (2, &mut f.from)))
+            .chain(
+                self.fade
+                    .iter_mut()
+                    .filter_map(|f| f.from.as_mut().map(|o| (2, o))),
+            )
         {
             if !open.decoder.released() {
                 continue;
@@ -1003,6 +1027,74 @@ impl Player<'_> {
         }
     }
 
+    /// `open` crossfaded into over `fade_ms` from the sound heard, when it
+    /// can be: something is heard (started, not paused), of `open`'s
+    /// format, no file released. The sound ending is what is not yet
+    /// written to the device (the ring), then the decoder it came from,
+    /// so the change is heard after what the device holds (`WRITE_AHEAD`);
+    /// with no decoder to go on (the ring holding another fade's mix, or
+    /// the end of what was to be played), the fade is no longer than the
+    /// ring. Else `open` is handed back, to be begun as usual.
+    fn cross_into(&mut self, open: Open, fade_ms: u64) -> Option<Open> {
+        let channels = usize::from(self.format.1.max(1));
+        let ring = (self.ring.len() / channels) as u64;
+        if fade_ms == 0
+            || !self.started
+            || self.paused
+            || self.holding
+            || self.out.is_none()
+            || ring == 0
+            || (open.decoder.rate, open.decoder.channels) != self.format
+        {
+            return Some(open);
+        }
+        let mixing = self.fade.is_some();
+        // Not longer than half the track, as between tracks.
+        let mut len = (fade_ms * u64::from(self.format.0) / 1000).min(open.total_frames() / 2);
+        if mixing || self.eos || self.format_change {
+            len = len.min(ring);
+        }
+        if len == 0 {
+            return Some(open);
+        }
+        self.fade = None;
+        let from = self.decoding.take().filter(|_| !mixing);
+        // The sound the ring starts with; the tracks it would have gone
+        // on to are not heard now.
+        let (id, gain) = self
+            .segments
+            .iter()
+            .rev()
+            .find(|s| s.start <= self.written)
+            .map_or((0, 1.0), |s| (s.id, s.gain));
+        self.segments.retain(|s| s.start < self.written);
+        self.segments.push_back(Segment {
+            start: self.written,
+            id: open.id,
+            path: open.path.clone(),
+            origin_ms: 0,
+            duration_ms: (open.decoder.duration / (SECOND / 1000)) as u64,
+            gain: open.gain,
+        });
+        log::debug!("audio: crossfade of {len} frames into {}", open.id);
+        self.fade = Some(Fade {
+            from,
+            id,
+            gain,
+            len,
+            done: 0,
+            a: std::mem::take(&mut self.ring),
+            b: VecDeque::new(),
+            a_ended: false,
+        });
+        self.decoding = Some(open);
+        self.next = None;
+        self.eos = false;
+        self.format_change = false;
+        self.drained_since = None;
+        None
+    }
+
     /// Starts a crossfade when the next track asks for one, has the same
     /// format, and the decoding one is that close to its end; true if it
     /// started. The next track's segment starts here: it is heard from
@@ -1036,7 +1128,9 @@ impl Player<'_> {
         });
         log::debug!("audio: crossfade of {left} frames into {}", next.id);
         self.fade = Some(Fade {
-            from,
+            id: from.id,
+            gain: from.gain,
+            from: Some(from),
             len: left,
             done: 0,
             a: VecDeque::new(),
@@ -1056,10 +1150,14 @@ impl Player<'_> {
             return;
         };
         while fade.a.len() < CHUNK * channels && !fade.a_ended {
-            match fade.from.decoder.next() {
+            let Some(from) = fade.from.as_mut() else {
+                fade.a_ended = true;
+                break;
+            };
+            match from.decoder.next() {
                 Ok(Some(block)) => {
                     // Where it would be opened again (`reacquire`).
-                    fade.from.decoded += (block.len() / channels) as u64;
+                    from.decoded += (block.len() / channels) as u64;
                     fade.a.extend(block);
                 }
                 // Its end (or a damaged end): silence for the rest.
@@ -1082,7 +1180,7 @@ impl Player<'_> {
         // The chain applies the next track's gain to the mix: the ending
         // one is scaled by its own over it.
         let ratio = if self.dsp.active() && self.dsp.normalize && next.gain > 0.0 {
-            fade.from.gain / next.gain
+            fade.gain / next.gain
         } else {
             1.0
         };
@@ -1316,6 +1414,7 @@ mod tests {
             id: 1,
             path: copy.clone(),
             gain: 1.0,
+            fade_ms: 0,
         });
         let events = |ms: u64| {
             let mut seen = Vec::new();
@@ -1408,6 +1507,7 @@ mod tests {
             id: 1,
             path: first,
             gain: 1.0,
+            fade_ms: 0,
         });
         assert!(wait(&|e| matches!(e, Event::Started { id: 1 }), 5));
         let duration = engine.duration_ms();
@@ -1458,6 +1558,7 @@ mod tests {
             id: 1,
             path: file.clone(),
             gain: 1.0,
+            fade_ms: 0,
         });
         assert_eq!(started(5), Some(1));
         let duration = engine.duration_ms();
@@ -1501,6 +1602,7 @@ mod tests {
             id: 1,
             path: first,
             gain: 1.0,
+            fade_ms: 0,
         });
         let until = Instant::now() + Duration::from_secs(5);
         while engine.duration_ms() == 0 && Instant::now() < until {
@@ -1573,6 +1675,7 @@ mod tests {
             id: 1,
             path: file.clone(),
             gain: 1.0,
+            fade_ms: 0,
         });
         assert!(wait(&|e| matches!(e, Event::Started { id: 1 }), 5));
         std::thread::sleep(Duration::from_millis(500));
@@ -1582,6 +1685,7 @@ mod tests {
             id: 2,
             path: file,
             gain: 1.0,
+            fade_ms: 0,
         });
         assert!(wait(&|e| matches!(e, Event::Started { id: 2 }), 5));
         std::thread::sleep(Duration::from_millis(800));
@@ -1610,6 +1714,7 @@ mod tests {
             id: 1,
             path: file,
             gain: 1.0,
+            fade_ms: 0,
         });
         engine.send(Cmd::Seek(10_000));
         let until = Instant::now() + Duration::from_secs(5);
@@ -1626,9 +1731,9 @@ mod tests {
         assert!(started, "no Started for a play sought at once");
     }
 
-    /// A WAV of a 440 Hz sine at half scale, 48 kHz stereo 16-bit, `secs`
+    /// A WAV of a sine of `hz` at half scale, 48 kHz stereo 16-bit, `secs`
     /// long, faded in and out over 20 ms (its own ends make no click).
-    fn sine_wav(path: &std::path::Path, secs: u32) {
+    fn sine_wav(path: &std::path::Path, secs: u32, hz: f32) {
         const RATE: u32 = 48_000;
         let frames = RATE * secs;
         let fade = RATE / 50;
@@ -1636,7 +1741,7 @@ mod tests {
         for i in 0..frames {
             let edge = i.min(frames - 1 - i);
             let env = (edge as f32 / fade as f32).min(1.0);
-            let x = 0.5 * env * (std::f32::consts::TAU * 440.0 * i as f32 / RATE as f32).sin();
+            let x = 0.5 * env * (std::f32::consts::TAU * hz * i as f32 / RATE as f32).sin();
             let s = (x * 32767.0) as i16;
             data.extend_from_slice(&s.to_le_bytes());
             data.extend_from_slice(&s.to_le_bytes());
@@ -1805,7 +1910,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("metalamp_click_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("sine.wav");
-        sine_wav(&file, 60);
+        sine_wav(&file, 60, 440.0);
         let engine = Engine::start(egui::Context::default(), input, dsp::DspSettings::default());
         // Silence into the cable while the recording starts.
         engine.set_gain(0.0);
@@ -1813,6 +1918,7 @@ mod tests {
             id: 0,
             path: file.clone(),
             gain: 1.0,
+            fade_ms: 0,
         });
         let recorder = Recorder::start(output);
         engine.send(Cmd::Stop);
@@ -1823,6 +1929,7 @@ mod tests {
             id: 1,
             path: file,
             gain: 1.0,
+            fade_ms: 0,
         });
         let pause = |ms: u64| std::thread::sleep(Duration::from_millis(ms));
         pause(700);
@@ -1860,5 +1967,108 @@ mod tests {
             println!("a bend at {ms} ms: {d:.4} of the peak");
         }
         assert!(found.is_empty(), "{} clicks", found.len());
+    }
+
+    /// The amplitude of a sine of `hz` in `x` (a least-squares fit).
+    fn amplitude(x: &[f32], rate: u32, hz: f32) -> f32 {
+        let w = std::f32::consts::TAU * hz / rate as f32;
+        let (mut s, mut c) = (0.0f32, 0.0f32);
+        for (i, v) in x.iter().enumerate() {
+            s += v * (w * i as f32).sin();
+            c += v * (w * i as f32).cos();
+        }
+        2.0 * (s * s + c * c).sqrt() / x.len() as f32
+    }
+
+    /// A track chosen while another plays, with a crossfade of 1 s: the
+    /// one before (440 Hz) fades as the new one (660 Hz) comes in, over
+    /// about a second, both heard together meanwhile, without a bend
+    /// sharper than the two sines make; the new one is `Started` soon
+    /// (what the device holds), from its start. Played on the default
+    /// device at gain 0: nothing is heard; the samples are the
+    /// visualizations' tap, taken before the device's volume.
+    #[test]
+    #[ignore = "needs a sound device; plays silently for about 4 s"]
+    fn engine_crossfades_into_a_track_chosen() {
+        let dir = std::env::temp_dir().join(format!("metalamp_cross_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("a.wav"), dir.join("b.wav"));
+        sine_wav(&a, 10, 440.0);
+        sine_wav(&b, 10, 660.0);
+        let engine = Engine::start(
+            egui::Context::default(),
+            String::new(),
+            dsp::DspSettings::default(),
+        );
+        engine.set_gain(0.0);
+        engine.send(Cmd::Play {
+            id: 1,
+            path: a,
+            gain: 1.0,
+            fade_ms: 0,
+        });
+        std::thread::sleep(Duration::from_millis(1500));
+        let asked = std::time::Instant::now();
+        engine.send(Cmd::Play {
+            id: 2,
+            path: b,
+            gain: 1.0,
+            fade_ms: 1000,
+        });
+        let mut started = None;
+        while asked.elapsed() < Duration::from_millis(2200) {
+            for e in engine.poll() {
+                assert!(
+                    !matches!(e, Event::Ended { .. } | Event::Failed { .. }),
+                    "{e:?}"
+                );
+                if matches!(e, Event::Started { id: 2 }) && started.is_none() {
+                    started = Some((asked.elapsed(), engine.position_ms()));
+                }
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let mut x = Vec::new();
+        let heard = engine.heard_samples(48_000 * 3, &mut x).expect("heard");
+        drop(engine);
+        std::fs::remove_dir_all(&dir).unwrap();
+        let (after, position) = started.expect("the new track started");
+        println!("started {} ms after, at {position} ms", after.as_millis());
+        assert!(after < Duration::from_millis(400), "{after:?}");
+        assert!(position < 300, "{position}");
+        assert_eq!(heard.rate, 48_000);
+        // A bend: the two sines' own second difference stays under 0.006.
+        let bends: Vec<usize> = (2..x.len())
+            .filter(|&n| (x[n] - 2.0 * x[n - 1] + x[n - 2]).abs() > 0.02)
+            .collect();
+        assert!(
+            bends.is_empty(),
+            "bends at {:?}",
+            &bends[..bends.len().min(10)]
+        );
+        // Each 50 ms (a whole number of periods of both, so neither leaks
+        // into the other's measure): how much of each tone.
+        let step = 2400;
+        let levels: Vec<(f32, f32)> = x
+            .chunks_exact(step)
+            .map(|c| (amplitude(c, 48_000, 440.0), amplitude(c, 48_000, 660.0)))
+            .collect();
+        let first_b = levels
+            .iter()
+            .position(|l| l.1 > 0.05)
+            .expect("660 Hz heard");
+        let last_a = levels
+            .iter()
+            .rposition(|l| l.0 > 0.05)
+            .expect("440 Hz heard");
+        let both = levels.iter().filter(|l| l.0 > 0.15 && l.1 > 0.15).count();
+        // The tones are over a tenth of their whole from 6 % to 94 % of
+        // the fade: about 870 ms.
+        let span = (last_a - first_b) * 50;
+        println!("the fade: {span} ms, both over 0.15 for {} ms", both * 50);
+        assert!((700..=1100).contains(&span), "{span} ms; {levels:.2?}");
+        assert!(both * 50 >= 300, "{} ms", both * 50);
+        let end = levels.last().unwrap();
+        assert!(end.0 < 0.01 && end.1 > 0.45, "{end:?}");
     }
 }
