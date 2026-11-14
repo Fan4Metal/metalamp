@@ -137,6 +137,9 @@ pub struct Settings {
     /// Previous, a double click), in seconds (0: none, the sound before
     /// fades out over 30 ms).
     pub crossfade_manual: f32,
+    /// A seek crossfades from the place left into the one sought
+    /// (`player::SEEK_CROSSFADE_MS`); off: the one fades out, the other in.
+    pub crossfade_seek: bool,
     /// How far the seek keys (Shift+Left/Right, the arrows over the
     /// player bar) go, in seconds (1–`MAX_SEEK_STEP`).
     pub seek_step: u8,
@@ -700,6 +703,7 @@ impl Default for Settings {
             crossfade: 0,
             crossfade_in_albums: false,
             crossfade_manual: 0.0,
+            crossfade_seek: false,
             seek_step: DEFAULT_SEEK_STEP,
             volume_step: DEFAULT_VOLUME_STEP,
             media_keys: MediaKeys::default(),

@@ -21,6 +21,9 @@ pub const MAX_CROSSFADE: u8 = 12;
 /// seconds.
 pub const MAX_MANUAL_CROSSFADE: f32 = 5.0;
 
+/// The crossfade of a seek when it is on, in milliseconds.
+pub const SEEK_CROSSFADE_MS: u64 = 300;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
     Stopped,
@@ -268,6 +271,13 @@ impl Player {
     /// (0: none).
     pub fn set_manual_crossfade(&mut self, seconds: f32) {
         self.manual_crossfade_ms = (seconds.clamp(0.0, MAX_MANUAL_CROSSFADE) * 1000.0) as u64;
+    }
+
+    /// A seek crossfades from the place left into the one sought
+    /// (`SEEK_CROSSFADE_MS`), or not (the one fades out, the other in).
+    pub fn set_seek_crossfade(&mut self, on: bool) {
+        self.engine
+            .send(Cmd::SeekFade(if on { SEEK_CROSSFADE_MS } else { 0 }));
     }
 
     /// The crossfade into `next` from the current entry (ms): none between

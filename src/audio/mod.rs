@@ -66,6 +66,9 @@ pub enum Cmd {
     Stop,
     /// To this time (milliseconds) of the track heard.
     Seek(u64),
+    /// The crossfade of a seek from now on (ms; 0: none, the place left
+    /// fades out and the one sought fades in).
+    SeekFade(u64),
     /// Play on this device (its id; empty: the default) from now on.
     Device(String),
     /// The files at these paths closed where they are being decoded (the
@@ -366,6 +369,8 @@ struct Player<'a> {
     /// ahead as its buffer goes, so opening them again (300 ms for an
     /// AAC, `Decoder::reacquire`) is not heard as a gap.
     holding: bool,
+    /// The crossfade of a seek (ms; 0: none).
+    seek_fade_ms: u64,
     /// A fade in under way over the frames written next: how many of it
     /// are written (a resume, a place sought within a track; a track's
     /// own start is not faded).
@@ -414,6 +419,7 @@ fn run(
         chain: None,
         holding: false,
         fade_in: None,
+        seek_fade_ms: 0,
     };
     loop {
         let busy = p.decoding.is_some() && !p.paused;
@@ -475,7 +481,7 @@ impl Player<'_> {
                 match Decoder::open(&path) {
                     Ok(decoder) => {
                         let open = Open::new(id, path, decoder, gain, 0);
-                        if let Some(open) = self.cross_into(open, fade_ms) {
+                        if let Some(open) = self.cross_into(open, fade_ms, 0, false) {
                             self.begin(open, 0);
                         }
                     }
@@ -552,6 +558,7 @@ impl Player<'_> {
             }
             Cmd::Stop => self.stop(),
             Cmd::Seek(ms) => self.seek(ms),
+            Cmd::SeekFade(ms) => self.seek_fade_ms = ms,
             Cmd::Gain { id, gain } => {
                 for open in [self.decoding.as_mut(), self.next.as_mut()]
                     .into_iter()
@@ -842,7 +849,32 @@ impl Player<'_> {
     }
 
     fn seek(&mut self, ms: u64) {
+        if self.seek_fade_ms > 0
+            && let Some(open) = self.open_heard_at(ms)
+            && self.cross_into(open, self.seek_fade_ms, ms, true).is_none()
+        {
+            return;
+        }
         self.restart_heard(ms);
+    }
+
+    /// The track heard opened anew at `ms`, for a crossfade from where it
+    /// is: only while it is heard (started, not paused) and is the one
+    /// decoding (not when the next has gone on into the ring behind it, or
+    /// a fade into another is under way: `restart_heard` sorts those out).
+    fn open_heard_at(&mut self, ms: u64) -> Option<Open> {
+        if !self.started || self.paused {
+            return None;
+        }
+        let seg = self.heard()?;
+        if self.decoding.as_ref()?.id != seg.id || self.fade.is_some() {
+            return None;
+        }
+        let (id, path, gain) = (seg.id, seg.path.clone(), seg.gain);
+        let mut open = Open::new(id, path.clone(), Decoder::open(&path).ok()?, gain, 0);
+        open.decoder.seek(ms as i64 * SECOND / 1000).ok()?;
+        open.decoded = ms * u64::from(open.decoder.rate) / 1000;
+        Some(open)
     }
 
     /// The track heard begun again at `from_ms`, its pause kept (a seek,
@@ -1040,13 +1072,22 @@ impl Player<'_> {
 
     /// `open` crossfaded into over `fade_ms` from the sound heard, when it
     /// can be: something is heard (started, not paused), of `open`'s
-    /// format, no file released. The sound ending is what is not yet
+    /// format, no file released. `open` starts at `origin_ms` of its own
+    /// (a seek; its decoder sought already), and the track preloaded is
+    /// kept when `keep_next` (a seek within the track heard: the player
+    /// preloads anew only on a track's start). The sound ending is what is not yet
     /// written to the device (the ring), then the decoder it came from,
     /// so the change is heard after what the device holds (`WRITE_AHEAD`);
     /// with no decoder to go on (the ring holding another fade's mix, or
     /// the end of what was to be played), the fade is no longer than the
     /// ring. Else `open` is handed back, to be begun as usual.
-    fn cross_into(&mut self, open: Open, fade_ms: u64) -> Option<Open> {
+    fn cross_into(
+        &mut self,
+        open: Open,
+        fade_ms: u64,
+        origin_ms: u64,
+        keep_next: bool,
+    ) -> Option<Open> {
         let channels = usize::from(self.format.1.max(1));
         let ring = (self.ring.len() / channels) as u64;
         if fade_ms == 0
@@ -1060,8 +1101,10 @@ impl Player<'_> {
             return Some(open);
         }
         let mixing = self.fade.is_some();
-        // Not longer than half the track, as between tracks.
-        let mut len = (fade_ms * u64::from(self.format.0) / 1000).min(open.total_frames() / 2);
+        // Not longer than half of what is left of the track, as between
+        // tracks.
+        let left = open.total_frames().saturating_sub(open.decoded);
+        let mut len = (fade_ms * u64::from(self.format.0) / 1000).min(left / 2);
         if mixing || self.eos || self.format_change {
             len = len.min(ring);
         }
@@ -1083,7 +1126,7 @@ impl Player<'_> {
             start: self.written,
             id: open.id,
             path: open.path.clone(),
-            origin_ms: 0,
+            origin_ms,
             duration_ms: (open.decoder.duration / (SECOND / 1000)) as u64,
             gain: open.gain,
         });
@@ -1099,7 +1142,9 @@ impl Player<'_> {
             a_ended: false,
         });
         self.decoding = Some(open);
-        self.next = None;
+        if !keep_next {
+            self.next = None;
+        }
         self.eos = false;
         self.format_change = false;
         self.drained_since = None;
@@ -1745,6 +1790,11 @@ mod tests {
     /// A WAV of a sine of `hz` at half scale, 48 kHz stereo 16-bit, `secs`
     /// long, faded in and out over 20 ms (its own ends make no click).
     fn sine_wav(path: &std::path::Path, secs: u32, hz: f32) {
+        tones_wav(path, secs, |_| hz);
+    }
+
+    /// As `sine_wav`, the tone's frequency at each second `hz_at` says.
+    fn tones_wav(path: &std::path::Path, secs: u32, hz_at: impl Fn(u32) -> f32) {
         const RATE: u32 = 48_000;
         let frames = RATE * secs;
         let fade = RATE / 50;
@@ -1752,6 +1802,7 @@ mod tests {
         for i in 0..frames {
             let edge = i.min(frames - 1 - i);
             let env = (edge as f32 / fade as f32).min(1.0);
+            let hz = hz_at(i / RATE);
             let x = 0.5 * env * (std::f32::consts::TAU * hz * i as f32 / RATE as f32).sin();
             let s = (x * 32767.0) as i16;
             data.extend_from_slice(&s.to_le_bytes());
@@ -2081,5 +2132,96 @@ mod tests {
         assert!(both * 50 >= 300, "{} ms", both * 50);
         let end = levels.last().unwrap();
         assert!(end.0 < 0.01 && end.1 > 0.45, "{end:?}");
+    }
+
+    /// A seek with the crossfade on: the place left (440 Hz) fades into
+    /// the one sought (660 Hz, past the middle of the same file) over
+    /// about 0.3 s without a bend, no `Started` for it (the same track),
+    /// and the track preloaded is kept: a seek near the end goes on into
+    /// it. Silent (gain 0, the visualizations' tap).
+    #[test]
+    #[ignore = "needs a sound device; plays silently for about 6 s"]
+    fn engine_crossfades_a_seek() {
+        let dir = std::env::temp_dir().join(format!("metalamp_seek_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("a.wav"), dir.join("b.wav"));
+        tones_wav(&a, 20, |s| if s < 10 { 440.0 } else { 660.0 });
+        sine_wav(&b, 5, 550.0);
+        let engine = Engine::start(
+            egui::Context::default(),
+            String::new(),
+            dsp::DspSettings::default(),
+        );
+        engine.set_gain(0.0);
+        engine.send(Cmd::SeekFade(300));
+        engine.send(Cmd::Play {
+            id: 1,
+            path: a,
+            gain: 1.0,
+            fade_ms: 0,
+        });
+        engine.send(Cmd::Preload(Some((2, b, 1.0, 0))));
+        let events = |ms: u64| {
+            let until = std::time::Instant::now() + Duration::from_millis(ms);
+            let mut seen = Vec::new();
+            while std::time::Instant::now() < until {
+                seen.extend(engine.poll());
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            seen
+        };
+        let first = events(1500);
+        assert!(
+            matches!(first.as_slice(), [Event::Started { id: 1 }]),
+            "{first:?}"
+        );
+        engine.send(Cmd::Seek(15_000));
+        let during = events(900);
+        assert!(during.is_empty(), "{during:?}");
+        let position = engine.position_ms();
+        assert!((15_400..16_000).contains(&position), "{position}");
+        let mut x = Vec::new();
+        engine.heard_samples(48_000 * 2, &mut x).expect("heard");
+        let bends: Vec<usize> = (2..x.len())
+            .filter(|&n| (x[n] - 2.0 * x[n - 1] + x[n - 2]).abs() > 0.02)
+            .collect();
+        assert!(
+            bends.is_empty(),
+            "bends at {:?}",
+            &bends[..bends.len().min(10)]
+        );
+        // Each 50 ms, as in the test above.
+        let step = 2400;
+        let levels: Vec<(f32, f32)> = x
+            .chunks_exact(step)
+            .map(|c| (amplitude(c, 48_000, 440.0), amplitude(c, 48_000, 660.0)))
+            .collect();
+        let first_b = levels
+            .iter()
+            .position(|l| l.1 > 0.05)
+            .expect("660 Hz heard");
+        let last_a = levels
+            .iter()
+            .rposition(|l| l.0 > 0.05)
+            .expect("440 Hz heard");
+        let both = levels.iter().filter(|l| l.0 > 0.15 && l.1 > 0.15).count();
+        // About 260 ms of the 300 over a tenth, measured in 50 ms.
+        let span = (last_a - first_b) * 50;
+        println!("the fade: {span} ms, both over 0.15 for {} ms", both * 50);
+        assert!((150..=400).contains(&span), "{span} ms; {levels:.2?}");
+        assert!(both >= 2, "{levels:.2?}");
+        // Near the end, the preloaded track follows.
+        engine.send(Cmd::Seek(19_000));
+        let end = events(2500);
+        assert!(
+            end.iter().any(|e| matches!(e, Event::Started { id: 2 })),
+            "{end:?}"
+        );
+        assert!(
+            !end.iter().any(|e| matches!(e, Event::Ended { .. })),
+            "{end:?}"
+        );
+        drop(engine);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

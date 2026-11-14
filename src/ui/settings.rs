@@ -222,10 +222,12 @@ impl SettingsDialog {
             settings.crossfade,
             settings.crossfade_in_albums,
             settings.crossfade_manual,
+            settings.crossfade_seek,
         ) != (
             before.crossfade,
             before.crossfade_in_albums,
             before.crossfade_manual,
+            before.crossfade_seek,
         );
         changed.look = settings.look() != before.look();
         changed.keys = settings.keys != before.keys;
@@ -1417,6 +1419,7 @@ fn sound(ui: &mut Ui, settings: &mut Settings, devices: &[Device], naming: &mut 
             &mut settings.crossfade,
             &mut settings.crossfade_in_albums,
             &mut settings.crossfade_manual,
+            &mut settings.crossfade_seek,
         ),
     );
 }
@@ -1427,7 +1430,7 @@ fn processing(
     dsp: &mut DspSettings,
     presets: &mut Vec<EqPreset>,
     naming: &mut Option<String>,
-    crossfade: (&mut u8, &mut bool, &mut f32),
+    crossfade: (&mut u8, &mut bool, &mut f32, &mut bool),
 ) {
     section(ui, tr!("Loudness", "Громкость"), |ui| {
         row(
@@ -1528,6 +1531,17 @@ fn processing(
                             .suffix(tr!(" s", " с")),
                     );
                 },
+            );
+            divider(ui);
+            row(
+                ui,
+                tr!("On a seek", "При перемотке"),
+                Some(tr!(
+                    "The place left fades into the one sought over 0.3 s, as one sound. Off: the one fades out and the other in, 30 ms each.",
+                    "Прежнее место плавно перетекает в новое за 0,3 с, без провала. Выключено — прежнее затихает, новое нарастает, по 30 мс."
+                )),
+                50.0,
+                |ui| switch(ui, crossfade.3),
             );
         },
     );
@@ -2684,6 +2698,7 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     settings.crossfade = d.crossfade;
     settings.crossfade_in_albums = d.crossfade_in_albums;
     settings.crossfade_manual = d.crossfade_manual;
+    settings.crossfade_seek = d.crossfade_seek;
     settings.seek_step = d.seek_step;
     settings.volume_step = d.volume_step;
     settings.tray = d.tray;
