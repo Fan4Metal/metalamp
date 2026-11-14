@@ -257,7 +257,7 @@ The button left of the window's own in the title row (or `Ctrl+M`) switches to t
 
 ### Playback
 
-Media Foundation, the media framework of Windows, decodes the files, and the WASAPI shared mode plays them on the default device or the one chosen in the settings; a change of the default device or a device unplugged is followed without stopping. The track after the current one is opened in advance, so tracks of one format follow each other without a pause. An MP3 encoder adds silence before the music and after it; MetalAMP reads how much from the file's LAME tag and leaves it out, so an album recorded without pauses plays as one piece. A pause, a stop, a seek and a switch to another track fade the sound out over 30 milliseconds, and a resume or a seek fades it back in, so the wave is not cut with a click.
+Media Foundation, the media framework of Windows, decodes the files, and the WASAPI shared mode plays them on the default device or the one chosen in the settings; a change of the default device or a device unplugged is followed without stopping. The track after the current one is opened in advance, so tracks of one format follow each other without a pause. An MP3 encoder adds silence before the music and after it; MetalAMP reads how much from the file's LAME tag and leaves it out, so an album recorded without pauses plays as one piece. A pause, a stop, a seek and a switch to another track fade the sound out over 30 milliseconds after what the device already holds (about 0.15 seconds), and a resume or a seek fades it back in, so the wave is not cut with a click.
 
 ### Sound processing
 

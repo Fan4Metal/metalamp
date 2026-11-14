@@ -320,13 +320,14 @@ const WRITE_AHEAD: f32 = 0.15;
 
 /// How long what is heard fades to silence before it is cut (a pause, a
 /// stop, a seek, another track) and back in after (a resume, the place
-/// sought), in seconds: a wave cut where it stands is a click.
+/// sought), in seconds: a wave cut where it stands is a click. The fades
+/// are in the samples written: the stream's volume would act at once, but
+/// the audio engine applies it once a period (10 ms), a step, and a 30 ms
+/// fade of it was three clicks (recorded through VB-Audio's cable).
 const FADE_S: f32 = 0.03;
 
-/// How long silence is held after a fade out before the output stops: the
-/// stream's volume is applied where the audio engine mixes, once a period
-/// (10 ms), and the last step has to be mixed before the stream stops.
-const FADE_SETTLE: Duration = Duration::from_millis(20);
+/// The longest wait for a fade out written to be heard.
+const FADE_WAIT: Duration = Duration::from_millis(500);
 
 /// The gain of a fade at `x` (0: silent, 1: whole): a raised cosine, so
 /// neither end is a corner.
@@ -365,12 +366,10 @@ struct Player<'a> {
     /// ahead as its buffer goes, so opening them again (300 ms for an
     /// AAC, `Decoder::reacquire`) is not heard as a gap.
     holding: bool,
-    /// Where a fade in or out stands (0 to 1, `fade_shape`'s), over the
-    /// volume asked for: 1 but while one runs, 0 after a fade out.
-    level: f32,
-    /// The output's next start fades in: a resume, a place sought within
-    /// a track (its start is the track's own).
-    fade_in: bool,
+    /// A fade in under way over the frames written next: how many of it
+    /// are written (a resume, a place sought within a track; a track's
+    /// own start is not faded).
+    fade_in: Option<u64>,
 }
 
 fn run(
@@ -414,8 +413,7 @@ fn run(
         dsp,
         chain: None,
         holding: false,
-        level: 1.0,
-        fade_in: false,
+        fade_in: None,
     };
     loop {
         let busy = p.decoding.is_some() && !p.paused;
@@ -544,8 +542,12 @@ impl Player<'_> {
             Cmd::Resume => {
                 let paused = std::mem::replace(&mut self.paused, false);
                 if self.started && paused {
-                    self.fade_in = true;
-                    let _ = self.start_output();
+                    // What was written before the pause has been heard
+                    // (`fade_out`): what comes next fades in.
+                    self.fade_in = Some(0);
+                    if let Some(out) = &mut self.out {
+                        let _ = out.start();
+                    }
                 }
             }
             Cmd::Stop => self.stop(),
@@ -669,65 +671,82 @@ impl Player<'_> {
         }
     }
 
-    /// The volume of what is heard now: the one asked for, under a fade.
-    fn gain_now(&self) -> f32 {
-        f32::from_bits(self.shared.gain.load(Relaxed)) * fade_shape(self.level)
+    /// The frames of a fade (`FADE_S`).
+    fn fade_frames(&self) -> u64 {
+        (self.format.0 as f32 * FADE_S) as u64
     }
 
-    /// Moves the fade to `to` over `FADE_S`, a step a millisecond, the
-    /// thread waiting meanwhile (the device holds `WRITE_AHEAD`). A
-    /// device that fails a step ends it.
-    fn ramp(&mut self, to: f32) {
-        let from = self.level;
-        let began = Instant::now();
-        loop {
-            let t = (began.elapsed().as_secs_f32() / FADE_S).min(1.0);
-            self.level = from + (to - from) * t;
-            let gain = self.gain_now();
-            let Some(out) = self.out.as_mut() else { break };
-            if out.set_gain(gain).is_err() || t >= 1.0 {
-                break;
+    /// `block` (raw samples from the ring) written to the device after
+    /// the fade in under way, the processing and its gains; told to the
+    /// visualizations.
+    fn write_block(&mut self, mut block: Vec<f32>) -> windows::core::Result<()> {
+        let channels = usize::from(self.format.1.max(1));
+        let frames = block.len() / channels;
+        if frames == 0 {
+            return Ok(());
+        }
+        if let Some(done) = self.fade_in {
+            let len = self.fade_frames().max(1);
+            for (i, frame) in block.chunks_exact_mut(channels).enumerate() {
+                let at = done + i as u64;
+                if at >= len {
+                    break;
+                }
+                let g = fade_shape(at as f32 / len as f32);
+                frame.iter_mut().for_each(|x| *x *= g);
             }
-            std::thread::sleep(Duration::from_millis(1));
+            let done = done + frames as u64;
+            self.fade_in = (done < len).then_some(done);
         }
-        self.level = to;
-    }
-
-    /// What is heard faded to silence before it is cut: nothing when
-    /// nothing is (stopped, paused, muted, every frame written heard).
-    fn fade_out(&mut self) {
-        if !self.started || self.paused || self.gain_now() == 0.0 {
-            return;
-        }
-        let Some(out) = self.out.as_mut() else { return };
-        if !out.heard().is_ok_and(|heard| heard < self.written) {
-            return;
-        }
-        self.ramp(0.0);
-        std::thread::sleep(FADE_SETTLE);
-    }
-
-    /// Starts the output, from silence when `fade_in` asks (taken), else
-    /// at the volume asked for.
-    fn start_output(&mut self) -> windows::core::Result<()> {
-        let fade_in = std::mem::take(&mut self.fade_in);
-        self.level = if fade_in { 0.0 } else { 1.0 };
-        let gain = self.gain_now();
+        self.process(&mut block, frames);
         let Some(out) = self.out.as_mut() else {
             return Ok(());
         };
-        out.set_gain(gain)?;
-        out.start()?;
-        self.started = true;
-        if fade_in {
-            self.ramp(1.0);
-        }
+        out.write(&block)?;
+        self.shared
+            .vis
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(&block, channels, self.written);
+        self.written += frames as u64;
         Ok(())
+    }
+
+    /// What is heard faded to silence before it is cut: the next
+    /// `FADE_S` of the ring written fading out after what the device
+    /// holds, and waited for until heard (at most `FADE_WAIT`; the thread
+    /// waits, the commands with it); the ring goes on after them. Nothing
+    /// when nothing is heard (not started, paused), and no fade when the
+    /// ring is empty (the end of what was to be played).
+    fn fade_out(&mut self) {
+        if !self.started || self.paused || self.out.is_none() {
+            return;
+        }
+        let channels = usize::from(self.format.1.max(1));
+        let len = (self.fade_frames() as usize).min(self.ring.len() / channels);
+        if len > 0 {
+            let mut block: Vec<f32> = self.ring.drain(..len * channels).collect();
+            for (i, frame) in block.chunks_exact_mut(channels).enumerate() {
+                let g = fade_shape(1.0 - (i + 1) as f32 / len as f32);
+                frame.iter_mut().for_each(|x| *x *= g);
+            }
+            if self.write_block(block).is_err() {
+                return;
+            }
+        }
+        let began = Instant::now();
+        while began.elapsed() < FADE_WAIT {
+            match self.out.as_mut().map(|o| o.heard()) {
+                Some(Ok(heard)) if heard < self.written => {}
+                _ => break,
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
     }
 
     fn stop(&mut self) {
         self.fade_out();
-        self.fade_in = false;
+        self.fade_in = None;
         self.decoding = None;
         self.next = None;
         self.fade = None;
@@ -751,7 +770,7 @@ impl Player<'_> {
         // The sound before (another track, another place) fades out; a
         // place within the track fades in, its start is its own.
         self.fade_out();
-        self.fade_in = from_ms > 0;
+        self.fade_in = (from_ms > 0).then_some(0);
         let format = (open.decoder.rate, open.decoder.channels);
         // A decoder already under way (the track heard begun again, a
         // seek to its start among them) is sought even to 0.
@@ -910,9 +929,8 @@ impl Player<'_> {
             }
             // The device applies the gain to what it plays, so a change is
             // heard at once, not after the buffer written ahead.
-            let gain = self.gain_now();
             let out = self.out.as_mut().expect("checked above");
-            out.set_gain(gain)?;
+            out.set_gain(f32::from_bits(self.shared.gain.load(Relaxed)))?;
             // Only `WRITE_AHEAD` of the device's buffer is kept filled.
             let room = out.room()? as usize;
             let held = (out.buffer_frames() as usize).saturating_sub(room);
@@ -925,19 +943,12 @@ impl Player<'_> {
                 .min(ahead.saturating_sub(held))
                 .min(self.ring.len() / channels);
             if frames > 0 {
-                let mut block: Vec<f32> = self.ring.drain(..frames * channels).collect();
-                self.process(&mut block, frames);
-                let out = self.out.as_mut().expect("checked above");
-                out.write(&block)?;
-                self.shared
-                    .vis
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .push(&block, channels, self.written);
-                self.written += frames as u64;
+                let block: Vec<f32> = self.ring.drain(..frames * channels).collect();
+                self.write_block(block)?;
             }
             if !self.started && self.written > 0 {
-                self.start_output()?;
+                self.out.as_mut().expect("checked above").start()?;
+                self.started = true;
             }
         }
 
