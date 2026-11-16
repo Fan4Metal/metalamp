@@ -37,6 +37,9 @@ const MARGIN: f32 = 14.0;
 /// The room the time has (`-0:00` at the large font fits it).
 const TIME_WIDTH: f32 = 92.0;
 const COVER: f32 = 52.0;
+/// The visualizations' menu leaves this much of the window's height to
+/// the colours under its list and the room about it.
+const VISUAL_MENU_REST: f32 = 120.0;
 
 /// What a click in the bar asks for.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -342,18 +345,31 @@ fn visual_display(
     }
     // An id of its own: the default one is the tooltip's, and with the
     // tooltip shown the right button's click closed the menu it opened.
+    let opening = response.secondary_clicked();
     let menu = egui::Popup::context_menu(&response).id(response.id.with("visual_menu"));
     menu.show(|ui| {
-        ui.set_min_width(160.0);
-        for v in Visual::ALL {
-            if v.starts_group() {
-                ui.separator();
-            }
-            if ui.selectable_label(v == now.visual, v.label()).clicked() {
-                cmds.push(BarCmd::Visual(v));
-                ui.close();
-            }
-        }
+        ui.set_min_width(180.0);
+        // The list scrolls: there are too many to fit a small window, and
+        // the colours under it stay in sight. It opens at the one shown.
+        let room = (ui.ctx().content_rect().height() - VISUAL_MENU_REST).clamp(100.0, 420.0);
+        egui::ScrollArea::vertical()
+            .id_salt("visual_list")
+            .max_height(room)
+            .show(ui, |ui| {
+                for v in Visual::ALL {
+                    if v.starts_group() {
+                        ui.separator();
+                    }
+                    let item = ui.selectable_label(v == now.visual, v.label());
+                    if opening && v == now.visual {
+                        item.scroll_to_me(Some(egui::Align::Center));
+                    }
+                    if item.clicked() {
+                        cmds.push(BarCmd::Visual(v));
+                        ui.close();
+                    }
+                }
+            });
         // The colours, as the settings' swatches; the menu stays open, so
         // they are tried one after another.
         ui.separator();
