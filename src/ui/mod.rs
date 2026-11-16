@@ -24,6 +24,7 @@ pub mod spectrum;
 pub mod start;
 pub mod statistics;
 pub mod status;
+pub mod strata;
 pub mod strings;
 pub mod synthwave;
 pub mod table;

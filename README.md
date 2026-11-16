@@ -224,7 +224,7 @@ The display right of the player shows the sound heard. A click on it goes on to 
 
 - **Spectrum analyzer** with peaks that hold and fall: as bars, as LED segments, as a smooth curve, or mirrored about the middle line.
 - **Ridges**: the spectra of the last moments as lines one behind the other, as on the cover of "Unknown Pleasures".
-- **Strata**: each band's loudness over time as lines one behind the other, the bass in front, rolling from the right: layered mountain ranges.
+- **Strata**: a string per frequency band, the bass in front, held at a nut on the left and fanning out to the right; the loudness runs along them as vibrating swells, and the beats pluck them.
 - **Spectrogram**.
 - **Synthwave**: a flight over a grid towards a striped sun, between mountains raised by the spectrum.
 - **Lightning**: bolts striking from a glowing core on the beats.

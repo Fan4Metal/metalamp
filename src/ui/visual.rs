@@ -14,10 +14,9 @@
 //! rolling from the right: the loud ones bright), three scenes: a
 //! synthwave flight (`synthwave`) and lightning striking on the beats
 //! (`lightning`) of the analyzer's levels, a vortex of the waves heard
-//! (`vortex`, a picture with feedback as MilkDrop's), strata (each
-//! band's levels over time as a line, the bass in front at the bottom
-//! and the higher bands behind it, higher and fainter, rolling from the
-//! right, each hiding what is behind it: layered mountain ranges), and
+//! (`vortex`, a picture with feedback as MilkDrop's), strata (`strata`:
+//! a string per band held at a nut on the left, the levels running right
+//! along them as vibrating swells, plucked by the beats), and
 //! the notes (`notes`): the twelve pitch classes as bars (a chromagram)
 //! or a piano's keys lit by their notes with a bar over each. The
 //! waveform, the ridges, the strata and the spectrogram count the frames
@@ -46,6 +45,7 @@ use crate::ui::lightning::{self, Lightning};
 use crate::ui::notes::{self, Notes};
 use crate::ui::sparks::{self, Sparks};
 use crate::ui::spectrum::{self, Analyzer};
+use crate::ui::strata::Strata;
 use crate::ui::strings::Strings;
 use crate::ui::synthwave::{self, Synthwave};
 use crate::ui::vortex::{self, Vortex};
@@ -80,17 +80,6 @@ const RIDGE_EDGE: f32 = 0.12;
 const RIDGE_NARROWER: f32 = 0.3;
 const RIDGE_LOWER: f32 = 0.35;
 const RIDGE_FAINTER: f32 = 0.75;
-/// The strata: a line per band every `STRATA_SPACING` points of height
-/// in the lower `STRATA_ROOM` of the display (6–40 bands), a point every
-/// `STRATA_PITCH` (a column every `COLUMN_S`), rising `STRATA_RISE` lines
-/// at full level (raised to `STRATA_POWER`, averaged over its
-/// neighbours in time), the line furthest back `STRATA_FAINTER` fainter.
-const STRATA_SPACING: f32 = 4.0;
-const STRATA_ROOM: f32 = 0.7;
-const STRATA_PITCH: f32 = 2.0;
-const STRATA_RISE: f32 = 5.0;
-const STRATA_POWER: f32 = 2.0;
-const STRATA_FAINTER: f32 = 0.6;
 /// The piano's white keys are at least this wide; the keys take this
 /// share of the height, under the bars; a black key's width and length
 /// as shares of a white one's; a key's level from which it starts to
@@ -116,9 +105,7 @@ pub struct Visualizer {
     /// The ridges' lines, oldest first: the levels across, the lowest
     /// band first.
     ridges: VecDeque<Vec<f32>>,
-    /// The strata's columns, oldest first: the bands' levels, the lowest
-    /// band first.
-    strata: VecDeque<Vec<f32>>,
+    strata: Strata,
     /// Columns (or lines) owed to the history shown (fractions carried
     /// on).
     owed: f32,
@@ -166,7 +153,7 @@ impl Visualizer {
             goniometer: Goniometer::new(),
             strings: Strings::new(),
             ridges: VecDeque::new(),
-            strata: VecDeque::new(),
+            strata: Strata::new(),
             owed: 0.0,
             wave: VecDeque::new(),
             gathering: (0.0, 0.0, 0),
@@ -324,32 +311,15 @@ impl Visualizer {
                 }
             }
             Visual::Strata => {
-                let cap = columns(size.x, STRATA_PITCH);
-                let bands = strata_lines(size.y);
-                if self.strata.front().is_some_and(|c| c.len() != bands) {
-                    self.strata.clear();
-                }
-                let shown = self.strata.iter().any(|c| c.iter().any(|&l| l > 0.0));
-                match self.due(rate, new, COLUMN_S, dt, shown) {
-                    Some(due) => {
-                        if due > 0 {
-                            let column = match heard {
-                                Some((s, h)) => {
-                                    self.analyzer
-                                        .levels(&s[s.len() - spectrum::N..], h.rate, bands)
-                                }
-                                None => vec![0.0; bands],
-                            };
-                            for _ in 0..due.min(cap) {
-                                self.strata.push_back(column.clone());
-                            }
-                        }
-                        while self.strata.len() > cap {
-                            self.strata.pop_front();
-                        }
-                    }
-                    None => self.strata.clear(),
-                }
+                let bands = Strata::lines(size.y);
+                let levels = heard.map(|(s, h)| {
+                    let levels = self
+                        .analyzer
+                        .levels(&s[s.len() - spectrum::N..], h.rate, bands);
+                    (levels, new as f32 / h.rate as f32)
+                });
+                let heard = levels.as_ref().map(|(l, seconds)| (l.as_slice(), *seconds));
+                self.strata.feed(heard, dt, size);
             }
             Visual::Waveform => {
                 let cap = columns(size.x, WAVE_PITCH);
@@ -469,7 +439,7 @@ impl Visualizer {
             Visual::Synthwave => self.synthwave.active(),
             Visual::Vortex => self.vortex.active(),
             Visual::Ridges => !self.ridges.is_empty(),
-            Visual::Strata => !self.strata.is_empty(),
+            Visual::Strata => self.strata.active(),
             Visual::Chroma | Visual::Piano => self.notes.active(),
             Visual::Strings => self.strings.active(),
             Visual::Fire => self.fire.active(),
@@ -499,7 +469,7 @@ impl Visualizer {
             Visual::Goniometer => self.goniometer.paint(painter, rect),
             Visual::Strings => self.strings.paint(painter, rect),
             Visual::Ridges => self.paint_ridges(painter, rect),
-            Visual::Strata => self.paint_strata(painter, rect),
+            Visual::Strata => self.strata.paint(painter, rect),
             Visual::Chroma => self.paint_chroma(painter, rect),
             Visual::Piano => self.paint_piano(painter, rect),
             Visual::Waveform => self.paint_wave(painter, rect),
@@ -564,57 +534,6 @@ impl Visualizer {
                     let level = ((base - p.y) / tall.max(1.0)).clamp(0.0, 1.0).sqrt();
                     let place = ((p.x - left) / width).clamp(0.0, 1.0);
                     colours.at(level.max(0.3), place).gamma_multiply(fade)
-                }),
-            ));
-        }
-    }
-
-    /// The strata, the highest band first: each band's levels over time
-    /// as a line, the newest column at the right edge, the lowest band in
-    /// front at the bottom; each fills the room down to its base line
-    /// with the display's ground, hiding the lines behind it, then draws
-    /// its line.
-    fn paint_strata(&self, painter: &Painter, rect: Rect) {
-        let Some(bands) = self.strata.front().map(Vec::len) else {
-            return;
-        };
-        let n = self.strata.len();
-        if n < 2 || bands == 0 {
-            return;
-        }
-        let rise = STRATA_SPACING * STRATA_RISE;
-        let ground = palette::list_bg();
-        let colours = palette::visual_for(Visual::Strata);
-        let left = rect.right() - (n - 1) as f32 * STRATA_PITCH;
-        for band in (0..bands).rev() {
-            let depth = band as f32 / (bands - 1).max(1) as f32;
-            let base = rect.bottom() - 1.0 - STRATA_SPACING * band as f32;
-            let levels: Vec<f32> = self.strata.iter().map(|c| c[band]).collect();
-            let shown: Vec<Pos2> = smoothed(&levels)
-                .iter()
-                .enumerate()
-                .map(|(i, &level)| {
-                    let h = level.clamp(0.0, 1.0).powf(STRATA_POWER);
-                    pos2(left + i as f32 * STRATA_PITCH, base - rise * h)
-                })
-                .collect();
-            let mut mesh = Mesh::default();
-            for w in shown.windows(2) {
-                let (a, b) = (w[0], w[1]);
-                let i = mesh.vertices.len() as u32;
-                for p in [a, b, pos2(b.x, base + 1.0), pos2(a.x, base + 1.0)] {
-                    mesh.colored_vertex(p, ground);
-                }
-                mesh.add_triangle(i, i + 1, i + 2);
-                mesh.add_triangle(i, i + 2, i + 3);
-            }
-            painter.add(mesh);
-            let fade = 1.0 - STRATA_FAINTER * depth;
-            painter.add(Shape::line(
-                shown,
-                PathStroke::new_uv(1.2, move |_, p| {
-                    let level = ((base - p.y) / rise).clamp(0.0, 1.0).sqrt();
-                    colours.at(level.max(0.3), depth).gamma_multiply(fade)
                 }),
             ));
         }
@@ -954,7 +873,7 @@ impl Visualizer {
 
 /// `levels` each averaged with its neighbours (1 2 3 2 1), so a ridge
 /// is a range of hills, not a saw.
-fn smoothed(levels: &[f32]) -> Vec<f32> {
+pub(super) fn smoothed(levels: &[f32]) -> Vec<f32> {
     const KERNEL: [f32; 5] = [1.0, 2.0, 3.0, 2.0, 1.0];
     let n = levels.len() as isize;
     (0..n)
@@ -975,11 +894,6 @@ fn smoothed(levels: &[f32]) -> Vec<f32> {
 /// How many ridges a display `height` points high shows.
 fn ridge_lines(height: f32) -> usize {
     ((height / RIDGE_SPACING) as usize).clamp(6, 32)
-}
-
-/// How many bands the strata show in a display `height` points high.
-fn strata_lines(height: f32) -> usize {
-    ((height * STRATA_ROOM / STRATA_SPACING) as usize).clamp(6, 40)
 }
 
 /// How many columns of `pitch` points fit in `width`.
@@ -1189,44 +1103,6 @@ mod tests {
         for _ in 0..ridge_lines(90.0) + 2 {
             v.idle = 1.0;
             v.feed(Visual::Ridges, None, None, size);
-        }
-        assert!(!v.active());
-    }
-
-    #[test]
-    fn the_strata_add_a_column_every_20_ms_and_roll_out_when_stopped() {
-        let mut v = Visualizer::new();
-        let rate = 48000;
-        let size = Some(Vec2::new(400.0, 90.0));
-        let s = sine(1000.0, rate, FETCH, 0);
-        v.feed(
-            Visual::Strata,
-            Some((&s, Heard { rate, end: 10_000 })),
-            None,
-            size,
-        );
-        assert!(v.strata.is_empty());
-        // 100 ms: five columns of the display's bands, the band of 1 kHz
-        // loudest.
-        v.feed(
-            Visual::Strata,
-            Some((&s, Heard { rate, end: 14_800 })),
-            None,
-            size,
-        );
-        assert_eq!(v.strata.len(), 5);
-        assert_eq!(v.strata[0].len(), strata_lines(90.0));
-        assert!(v.strata[0].iter().any(|&l| l > 0.5));
-        // Never more than the display holds.
-        for i in 1..60 {
-            let end = 14_800 + i * 8000;
-            v.feed(Visual::Strata, Some((&s, Heard { rate, end })), None, size);
-        }
-        assert_eq!(v.strata.len(), columns(400.0, STRATA_PITCH));
-        // Stopped: silent columns push the sound out, then nothing is left.
-        for _ in 0..columns(400.0, STRATA_PITCH) + 2 {
-            v.idle = 1.0;
-            v.feed(Visual::Strata, None, None, size);
         }
         assert!(!v.active());
     }
