@@ -567,6 +567,9 @@ pub enum Visual {
     /// A pond, drops falling on it as notes start (the bass on the left),
     /// their rings crossing; a great wave on the beats.
     Ripples,
+    /// Three ribbons of light (the bass, the middle, the treble) winding
+    /// across, turning, swelling with their bands, bent by the beats.
+    Ribbons,
     /// The sound's peaks rolling from the right.
     Waveform,
     /// The wave itself.
@@ -589,7 +592,7 @@ pub enum Visual {
 
 impl Visual {
     /// As the display's menu and the settings list them, "none" last.
-    pub const ALL: [Visual; 23] = [
+    pub const ALL: [Visual; 24] = [
         Visual::Spectrum,
         Visual::Led,
         Visual::Curve,
@@ -605,6 +608,7 @@ impl Visual {
         Visual::Aurora,
         Visual::Cloth,
         Visual::Ripples,
+        Visual::Ribbons,
         Visual::Waveform,
         Visual::Scope,
         Visual::Goniometer,
@@ -632,6 +636,7 @@ impl Visual {
             Visual::Aurora => tr!("Aurora", "Северное сияние"),
             Visual::Cloth => tr!("Cloth", "Полотно"),
             Visual::Ripples => tr!("Ripples", "Рябь"),
+            Visual::Ribbons => tr!("Ribbons", "Ленты"),
             Visual::Waveform => tr!("Waveform", "Волна"),
             Visual::Scope => tr!("Oscilloscope", "Осциллограф"),
             Visual::Goniometer => tr!("Goniometer", "Гониометр"),
@@ -1045,6 +1050,7 @@ mod tests {
             (Visual::Aurora, "aurora"),
             (Visual::Cloth, "cloth"),
             (Visual::Ripples, "ripples"),
+            (Visual::Ribbons, "ribbons"),
             (Visual::Goniometer, "goniometer"),
             (Visual::Strings, "strings"),
             (Visual::Harp, "harp"),

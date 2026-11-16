@@ -314,6 +314,15 @@ fn scheme(visual: Visual) -> Scheme {
             peak: &[0xe0f0ff, 0xe0fffb, 0xf2e8ff],
             by_level: false,
         },
+        // Silk ribbons: crimson for the bass, gold, cyan for the treble.
+        Visual::Ribbons => Scheme {
+            rows: &[
+                (0.0, &[0x5a0a2a, 0x5a3a0a, 0x0a3a5a]),
+                (1.0, &[0xff3d6e, 0xffc23d, 0x3de0ff]),
+            ],
+            peak: &[0xffe0e8, 0xfff4d8, 0xe0faff],
+            by_level: false,
+        },
         // Indigo peaks round an ice-blue middle.
         Visual::Waveform => Scheme {
             rows: &[

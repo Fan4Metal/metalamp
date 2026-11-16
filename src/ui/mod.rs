@@ -20,6 +20,7 @@ pub mod mini;
 pub mod notes;
 pub mod player_bar;
 pub mod playlist;
+pub mod ribbons;
 pub mod ripples;
 pub mod settings;
 pub mod sparks;

@@ -45,6 +45,7 @@ use crate::ui::goniometer::Goniometer;
 use crate::ui::harp::Harp;
 use crate::ui::lightning::{self, Lightning};
 use crate::ui::notes::{self, Notes};
+use crate::ui::ribbons::{self, Ribbons};
 use crate::ui::ripples::{self, Ripples};
 use crate::ui::sparks::{self, Sparks};
 use crate::ui::spectrum::{self, Analyzer};
@@ -105,6 +106,7 @@ pub struct Visualizer {
     aurora: Aurora,
     cloth: Cloth,
     ripples: Ripples,
+    ribbons: Ribbons,
     goniometer: Goniometer,
     strings: Strings,
     harp: Harp,
@@ -158,6 +160,7 @@ impl Visualizer {
             aurora: Aurora::new(),
             cloth: Cloth::new(),
             ripples: Ripples::new(),
+            ribbons: Ribbons::new(),
             goniometer: Goniometer::new(),
             strings: Strings::new(),
             harp: Harp::new(),
@@ -330,6 +333,16 @@ impl Visualizer {
                 let heard = levels.as_ref().map(|(l, seconds)| (l.as_slice(), *seconds));
                 self.harp.feed(heard, dt, size.x);
             }
+            Visual::Ribbons => {
+                let levels = heard.map(|(s, h)| {
+                    let levels =
+                        self.analyzer
+                            .levels(&s[s.len() - spectrum::N..], h.rate, ribbons::BANDS);
+                    (levels, new as f32 / h.rate as f32)
+                });
+                let heard = levels.as_ref().map(|(l, seconds)| (l.as_slice(), *seconds));
+                self.ribbons.feed(heard, dt, size.x);
+            }
             Visual::Ripples => {
                 let levels = heard.map(|(s, h)| {
                     let levels =
@@ -488,6 +501,7 @@ impl Visualizer {
             Visual::Aurora => self.aurora.active(),
             Visual::Cloth => self.cloth.active(),
             Visual::Ripples => self.ripples.active(),
+            Visual::Ribbons => self.ribbons.active(),
             Visual::Goniometer => self.goniometer.active(),
             Visual::Waveform => !self.wave.is_empty(),
             Visual::Spectrogram => !self.gram.is_empty(),
@@ -511,6 +525,7 @@ impl Visualizer {
             Visual::Aurora => self.aurora.paint(painter, rect),
             Visual::Cloth => self.cloth.paint(painter, rect),
             Visual::Ripples => self.ripples.paint(painter, rect),
+            Visual::Ribbons => self.ribbons.paint(painter, rect),
             Visual::Goniometer => self.goniometer.paint(painter, rect),
             Visual::Strings => self.strings.paint(painter, rect),
             Visual::Harp => self.harp.paint(painter, rect),
@@ -1012,6 +1027,7 @@ mod tests {
             Visual::Aurora,
             Visual::Cloth,
             Visual::Ripples,
+            Visual::Ribbons,
             Visual::Goniometer,
             Visual::Strings,
             Visual::Harp,
