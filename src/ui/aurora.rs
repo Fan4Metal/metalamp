@@ -5,7 +5,7 @@
 //! the edge and fades upwards, in the visualization's colours: the edge
 //! a colour's top, the light above it a colour further across. On a dark
 //! theme it is added to the ground, over a few faint stars. The levels
-//! rise at once and fall in a third of a second, raised to a power so the
+//! rise in a tenth of a second and fall in half a second, raised to a power so the
 //! upper part of the range, where music sits, moves the light; the louder
 //! the music, the faster the curtains sway and the rays drift. A beat
 //! makes them flash and leap, and sends a surge of light across from the
@@ -21,8 +21,8 @@ use crate::palette;
 /// The bands of the levels fed.
 pub const BANDS: usize = 40;
 /// The levels rise in about `RISE_S` and fall in about `FALL_S`.
-const RISE_S: f32 = 0.06;
-const FALL_S: f32 = 0.35;
+const RISE_S: f32 = 0.1;
+const FALL_S: f32 = 0.5;
 /// A level under `FROM` lights nothing; over it, raised to `POWER`, so
 /// the upper part of the range, where music sits, moves the light.
 const FROM: f32 = 0.25;
@@ -30,14 +30,14 @@ const POWER: f32 = 1.8;
 /// The curtains sway and their rays drift at `CALM` of their speed in
 /// silence, up to `CALM` + `LIVELY` at full level, a kick adding `KICKED`.
 const CALM: f32 = 0.5;
-const LIVELY: f32 = 1.5;
-const KICKED: f32 = 1.5;
+const LIVELY: f32 = 0.9;
+const KICKED: f32 = 0.6;
 /// A beat lights the curtains up to `FLASH` more and raises them up to
 /// `LEAP` of the height, and sends a surge of light across from the bass
 /// at `SURGE_SPEED` widths a second, `SURGE_WIDTH` wide.
-const FLASH: f32 = 0.8;
-const LEAP: f32 = 0.06;
-const SURGE_SPEED: f32 = 1.4;
+const FLASH: f32 = 0.5;
+const LEAP: f32 = 0.04;
+const SURGE_SPEED: f32 = 1.0;
 const SURGE_WIDTH: f32 = 0.12;
 /// A column of the curtains every so many points.
 const PITCH: f32 = 3.0;
@@ -231,7 +231,7 @@ mod tests {
     fn rises_quickly_falls_slowly_and_fades() {
         let mut a = Aurora::new();
         let loud = vec![1.0; BANDS];
-        for _ in 0..10 {
+        for _ in 0..15 {
             a.feed(Some(&loud), true, 0.02);
         }
         assert!(a.levels[0] > 0.9);
@@ -281,7 +281,7 @@ mod tests {
         a.feed(Some(&[0.1; BANDS]), true, 0.3);
         let at = a.surges[0].0;
         assert!(a.surge_at(at) > 0.4 && a.surge_at((at + 0.5).min(1.0)) < 0.1);
-        for _ in 0..60 {
+        for _ in 0..80 {
             a.feed(Some(&[0.1; BANDS]), true, 0.02);
         }
         assert!(a.surges.is_empty());
