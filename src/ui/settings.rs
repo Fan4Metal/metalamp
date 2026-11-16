@@ -1537,8 +1537,8 @@ fn processing(
                 ui,
                 tr!("On a seek", "При перемотке"),
                 Some(tr!(
-                    "The place left fades into the one sought over 0.3 s, as one sound. Off: the one fades out and the other in, 30 ms each.",
-                    "Прежнее место плавно перетекает в новое за 0,3 с, без провала. Выключено — прежнее затихает, новое нарастает, по 30 мс."
+                    "On: after a seek the old place and the new one sound together for 0.3 s, the one fading out as the other fades in. Off: the old place fades out in 30 ms, then the new one fades in in 30 ms, a short dip without overlap. Neither clicks.",
+                    "Включено — после перемотки старое и новое место 0,3 с звучат вместе: одно затихает, другое нарастает. Выключено — старое место затихает за 30 мс, затем новое нарастает за 30 мс: короткий провал без наложения. Щелчка нет в обоих случаях."
                 )),
                 50.0,
                 |ui| switch(ui, crossfade.3),
