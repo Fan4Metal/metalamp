@@ -31,8 +31,8 @@ const MOST_STEPS: usize = 16;
 /// Waves run `SPEED` knots a second and die down by `DAMP` a second; a
 /// knot goes no further than `LIMIT` either way.
 const SPEED: f32 = 30.0;
-const DAMP: f32 = 0.9;
-const LIMIT: f32 = 2.5;
+const DAMP: f32 = 0.7;
+const LIMIT: f32 = 3.0;
 /// The near edge stands as high as the level at its place (over `FROM`,
 /// raised to `POWER`), swelling by `SWELL` at `SWELL_HZ`, and follows it
 /// within about `FOLLOW_S`.
@@ -44,11 +44,11 @@ const FOLLOW_S: f32 = 0.03;
 /// A stone: a blow of `STONE` (at full strength) over `STONE_RADIUS`
 /// knots. Rain: up to `RAIN` drops a second as the treble goes from
 /// `RAIN_FROM` to full, each a blow of `DROP` on a knot.
-const STONE: f32 = 40.0;
-const STONE_RADIUS: f32 = 1.8;
+const STONE: f32 = 50.0;
+const STONE_RADIUS: f32 = 2.2;
 const RAIN: f32 = 24.0;
 const RAIN_FROM: f32 = 0.4;
-const DROP: f32 = 14.0;
+const DROP: f32 = 18.0;
 /// The far edge lies `HORIZON` of the height under the top; the rows are
 /// at depths from `NEAR` to `FAR`, the near one `SPAN` display widths
 /// wide; a knot at 1 stands `HEIGHT` of the floor's height over it.
@@ -56,7 +56,7 @@ const HORIZON: f32 = 0.12;
 const NEAR: f32 = 1.0;
 const FAR: f32 = 3.2;
 const SPAN: f32 = 1.3;
-const HEIGHT: f32 = 0.26;
+const HEIGHT: f32 = 0.34;
 /// Under this the sheet is still.
 const STILL: f32 = 0.004;
 
