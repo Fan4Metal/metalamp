@@ -1757,7 +1757,26 @@ impl App {
         let maximized = frameless::is_maximized(&ctx);
         let title = self.window_title();
         let can_maximize = self.settings.shape() != Shape::Player;
-        match title::row(ui, &title, maximized, can_maximize, &icon, update.as_deref()) {
+        let ticks = title::Ticks {
+            library: self.settings.window_layout == WindowLayout::Library,
+            playlist: match self.settings.window_layout {
+                WindowLayout::Library => self.settings.playlist_visible,
+                WindowLayout::Playlist => !self.settings.player_only,
+            },
+            equalizer: self.eq_window.open,
+            on_top: self.settings.on_top,
+        };
+        let shown = title::row(
+            ui,
+            &title,
+            maximized,
+            can_maximize,
+            &icon,
+            update.as_deref(),
+            ticks,
+        );
+        match shown {
+            Some(TitleCmd::Run(cmd)) => self.run_key(cmd, &ctx),
             Some(TitleCmd::Mini) => {
                 self.settings.mini = !self.settings.mini;
                 self.place_changed = Some(Instant::now());

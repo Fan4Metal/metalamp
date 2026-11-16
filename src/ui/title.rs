@@ -2,7 +2,10 @@
 //! icon (a click: About, as F1) and the title on the left, a newer
 //! release's button, then minimise, maximise and close on the right. Its
 //! free area drags the window; a double click maximises it or brings it
-//! back. The family's "i" button is left out: the row is bare.
+//! back; the right button there or on the icon opens the window's menu
+//! (`menu`: the library, the playlist, the equalizer, the mini player, over
+//! the others, the settings, About, Exit), as the early Winamp's main menu.
+//! The family's "i" button is left out: the row is bare.
 
 use egui::{Align2, FontId, Rect, Sense, TextureHandle, Ui, pos2, vec2};
 
@@ -25,6 +28,21 @@ pub enum TitleCmd {
     /// The mini player: the cover and the least of the controls, over
     /// the other windows (Ctrl+M).
     Mini,
+    /// A line of the window's menu: what its key does.
+    Run(Cmd),
+}
+
+/// What the window's menu ticks.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Ticks {
+    /// The layout with the library.
+    pub library: bool,
+    /// The playlist shown (in the player and playlist layout: not folded
+    /// away).
+    pub playlist: bool,
+    /// The equalizer's window open.
+    pub equalizer: bool,
+    pub on_top: bool,
 }
 
 /// `update` is the tag of a newer release, shown as a button left of
@@ -37,6 +55,7 @@ pub fn row(
     can_maximize: bool,
     icon: &TextureHandle,
     update: Option<&str>,
+    ticks: Ticks,
 ) -> Option<TitleCmd> {
     let rect = ui.max_rect();
     ui.painter().rect_filled(rect, 0.0, palette::title_bg());
@@ -46,6 +65,11 @@ pub fn row(
     if can_maximize && super::double_clicked(&drag) {
         cmd = Some(TitleCmd::ToggleMaximize);
     }
+    // The menu's ids are their own: the icon's is also its tooltip's (see
+    // the conventions in CLAUDE.md).
+    egui::Popup::context_menu(&drag)
+        .id(drag.id.with("title_menu"))
+        .show(|ui| menu(ui, ticks, &mut cmd));
     let icon_rect =
         Rect::from_center_size(pos2(rect.left() + 18.0, rect.center().y), vec2(18.0, 18.0));
     let icon_resp = ui.interact(
@@ -63,6 +87,9 @@ pub fn row(
         Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
         egui::Color32::WHITE,
     );
+    egui::Popup::context_menu(&icon_resp)
+        .id(icon_resp.id.with("title_menu"))
+        .show(|ui| menu(ui, ticks, &mut cmd));
     if icon_resp
         .on_hover_text(with_key(
             &tr!(
@@ -209,4 +236,68 @@ pub fn row(
         ui.painter().galley(pos, galley, palette::text());
     }
     cmd
+}
+
+/// The window's menu: what the window shows, ticked, with their keys; any
+/// line chosen closes it.
+fn menu(ui: &mut Ui, ticks: Ticks, cmd: &mut Option<TitleCmd>) {
+    ui.set_min_width(200.0);
+    let mut run = None;
+    for (on, label, what) in [
+        (ticks.library, tr!("Library", "Библиотека"), Cmd::WindowLayout),
+        (ticks.playlist, tr!("Playlist", "Плейлист"), Cmd::Playlist),
+        (ticks.equalizer, tr!("Equalizer", "Эквалайзер"), Cmd::Equalizer),
+    ] {
+        let mut on = on;
+        if ui.checkbox(&mut on, with_key(label, what)).changed() {
+            run = Some(what);
+        }
+    }
+    ui.separator();
+    if ui
+        .button(with_key(tr!("Mini player", "Мини-плеер"), Cmd::Mini))
+        .clicked()
+    {
+        run = Some(Cmd::Mini);
+    }
+    let mut on_top = ticks.on_top;
+    if ui
+        .checkbox(
+            &mut on_top,
+            with_key(tr!("Over the other windows", "Поверх других окон"), Cmd::OnTop),
+        )
+        .changed()
+    {
+        run = Some(Cmd::OnTop);
+    }
+    ui.separator();
+    for (label, what) in [
+        (
+            tr!("Library statistics", "Статистика библиотеки").to_owned(),
+            Cmd::Statistics,
+        ),
+        (tr!("Settings", "Настройки").to_owned(), Cmd::Settings),
+        (
+            tr!(
+                format!("About {}", crate::APP_NAME),
+                format!("О программе {}", crate::APP_NAME)
+            ),
+            Cmd::About,
+        ),
+    ] {
+        if ui.button(with_key(&label, what)).clicked() {
+            run = Some(what);
+        }
+    }
+    ui.separator();
+    if ui
+        .button(with_key(tr!("Exit", "Выход"), Cmd::Close))
+        .clicked()
+    {
+        run = Some(Cmd::Close);
+    }
+    if let Some(what) = run {
+        *cmd = Some(TitleCmd::Run(what));
+        ui.close();
+    }
 }

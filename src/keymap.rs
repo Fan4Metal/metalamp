@@ -407,7 +407,7 @@ actions! {
     Mini "mini_player" Window Cmd::Mini, [Chord::ctrl(Key::M)];
     OnTop "on_top" Window Cmd::OnTop, [Chord::ctrl(Key::T)];
     Playlist "playlist" Window Cmd::Playlist, [Chord::alt(Key::E)];
-    WindowLayout "window_layout" Window Cmd::WindowLayout, [];
+    WindowLayout "window_layout" Window Cmd::WindowLayout, [Chord::alt(Key::L)];
     Visualization "visualization" Window Cmd::Visualization, [];
     Minimize "minimize" Window Cmd::Minimize, [];
     Maximize "maximize" Window Cmd::Maximize, [];

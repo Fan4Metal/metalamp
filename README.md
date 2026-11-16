@@ -187,7 +187,7 @@ Chosen in the settings window (General, **Tags**):
 
 ### Window and player bar
 
-The window has two layouts (the settings window, General, **Window**): with the library (the player bar, the library and the playlist beside it) and **Player and playlist**, as in the early Winamp. In the default bar the player is on the left and a visualization on the right; the mouse wheel anywhere over the title row and the player bar changes the volume by the volume step (5 % by default).
+The window has two layouts (the settings window, General, **Window**): with the library (the player bar, the library and the playlist beside it) and **Player and playlist**, as in the early Winamp; `Alt+L` switches between them. The right button on the title row (on its free space or the icon) opens the window's menu: the library, the playlist and the equalizer, ticked while shown, the mini player, keeping the window over the others, the statistics, the settings, About and Exit, each with its key. In the default bar the player is on the left and a visualization on the right; the mouse wheel anywhere over the title row and the player bar changes the volume by the volume step (5 % by default).
 
 <details>
 <summary>The player bar</summary>
@@ -382,6 +382,7 @@ The keys below are the defaults; those of the player's actions can be changed in
 
 | Key | Action |
 |---|---|
+| `Alt+L` | The library shown, or the player and playlist alone (also the title row's menu) |
 | `Ctrl+M` | Mini player: the cover with the least of the controls, over the other windows (again, or `Esc`: the whole window back); also the button left of the window's buttons |
 | `Ctrl+T` | Keep the window over the other windows (again: no longer) |
 | `F1` | About (also a click on the icon in the title row) |
