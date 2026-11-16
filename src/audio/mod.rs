@@ -4,8 +4,14 @@
 //! [`Cmd`]s and takes [`Event`]s; the position, the duration and the gain
 //! are shared atomics, read and set without waiting for the thread.
 //!
+//! Files are opened, and opened again at a place sought, on an "open"
+//! thread (`opener`), which hands the decoders over and reads the files
+//! through into Windows' cache: the audio thread keeps the device only
+//! `WRITE_AHEAD` written, and a disk or Media Foundation's first read
+//! after a seek (up to 90 ms) would leave it dry.
+//!
 //! Gapless: the UI names the track after the one playing (`Cmd::Preload`);
-//! the thread opens it at once and, when the playing one's decoder ends,
+//! the thread has it opened at once and, when the playing one's decoder ends,
 //! goes on decoding it into the same ring: the device never runs dry
 //! between them. Which track is heard is known from where in the written
 //! frames its first one went (`Segment`), against the device's clock. A
@@ -81,6 +87,143 @@ pub enum Cmd {
     },
     /// The files released opened again, each from where it was.
     Reacquire,
+    /// From the "open" thread: the file asked for with `ticket` opened.
+    Opened { ticket: u64, decoder: Opened },
+}
+
+/// A decoder opened on the "open" thread for the audio thread: both are in
+/// COM's multithreaded apartment, where a Media Foundation object may be
+/// used from any thread (by one at a time: it is handed over).
+pub struct Opened(windows::core::Result<Decoder>);
+
+// SAFETY: the source reader inside lives in the MTA (see above) and is
+// only ever used by the thread holding this.
+unsafe impl Send for Opened {}
+
+impl std::fmt::Debug for Opened {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_ok() { "Ok" } else { "Err" })
+    }
+}
+
+/// A track asked for (`Cmd::Play`, `Cmd::Preload`) while its file is
+/// opened on the "open" thread.
+struct Asked {
+    ticket: u64,
+    id: u64,
+    path: PathBuf,
+    gain: f32,
+    fade_ms: u64,
+}
+
+/// A seek in the track heard waiting for its file to be opened again at
+/// the place sought (`Player::seek`).
+struct SeekAsked {
+    ticket: u64,
+    id: u64,
+    ms: u64,
+}
+
+/// What a file is opened for on the "open" thread.
+enum Ask {
+    /// To play: it goes before the files still being read through.
+    Play,
+    /// The next track.
+    Next,
+    /// The track heard, at this place (ms), its first block read: only
+    /// the last of the seeks waiting is opened.
+    Seek(u64),
+}
+
+/// The most of a file read through into Windows' cache (`opener`).
+const WARM_MOST: u64 = 512 << 20;
+
+/// The "open" thread: the files to play opened away from the audio
+/// thread, whose turns must come on time (a file on a hard disk took up
+/// to 50 ms to open, measured; the first read after a seek up to 90 ms),
+/// each handed over (`Cmd::Opened`), then read through so that Windows
+/// keeps it in its cache, and decoding it reads nothing from the disk. A
+/// track to play goes before the files still being read: those are of
+/// the tracks it replaces. Ends when the audio thread does.
+fn opener(asks: &Receiver<(u64, PathBuf, Ask)>, tx: &Sender<Cmd>) {
+    use std::io::Read;
+    use std::sync::mpsc::TryRecvError;
+    let _com = mf::com_init_mta();
+    let _mf = match mf::Mf::start() {
+        Ok(mf) => mf,
+        Err(e) => {
+            log::error!("Media Foundation: {}", mf::describe(&e));
+            return;
+        }
+    };
+    let mut queue: VecDeque<(u64, PathBuf, Ask)> = VecDeque::new();
+    // Each file opened when its turn comes, so the ones waiting are not
+    // held open (a tagger may want one to itself).
+    let mut warming: VecDeque<(PathBuf, Option<std::fs::File>, u64)> = VecDeque::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        if queue.is_empty() && warming.is_empty() {
+            match asks.recv() {
+                Ok(ask) => queue.push_back(ask),
+                Err(_) => return,
+            }
+        }
+        loop {
+            match asks.try_recv() {
+                Ok(ask) => queue.push_back(ask),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => return,
+            }
+        }
+        // A held key seeks every few tens of milliseconds: only the last
+        // place is wanted.
+        if let Some(last) = queue.iter().rposition(|a| matches!(a.2, Ask::Seek(_))) {
+            let mut at = 0;
+            queue.retain(|a| {
+                at += 1;
+                !matches!(a.2, Ask::Seek(_)) || at - 1 == last
+            });
+        }
+        if let Some((ticket, path, ask)) = queue.pop_front() {
+            let decoder = Decoder::open(&path).and_then(|mut d| {
+                if let Ask::Seek(ms) = ask {
+                    d.seek(ms as i64 * SECOND / 1000)?;
+                    d.prime()?;
+                }
+                Ok(d)
+            });
+            if tx
+                .send(Cmd::Opened {
+                    ticket,
+                    decoder: Opened(decoder),
+                })
+                .is_err()
+            {
+                return;
+            }
+            match ask {
+                Ask::Play => {
+                    warming.clear();
+                    warming.push_back((path, None, 0));
+                }
+                Ask::Next => warming.push_back((path, None, 0)),
+                Ask::Seek(_) => {}
+            }
+            continue;
+        }
+        let Some((path, file, read)) = warming.front_mut() else {
+            continue;
+        };
+        if file.is_none() {
+            *file = std::fs::File::open(&*path).ok();
+        }
+        match file.as_mut().map(|f| f.read(&mut buf)) {
+            Some(Ok(n)) if n > 0 && *read < WARM_MOST => *read += n as u64,
+            _ => {
+                warming.pop_front();
+            }
+        }
+    }
 }
 
 /// What the audio thread tells the UI.
@@ -105,6 +248,9 @@ pub struct Shared {
     quit: AtomicBool,
     /// The samples heard, for the spectrum analyzer.
     pub vis: Mutex<vis::Tap>,
+    /// The least the device held while playing (ms; `u64::MAX` none
+    /// yet): how near the thread's turns came to a gap. For the tests.
+    pub least_held_ms: AtomicU64,
 }
 
 pub struct Engine {
@@ -120,10 +266,12 @@ impl Engine {
         let (etx, events) = channel();
         let shared = Arc::new(Shared::default());
         shared.gain.store(1.0f32.to_bits(), Relaxed);
+        shared.least_held_ms.store(u64::MAX, Relaxed);
         let worker = Arc::clone(&shared);
+        let back = tx.clone();
         let thread = std::thread::Builder::new()
             .name("audio".into())
-            .spawn(move || run(&rx, &etx, &worker, &ctx, device, dsp))
+            .spawn(move || run(&rx, back, &etx, &worker, &ctx, device, dsp))
             .map_err(|e| log::error!("cannot start the audio thread: {e}"))
             .ok();
         Engine {
@@ -292,6 +440,27 @@ struct Fade {
     a: VecDeque<f32>,
     b: VecDeque<f32>,
     a_ended: bool,
+    shape: Shape,
+}
+
+/// How a fade goes from one sound to the other.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Shape {
+    /// Both heard together, at equal power (`fade_gains`).
+    Cross,
+    /// The one fading out over the first half, the other fading in over
+    /// the second (`dip_gains`): a seek without the crossfade.
+    Dip,
+}
+
+/// The gains of the sound left and the one coming at `t` (0 to 1) of a
+/// dip: each `fade_shape` over its half, silence between.
+pub fn dip_gains(t: f32) -> (f32, f32) {
+    if t < 0.5 {
+        (fade_shape(1.0 - 2.0 * t), 0.0)
+    } else {
+        (0.0, fade_shape(2.0 * t - 1.0))
+    }
 }
 
 /// The gains of the ending and the next track at `t` (0 to 1) of a fade:
@@ -311,15 +480,22 @@ struct Segment {
     duration_ms: u64,
     /// The track's loudness gain, for the chain at write time.
     gain: f32,
+    /// A place sought in the track heard: shown as the position until it
+    /// is heard, so seeks one after another go on from it.
+    sought: bool,
 }
 
 /// How far ahead of what is heard the device is kept written, in
 /// seconds: the processing is applied at write time, so a change of its
-/// settings is heard this soon. The device's buffer is larger
-/// (`output::BUFFER`); the ring in memory, a second deep, covers a slow
-/// disk, and this only has to cover the thread's own scheduling (it
-/// polls every 10 ms at Pro Audio priority).
-const WRITE_AHEAD: f32 = 0.15;
+/// settings is heard this soon, and a seek, a pause or another track
+/// after it (what the device holds plays out). The device's buffer is
+/// larger (`output::BUFFER`); the ring in memory, a second deep, covers
+/// the decoding, and this only the thread's own turns: it polls every
+/// 10 ms at Pro Audio priority with the timer at 1 ms, writes between
+/// the blocks it decodes, and leaves opening files and seeking in them
+/// to the "open" thread (`opener`). Measured on a hard disk: at least 30
+/// of the 60 ms held (`engine_keeps_the_device_written`); it was 150 ms.
+const WRITE_AHEAD: f32 = 0.06;
 
 /// How long what is heard fades to silence before it is cut (a pause, a
 /// stop, a seek, another track) and back in after (a resume, the place
@@ -371,6 +547,18 @@ struct Player<'a> {
     holding: bool,
     /// The crossfade of a seek (ms; 0: none).
     seek_fade_ms: u64,
+    /// The "open" thread's requests (`opener`): a ticket, the path,
+    /// what for.
+    opener: Sender<(u64, PathBuf, Ask)>,
+    /// The last ticket given.
+    ticket: u64,
+    /// The track to play and the next one while their files are opened.
+    play_asked: Option<Asked>,
+    preload_asked: Option<Asked>,
+    /// A seek in the track heard while it is opened again there.
+    seek_asked: Option<SeekAsked>,
+    /// The commands after a Play, waiting for its file to be opened.
+    deferred: VecDeque<Cmd>,
     /// A fade in under way over the frames written next: how many of it
     /// are written (a resume, a place sought within a track; a track's
     /// own start is not faded).
@@ -379,6 +567,7 @@ struct Player<'a> {
 
 fn run(
     rx: &Receiver<Cmd>,
+    back: Sender<Cmd>,
     events: &Sender<Event>,
     shared: &Shared,
     ctx: &egui::Context,
@@ -395,7 +584,37 @@ fn run(
         }
     };
     raise_priority();
+    let (opener_tx, asks) = channel();
+    if let Err(e) = std::thread::Builder::new()
+        .name("open".into())
+        .spawn(move || opener(&asks, &back))
+    {
+        // Opened on this thread then (`Player::ask`).
+        log::error!("cannot start the open thread: {e}");
+    }
+    run_player(rx, opener_tx, events, shared, ctx, device, dsp);
+    unsafe { windows::Win32::Media::timeEndPeriod(1) };
+    // Decoders handed over and not taken, released while Media Foundation
+    // is up here.
+    while rx.try_recv().is_ok() {}
+}
+
+fn run_player(
+    rx: &Receiver<Cmd>,
+    opener: Sender<(u64, PathBuf, Ask)>,
+    events: &Sender<Event>,
+    shared: &Shared,
+    ctx: &egui::Context,
+    device: String,
+    dsp: dsp::DspSettings,
+) {
     let mut p = Player {
+        opener,
+        ticket: 0,
+        play_asked: None,
+        preload_asked: None,
+        seek_asked: None,
+        deferred: VecDeque::new(),
         events,
         shared,
         ctx,
@@ -454,6 +673,9 @@ fn raise_priority() {
     {
         log::debug!("MMCSS: {}", mf::describe(&e));
     }
+    // Its waits of 10 ms last 10 ms, not the 15.6 of Windows' timer: the
+    // device holds little (`WRITE_AHEAD`). Ended by `run`.
+    unsafe { windows::Win32::Media::timeBeginPeriod(1) };
 }
 
 impl Player<'_> {
@@ -468,6 +690,24 @@ impl Player<'_> {
     }
 
     fn handle(&mut self, cmd: Cmd) {
+        // A track to play is being opened: the commands after it wait, in
+        // order, for it to begin; another Play or a Stop makes it moot,
+        // and the seeks, pauses and resumes meant for it with it.
+        if self.play_asked.is_some() {
+            match &cmd {
+                Cmd::Opened { .. } => {}
+                Cmd::Play { .. } | Cmd::Stop => {
+                    self.play_asked = None;
+                    self.deferred
+                        .retain(|c| !matches!(c, Cmd::Seek(_) | Cmd::Pause | Cmd::Resume));
+                    self.run_deferred();
+                }
+                _ => {
+                    self.deferred.push_back(cmd);
+                    return;
+                }
+            }
+        }
         match cmd {
             Cmd::Play {
                 id,
@@ -478,24 +718,22 @@ impl Player<'_> {
                 // What was preloaded came after the track played so far;
                 // the one after this is preloaded anew once it starts.
                 self.next = None;
-                match Decoder::open(&path) {
-                    Ok(decoder) => {
-                        let open = Open::new(id, path, decoder, gain, 0);
-                        if let Some(open) = self.cross_into(open, fade_ms, 0, false) {
-                            self.begin(open, 0);
-                        }
-                    }
-                    Err(e) => {
-                        // Not the track before going on meanwhile.
-                        self.stop();
-                        self.send(Event::Failed {
-                            id,
-                            message: mf::describe(&e),
-                        });
-                    }
-                }
+                self.preload_asked = None;
+                self.seek_asked = None;
+                self.ask(
+                    Asked {
+                        ticket: 0,
+                        id,
+                        path,
+                        gain,
+                        fade_ms,
+                    },
+                    true,
+                );
             }
+            Cmd::Opened { ticket, decoder } => self.opened(ticket, decoder.0),
             Cmd::Preload(None) => {
+                self.preload_asked = None;
                 self.next = None;
                 // Stop after this one: one already behind it in the ring
                 // is taken back if it can be.
@@ -504,36 +742,21 @@ impl Player<'_> {
                 }
             }
             Cmd::Preload(Some((id, path, gain, fade_ms))) => {
-                if self.next.as_ref().is_some_and(|n| n.id == id) {
+                if self.next.as_ref().is_some_and(|n| n.id == id)
+                    || self.preload_asked.as_ref().is_some_and(|a| a.id == id)
+                {
                     return;
                 }
-                match Decoder::open(&path) {
-                    Ok(decoder) => {
-                        self.next = Some(Open::new(id, path, decoder, gain, fade_ms));
-                        // Another one is next now (Play next in the last
-                        // second of a track): the one gone on into the
-                        // ring behind the track heard is taken back, and
-                        // this one goes there.
-                        if self.take_back_next(Some(id)) {
-                            self.track_decoded();
-                        }
-                        // The track decoded to its end before the next was
-                        // known (a short one, one with nothing in it, an
-                        // entry added at the end): it goes on now.
-                        if self.eos {
-                            self.eos = false;
-                            self.drained_since = None;
-                            self.track_decoded();
-                        }
-                    }
-                    Err(e) => {
-                        self.next = None;
-                        self.send(Event::Failed {
-                            id,
-                            message: mf::describe(&e),
-                        });
-                    }
-                }
+                self.ask(
+                    Asked {
+                        ticket: 0,
+                        id,
+                        path,
+                        gain,
+                        fade_ms,
+                    },
+                    false,
+                );
             }
             Cmd::Pause => {
                 self.fade_out();
@@ -607,6 +830,89 @@ impl Player<'_> {
                 let _ = done.send(any);
             }
             Cmd::Reacquire => self.reacquire(),
+        }
+    }
+
+    /// `asked`'s file to be opened on the "open" thread, as the track to
+    /// play (`play`) or the next one; opened here when that thread is
+    /// gone.
+    fn ask(&mut self, mut asked: Asked, play: bool) {
+        self.ticket += 1;
+        asked.ticket = self.ticket;
+        let path = asked.path.clone();
+        if play {
+            self.play_asked = Some(asked);
+        } else {
+            self.preload_asked = Some(asked);
+        }
+        let ask = if play { Ask::Play } else { Ask::Next };
+        if let Err(e) = self.opener.send((self.ticket, path, ask)) {
+            let (ticket, path, _) = e.0;
+            self.opened(ticket, Decoder::open(&path));
+        }
+    }
+
+    /// The file asked for with `ticket` opened: the track to play begins
+    /// (and the commands after it run), the next one is preloaded. A file
+    /// no longer wanted is dropped.
+    fn opened(&mut self, ticket: u64, decoder: windows::core::Result<Decoder>) {
+        if let Some(a) = self.play_asked.take_if(|a| a.ticket == ticket) {
+            match decoder {
+                Ok(decoder) => {
+                    let open = Open::new(a.id, a.path, decoder, a.gain, 0);
+                    if let Some(open) = self.cross_into(open, a.fade_ms, 0, false, Shape::Cross) {
+                        self.begin(open, 0);
+                    }
+                }
+                Err(e) => {
+                    // Not the track before going on meanwhile.
+                    self.stop();
+                    self.send(Event::Failed {
+                        id: a.id,
+                        message: mf::describe(&e),
+                    });
+                }
+            }
+            self.run_deferred();
+        } else if let Some(s) = self.seek_asked.take_if(|s| s.ticket == ticket) {
+            self.sought(s, decoder);
+        } else if let Some(a) = self.preload_asked.take_if(|a| a.ticket == ticket) {
+            match decoder {
+                Ok(decoder) => {
+                    let id = a.id;
+                    self.next = Some(Open::new(id, a.path, decoder, a.gain, a.fade_ms));
+                    // Another one is next now (Play next in the last
+                    // second of a track): the one gone on into the ring
+                    // behind the track heard is taken back, and this one
+                    // goes there.
+                    if self.take_back_next(Some(id)) {
+                        self.track_decoded();
+                    }
+                    // The track decoded to its end before the next was
+                    // known (a short one, one with nothing in it, an entry
+                    // added at the end): it goes on now.
+                    if self.eos {
+                        self.eos = false;
+                        self.drained_since = None;
+                        self.track_decoded();
+                    }
+                }
+                Err(e) => {
+                    self.next = None;
+                    self.send(Event::Failed {
+                        id: a.id,
+                        message: mf::describe(&e),
+                    });
+                }
+            }
+        }
+    }
+
+    /// The commands that waited for a track to begin, in order (one of
+    /// them may be another Play: those after it wait again).
+    fn run_deferred(&mut self) {
+        for cmd in std::mem::take(&mut self.deferred) {
+            self.handle(cmd);
         }
     }
 
@@ -752,6 +1058,7 @@ impl Player<'_> {
     }
 
     fn stop(&mut self) {
+        self.seek_asked = None;
         self.fade_out();
         self.fade_in = None;
         self.decoding = None;
@@ -828,6 +1135,7 @@ impl Player<'_> {
             origin_ms: from_ms,
             duration_ms: (open.decoder.duration / (SECOND / 1000)) as u64,
             gain: open.gain,
+            sought: false,
         });
         self.heard_id = None;
         self.decoding = Some(open);
@@ -848,33 +1156,66 @@ impl Player<'_> {
         self.segments.front()
     }
 
+    /// While the track heard is the one decoding, it is opened again at
+    /// the place sought on the "open" thread (the first read after a seek
+    /// takes Media Foundation up to 90 ms, more than the device holds),
+    /// the place left playing on from the ring meanwhile (`sought`). Else
+    /// (paused, not started, the next track already in the ring, files
+    /// released) the track begins again there.
     fn seek(&mut self, ms: u64) {
-        if self.seek_fade_ms > 0
-            && let Some(open) = self.open_heard_at(ms)
-            && self.cross_into(open, self.seek_fade_ms, ms, true).is_none()
-        {
-            return;
+        self.seek_asked = None;
+        if self.started && !self.paused && !self.holding {
+            let in_place = match (self.heard(), &self.decoding) {
+                (Some(seg), Some(d)) if seg.id == d.id => Some((seg.id, seg.path.clone())),
+                _ => None,
+            };
+            if let Some((id, path)) = in_place {
+                self.ticket += 1;
+                if self.opener.send((self.ticket, path, Ask::Seek(ms))).is_ok() {
+                    self.seek_asked = Some(SeekAsked {
+                        ticket: self.ticket,
+                        id,
+                        ms,
+                    });
+                    self.shared.position_ms.store(ms, Relaxed);
+                    return;
+                }
+            }
         }
         self.restart_heard(ms);
     }
 
-    /// The track heard opened anew at `ms`, for a crossfade from where it
-    /// is: only while it is heard (started, not paused) and is the one
-    /// decoding (not when the next has gone on into the ring behind it, or
-    /// a fade into another is under way: `restart_heard` sorts those out).
-    fn open_heard_at(&mut self, ms: u64) -> Option<Open> {
-        if !self.started || self.paused {
-            return None;
+    /// The track heard opened again at the place sought (`seek`): it goes
+    /// on in the stream after what the device holds, from the ring,
+    /// crossfaded from the place left (`seek_fade_ms`) or after it has
+    /// faded out (`Shape::Dip`); the device is neither waited for nor
+    /// started again (each cost about as much as it holds, measured).
+    /// Begun again there when that cannot be; nothing when the track is
+    /// no longer heard.
+    fn sought(&mut self, asked: SeekAsked, decoder: windows::core::Result<Decoder>) {
+        let Some(decoding) = &self.decoding else {
+            return;
+        };
+        if decoding.id != asked.id || self.heard().is_none_or(|s| s.id != asked.id) {
+            return;
         }
-        let seg = self.heard()?;
-        if self.decoding.as_ref()?.id != seg.id || self.fade.is_some() {
-            return None;
+        let (fade_ms, shape) = if self.seek_fade_ms > 0 {
+            (self.seek_fade_ms, Shape::Cross)
+        } else {
+            ((2.0 * FADE_S * 1000.0) as u64, Shape::Dip)
+        };
+        match decoder {
+            Ok(decoder) if !self.paused && !self.holding => {
+                let mut open = Open::new(asked.id, decoding.path.clone(), decoder, decoding.gain, 0);
+                open.decoded = asked.ms * u64::from(open.decoder.rate) / 1000;
+                if self.cross_into(open, fade_ms, asked.ms, true, shape).is_none() {
+                    return;
+                }
+            }
+            Ok(_) => {}
+            Err(e) => log::warn!("cannot open to seek: {}", mf::describe(&e)),
         }
-        let (id, path, gain) = (seg.id, seg.path.clone(), seg.gain);
-        let mut open = Open::new(id, path.clone(), Decoder::open(&path).ok()?, gain, 0);
-        open.decoder.seek(ms as i64 * SECOND / 1000).ok()?;
-        open.decoded = ms * u64::from(open.decoder.rate) / 1000;
-        Some(open)
+        self.restart_heard(asked.ms);
     }
 
     /// The track heard begun again at `from_ms`, its pause kept (a seek,
@@ -919,17 +1260,57 @@ impl Player<'_> {
         }
     }
 
+    /// The device written from the ring up to `WRITE_AHEAD` (its whole
+    /// buffer while files are released), and started once it holds that
+    /// much or, `last`, anything (the ring grows no more this turn).
+    fn feed(&mut self, channels: usize, last: bool) -> windows::core::Result<()> {
+        let Some(out) = self.out.as_mut() else {
+            return Ok(());
+        };
+        // The device applies the gain to what it plays, so a change is
+        // heard at once, not after the buffer written ahead.
+        out.set_gain(f32::from_bits(self.shared.gain.load(Relaxed)))?;
+        let room = out.room()? as usize;
+        let held = (out.buffer_frames() as usize).saturating_sub(room);
+        if self.started && !self.holding && !self.eos && !self.format_change {
+            let ms = held as u64 * 1000 / u64::from(self.format.0.max(1));
+            self.shared.least_held_ms.fetch_min(ms, Relaxed);
+        }
+        let ahead = if self.holding {
+            out.buffer_frames() as usize
+        } else {
+            (self.format.0 as f32 * WRITE_AHEAD) as usize
+        };
+        let frames = room
+            .min(ahead.saturating_sub(held))
+            .min(self.ring.len() / channels);
+        if frames > 0 {
+            let block: Vec<f32> = self.ring.drain(..frames * channels).collect();
+            self.write_block(block)?;
+        }
+        if !self.started && self.written > 0 && (last || held + frames >= ahead) {
+            self.out.as_mut().expect("written to").start()?;
+            self.started = true;
+        }
+        Ok(())
+    }
+
     /// Decode, write, follow the clock; the next track at the end.
     fn step(&mut self) -> windows::core::Result<()> {
         if self.decoding.is_none() && self.ring.is_empty() {
             return Ok(());
         }
-        let Some(out) = self.out.as_mut() else {
+        let Some(out) = self.out.as_ref() else {
             return Ok(());
         };
+        let target = out.buffer_frames() as usize * 2;
         let channels = usize::from(self.format.1.max(1));
         if !self.paused {
-            let target = out.buffer_frames() as usize * 2 * channels;
+            let target = target * channels;
+            // The device written between the blocks decoded: a block read
+            // from the disk may take tens of milliseconds, and the device
+            // holds little (`WRITE_AHEAD`).
+            self.feed(channels, false)?;
             while self.ring.len() < target && !self.eos && !self.format_change {
                 // A file released while its tag is written: the ring
                 // plays on until it is opened again.
@@ -938,50 +1319,28 @@ impl Player<'_> {
                 }
                 if self.fade.is_some() {
                     self.fade_step(channels);
+                } else if self.start_fade(channels) {
                     continue;
-                }
-                if self.start_fade(channels) {
-                    continue;
-                }
-                let Some(open) = self.decoding.as_mut() else {
-                    break;
-                };
-                match open.decoder.next() {
-                    Ok(Some(block)) => {
-                        open.decoded += (block.len() / channels) as u64;
-                        self.ring.extend(block);
-                    }
-                    Ok(None) => self.track_decoded(),
-                    Err(e) => {
-                        // A damaged end of a file: as if it ended there.
-                        log::warn!("decoding {}: {}", open.path.display(), mf::describe(&e));
-                        self.track_decoded();
+                } else {
+                    let Some(open) = self.decoding.as_mut() else {
+                        break;
+                    };
+                    match open.decoder.next() {
+                        Ok(Some(block)) => {
+                            open.decoded += (block.len() / channels) as u64;
+                            self.ring.extend(block);
+                        }
+                        Ok(None) => self.track_decoded(),
+                        Err(e) => {
+                            // A damaged end of a file: as if it ended there.
+                            log::warn!("decoding {}: {}", open.path.display(), mf::describe(&e));
+                            self.track_decoded();
+                        }
                     }
                 }
+                self.feed(channels, false)?;
             }
-            // The device applies the gain to what it plays, so a change is
-            // heard at once, not after the buffer written ahead.
-            let out = self.out.as_mut().expect("checked above");
-            out.set_gain(f32::from_bits(self.shared.gain.load(Relaxed)))?;
-            // Only `WRITE_AHEAD` of the device's buffer is kept filled.
-            let room = out.room()? as usize;
-            let held = (out.buffer_frames() as usize).saturating_sub(room);
-            let ahead = if self.holding {
-                out.buffer_frames() as usize
-            } else {
-                (self.format.0 as f32 * WRITE_AHEAD) as usize
-            };
-            let frames = room
-                .min(ahead.saturating_sub(held))
-                .min(self.ring.len() / channels);
-            if frames > 0 {
-                let block: Vec<f32> = self.ring.drain(..frames * channels).collect();
-                self.write_block(block)?;
-            }
-            if !self.started && self.written > 0 {
-                self.out.as_mut().expect("checked above").start()?;
-                self.started = true;
-            }
+            self.feed(channels, true)?;
         }
 
         let out = self.out.as_mut().expect("checked above");
@@ -992,7 +1351,20 @@ impl Player<'_> {
         }
         if let Some(seg) = self.segments.front() {
             let rate = u64::from(self.format.0.max(1));
-            let position = seg.origin_ms + heard.saturating_sub(seg.start) * 1000 / rate;
+            // A place sought and not heard yet is the position meanwhile.
+            let sought = self
+                .seek_asked
+                .as_ref()
+                .filter(|s| s.id == seg.id)
+                .map(|s| s.ms)
+                .or_else(|| {
+                    self.segments
+                        .iter()
+                        .rfind(|s| s.sought && s.start > heard)
+                        .map(|s| s.origin_ms)
+                });
+            let position = sought
+                .unwrap_or_else(|| seg.origin_ms + heard.saturating_sub(seg.start) * 1000 / rate);
             self.shared.position_ms.store(position, Relaxed);
             self.shared.duration_ms.store(seg.duration_ms, Relaxed);
             if self.heard_id != Some(seg.id) {
@@ -1087,6 +1459,7 @@ impl Player<'_> {
         fade_ms: u64,
         origin_ms: u64,
         keep_next: bool,
+        shape: Shape,
     ) -> Option<Open> {
         let channels = usize::from(self.format.1.max(1));
         let ring = (self.ring.len() / channels) as u64;
@@ -1105,8 +1478,13 @@ impl Player<'_> {
         // tracks.
         let left = open.total_frames().saturating_sub(open.decoded);
         let mut len = (fade_ms * u64::from(self.format.0) / 1000).min(left / 2);
-        if mixing || self.eos || self.format_change {
-            len = len.min(ring);
+        // Only the ring to fade from: the fade no longer than it.
+        let alone = mixing || self.eos || self.format_change || self.decoding.is_none();
+        match shape {
+            Shape::Cross if alone => len = len.min(ring),
+            // Its fade out whole, or none: cut short, it would be a click.
+            Shape::Dip if alone && len / 2 > ring => return Some(open),
+            _ => {}
         }
         if len == 0 {
             return Some(open);
@@ -1123,14 +1501,20 @@ impl Player<'_> {
             .map_or((0, 1.0), |s| (s.id, s.gain));
         self.segments.retain(|s| s.start < self.written);
         self.segments.push_back(Segment {
-            start: self.written,
+            // A dip's sound sought comes after its silent middle.
+            start: self.written
+                + match shape {
+                    Shape::Cross => 0,
+                    Shape::Dip => len / 2,
+                },
             id: open.id,
             path: open.path.clone(),
             origin_ms,
             duration_ms: (open.decoder.duration / (SECOND / 1000)) as u64,
             gain: open.gain,
+            sought: keep_next,
         });
-        log::debug!("audio: crossfade of {len} frames into {}", open.id);
+        log::debug!("audio: {shape:?} of {len} frames into {}", open.id);
         self.fade = Some(Fade {
             from,
             id,
@@ -1140,6 +1524,7 @@ impl Player<'_> {
             a: std::mem::take(&mut self.ring),
             b: VecDeque::new(),
             a_ended: false,
+            shape,
         });
         self.decoding = Some(open);
         if !keep_next {
@@ -1181,6 +1566,7 @@ impl Player<'_> {
             origin_ms: 0,
             duration_ms: (next.decoder.duration / (SECOND / 1000)) as u64,
             gain: next.gain,
+            sought: false,
         });
         log::debug!("audio: crossfade of {left} frames into {}", next.id);
         self.fade = Some(Fade {
@@ -1192,6 +1578,7 @@ impl Player<'_> {
             a: VecDeque::new(),
             b: VecDeque::new(),
             a_ended: false,
+            shape: Shape::Cross,
         });
         self.decoding = Some(next);
         true
@@ -1240,17 +1627,32 @@ impl Player<'_> {
         } else {
             1.0
         };
-        let n = (fade.b.len() / channels).min((fade.len - fade.done) as usize);
-        for i in 0..n {
-            let t = (fade.done + i as u64) as f32 / fade.len as f32;
-            let (ga, gb) = fade_gains(t);
+        let mut n = 0;
+        while fade.done + n < fade.len {
+            let at = fade.done + n;
+            let t = at as f32 / fade.len as f32;
+            let (ga, gb) = match fade.shape {
+                Shape::Cross => fade_gains(t),
+                Shape::Dip => dip_gains(t),
+            };
+            // A dip's sound sought starts after its silent middle: none of
+            // it is passed over.
+            let takes_b = fade.shape == Shape::Cross || 2 * at >= fade.len;
+            if takes_b && fade.b.len() < channels {
+                break;
+            }
             for _ in 0..channels {
                 let a = fade.a.pop_front().unwrap_or(0.0);
-                let b = fade.b.pop_front().unwrap_or(0.0);
+                let b = if takes_b {
+                    fade.b.pop_front().unwrap_or(0.0)
+                } else {
+                    0.0
+                };
                 self.ring.push_back(a * ga * ratio + b * gb);
             }
+            n += 1;
         }
-        fade.done += n as u64;
+        fade.done += n;
         if fade.done >= fade.len || n == 0 {
             // The rest of the next track's samples as they are.
             let rest: Vec<f32> = fade.b.drain(..).collect();
@@ -1310,6 +1712,7 @@ impl Player<'_> {
                     origin_ms: 0,
                     duration_ms: (next.decoder.duration / (SECOND / 1000)) as u64,
                     gain: next.gain,
+                    sought: false,
                 });
                 self.decoding = Some(next);
             }
@@ -2223,5 +2626,184 @@ mod tests {
         );
         drop(engine);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A seek without the crossfade: the place left (400 Hz) fades out,
+    /// then the one sought (600 Hz) fades in, never both at once and
+    /// without a bend; the position is the place sought at once, and no
+    /// `Started` comes for it. Silent (gain 0, the visualizations' tap).
+    #[test]
+    #[ignore = "needs a sound device; plays silently for about 3 s"]
+    fn engine_dips_into_a_seek() {
+        let dir = std::env::temp_dir().join(format!("metalamp_dip_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.wav");
+        // Whole periods in 10 ms, so neither leaks into the other's measure.
+        tones_wav(&a, 20, |s| if s < 10 { 400.0 } else { 600.0 });
+        let engine = Engine::start(
+            egui::Context::default(),
+            String::new(),
+            dsp::DspSettings::default(),
+        );
+        engine.set_gain(0.0);
+        engine.send(Cmd::SeekFade(0));
+        engine.send(Cmd::Play {
+            id: 1,
+            path: a,
+            gain: 1.0,
+            fade_ms: 0,
+        });
+        std::thread::sleep(Duration::from_millis(1500));
+        let first = engine.poll();
+        assert!(
+            matches!(first.as_slice(), [Event::Started { id: 1 }]),
+            "{first:?}"
+        );
+        engine.send(Cmd::Seek(15_000));
+        std::thread::sleep(Duration::from_millis(20));
+        let position = engine.position_ms();
+        assert!((15_000..15_050).contains(&position), "{position}");
+        std::thread::sleep(Duration::from_millis(600));
+        let during = engine.poll();
+        assert!(during.is_empty(), "{during:?}");
+        let mut x = Vec::new();
+        engine.heard_samples(48_000, &mut x).expect("heard");
+        drop(engine);
+        std::fs::remove_dir_all(&dir).unwrap();
+        let bends: Vec<usize> = (2..x.len())
+            .filter(|&n| (x[n] - 2.0 * x[n - 1] + x[n - 2]).abs() > 0.02)
+            .collect();
+        assert!(
+            bends.is_empty(),
+            "bends at {:?}",
+            &bends[..bends.len().min(10)]
+        );
+        // Each 10 ms: how much of each tone.
+        let step = 480;
+        let levels: Vec<(f32, f32)> = x
+            .chunks_exact(step)
+            .map(|c| (amplitude(c, 48_000, 400.0), amplitude(c, 48_000, 600.0)))
+            .collect();
+        let last_a = levels
+            .iter()
+            .rposition(|l| l.0 > 0.05)
+            .expect("400 Hz heard");
+        let first_b = levels
+            .iter()
+            .position(|l| l.1 > 0.05)
+            .expect("600 Hz heard");
+        assert!(last_a < first_b, "{levels:.2?}");
+        let end = levels.last().unwrap();
+        assert!(end.0 < 0.01 && end.1 > 0.45, "{end:?}");
+    }
+
+    /// How soon a seek is heard: from the command to the place sought
+    /// (600 Hz) at half its level in what the device's clock says is
+    /// heard, with the crossfade off and on. Silent (gain 0). Measured:
+    /// about 160 ms off, 220 on (265 and 305 when the device was kept
+    /// written 150 ms ahead and a seek without the crossfade waited for it
+    /// to be heard and started it again).
+    #[test]
+    #[ignore = "needs a sound device; plays silently for about 8 s"]
+    fn engine_seek_latency() {
+        let dir = std::env::temp_dir().join(format!("metalamp_lat_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.wav");
+        tones_wav(&a, 30, |s| if s < 15 { 400.0 } else { 600.0 });
+        let engine = Engine::start(
+            egui::Context::default(),
+            String::new(),
+            dsp::DspSettings::default(),
+        );
+        engine.set_gain(0.0);
+        for fade in [0, 300, 0, 300] {
+            engine.send(Cmd::SeekFade(fade));
+            engine.send(Cmd::Play {
+                id: 1,
+                path: a.clone(),
+                gain: 1.0,
+                fade_ms: 0,
+            });
+            std::thread::sleep(Duration::from_millis(1200));
+            let _ = engine.poll();
+            let asked = std::time::Instant::now();
+            engine.send(Cmd::Seek(20_000));
+            let mut x = Vec::new();
+            let mut at = None;
+            while asked.elapsed() < Duration::from_millis(1500) {
+                // The last 10 ms heard (480 frames: whole periods of both).
+                if engine.heard_samples(480, &mut x).is_some()
+                    && x.len() == 480
+                    && amplitude(&x, 48_000, 600.0) > 0.5 * 0.5
+                {
+                    at = Some(asked.elapsed());
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            println!("crossfade {fade} ms: heard after {at:?}");
+            let at = at.expect("the place sought heard");
+            assert!(at < Duration::from_millis(250 + fade), "{at:?}");
+            engine.send(Cmd::Stop);
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        drop(engine);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Real files of `METALAMP_MUSIC` (16 at random, likely not in
+    /// Windows' cache), each played with the next preloaded, sought to its
+    /// middle, then the next one played: the device never runs dry, the
+    /// thread's turns coming while files open and are read from the disk.
+    /// Silent. Measured on a hard disk: at least 30 ms of the 60 held; 0
+    /// while the first read after a seek (up to 90 ms) was on the audio
+    /// thread, 40 of 150 when files were opened there (50 ms for one).
+    #[test]
+    #[ignore = "needs METALAMP_MUSIC and a sound device; plays silently for about a minute"]
+    fn engine_keeps_the_device_written() {
+        let root = PathBuf::from(std::env::var("METALAMP_MUSIC").expect("METALAMP_MUSIC"));
+        let mut files: Vec<PathBuf> = walkdir::WalkDir::new(&root)
+            .into_iter()
+            .filter_map(Result::ok)
+            .map(|e| e.into_path())
+            .filter(|p| crate::filetypes::is_audio(p))
+            .collect();
+        assert!(files.len() >= 16, "{} files", files.len());
+        let mut seed = u64::from(std::process::id()) | 1;
+        let mut pick = Vec::new();
+        for _ in 0..16 {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            pick.push(files.swap_remove((seed % files.len() as u64) as usize));
+        }
+        let engine = Engine::start(
+            egui::Context::default(),
+            String::new(),
+            dsp::DspSettings::default(),
+        );
+        engine.set_gain(0.0);
+        let mut worst = u64::MAX;
+        for (i, f) in pick.iter().enumerate() {
+            engine.shared.least_held_ms.store(u64::MAX, Relaxed);
+            engine.send(Cmd::Play {
+                id: i as u64 * 2,
+                path: f.clone(),
+                gain: 1.0,
+                fade_ms: 0,
+            });
+            std::thread::sleep(Duration::from_millis(300));
+            let next = &pick[(i + 1) % pick.len()];
+            engine.send(Cmd::Preload(Some((i as u64 * 2 + 1, next.clone(), 1.0, 0))));
+            std::thread::sleep(Duration::from_millis(1500));
+            engine.send(Cmd::Seek(engine.duration_ms() / 2));
+            std::thread::sleep(Duration::from_millis(1500));
+            let _ = engine.poll();
+            let held = engine.shared.least_held_ms.load(Relaxed);
+            worst = worst.min(held);
+            println!("{held:>4} ms held  {}", f.display());
+        }
+        println!("the least held: {worst} ms");
+        assert!(worst >= 10, "{worst} ms");
     }
 }

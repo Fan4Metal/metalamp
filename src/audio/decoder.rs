@@ -239,6 +239,17 @@ impl Decoder {
         Ok(())
     }
 
+    /// The next block read ahead, to be given by `next`: the first read
+    /// after a seek takes Media Foundation 10-90 ms (measured, the file in
+    /// Windows' cache), done this way on another thread than the one
+    /// playing.
+    pub fn prime(&mut self) -> Result<()> {
+        if self.pending.is_none() {
+            self.pending = self.next_block()?;
+        }
+        Ok(())
+    }
+
     /// The next block of samples; `None` at the end.
     pub fn next(&mut self) -> Result<Option<Vec<f32>>> {
         let block = self.next_block()?;
