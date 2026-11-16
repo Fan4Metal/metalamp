@@ -1,19 +1,36 @@
 //! The enhancer: what consumer "sound improvers" (DFX, SRS WOW,
 //! AudioBurst PowerFX) do, in four amounts of 0 to 10, each 0 doing
-//! nothing.
+//! nothing. In the order they run:
 //!
-//! - **Bass**: a low shelf under 100 Hz, and harmonics of the band under
-//!   120 Hz (a soft saturator fed the band at a levelled gain, its
-//!   output kept between 90 and 500 Hz), which small speakers that
-//!   cannot play the fundamental still make heard as bass (the missing
-//!   fundamental).
-//! - **Clarity**: harmonics of everything over 4 kHz (a soft saturator,
-//!   its output over 6 kHz) and a high shelf over 9 kHz: the air an
-//!   MP3's low-pass took away.
-//! - **Width**: the side signal over 250 Hz raised (the bass stays in
-//!   the middle), up to twice.
 //! - **Warmth**: a blend with a soft saturation of the whole, which
-//!   rounds the peaks as tape does.
+//!   rounds the peaks as tape does; first, so the bass raised after it
+//!   does not drive the rest into it.
+//! - **Bass**: a low shelf under 100 Hz, and harmonics of the band under
+//!   120 Hz, which small speakers that cannot play the fundamental still
+//!   make heard as bass (the missing fundamental). The harmonics carry no
+//!   fundamental of their own (a saturator's output is mostly its input,
+//!   which only added more bass): the band rectified gives the even ones
+//!   (2f, 4f, …), the third Chebyshev polynomial of the band levelled by
+//!   its envelope the third (3f); both are needed, the even ones alone
+//!   are heard an octave up. Kept between 90 and 500 Hz, and put into the
+//!   front pair only.
+//! - **Clarity**: the second harmonics (and sum tones) of the band from
+//!   3 to 8 kHz, squared, so nothing of the band itself is added (a
+//!   saturator's near-linear output, high-passed twice, cancelled the
+//!   music around 5 kHz), its output over 6 kHz, and a high shelf over
+//!   9 kHz: the air an MP3's low-pass took away. The band's upper edge
+//!   keeps the doubled tones under the Nyquist frequency, so nothing
+//!   folds back as an inharmonic whistle; their level follows the
+//!   envelope of all that is over 3 kHz, so a tone leaking in from over
+//!   the band stays as weak as it came in.
+//! - **Width**: the side signal over 250 Hz raised (the bass stays in
+//!   the middle), up to twice; stereo only.
+//!
+//! The amounts slide to new values over `SLIDE_S`, and a stage that
+//! starts again starts with empty filters (their state is of the sound
+//! long before), so moving a slider or turning a stage on does not click.
+
+use std::f32::consts::FRAC_1_SQRT_2;
 
 use super::biquad::{Biquad, Coeffs};
 
@@ -30,150 +47,280 @@ impl Amounts {
     pub fn is_zero(&self) -> bool {
         self.bass <= 0.0 && self.clarity <= 0.0 && self.width <= 0.0 && self.warmth <= 0.0
     }
+
+    fn clamped(self) -> Amounts {
+        Amounts {
+            bass: self.bass.clamp(0.0, 1.0),
+            clarity: self.clarity.clamp(0.0, 1.0),
+            width: self.width.clamp(0.0, 1.0),
+            warmth: self.warmth.clamp(0.0, 1.0),
+        }
+    }
+}
+
+/// How long a change of the amounts takes, seconds.
+const SLIDE_S: f32 = 0.05;
+/// The frames between two steps of the slide (and of the shelves'
+/// coefficients).
+const SUB: usize = 32;
+
+/// The low shelf's gain at a full bass, dB.
+const BASS_SHELF_DB: f32 = 5.0;
+/// The third harmonic's share against the rectified band's.
+const BASS_THIRD: f32 = 0.3;
+/// The harmonics' gain at a full bass.
+const BASS_MIX: f32 = 1.0;
+/// The bass envelope's fall, seconds.
+const BASS_RELEASE_S: f32 = 0.2;
+
+/// The high shelf's gain at a full clarity, dB.
+const AIR_SHELF_DB: f32 = 2.5;
+/// The band doubled: from here …
+const AIR_FROM: f32 = 3000.0;
+/// … to here (or less at low rates, see `Air::new`).
+const AIR_TO: f32 = 8000.0;
+/// The harmonics kept from here up.
+const AIR_OUT: f32 = 6000.0;
+/// The harmonics' gain at a full clarity.
+const AIR_MIX: f32 = 1.0;
+/// The envelope over `AIR_FROM`: its fall, seconds.
+const AIR_RELEASE_S: f32 = 0.1;
+
+/// Warmth's saturation drive.
+const WARMTH_DRIVE: f32 = 2.5;
+
+fn release(rate: u32, seconds: f32) -> f32 {
+    1.0 - (-1.0 / (rate as f32 * seconds)).exp()
+}
+
+/// An envelope up at once and down over its release.
+fn follow(env: f32, mag: f32, release: f32) -> f32 {
+    if mag > env {
+        mag
+    } else {
+        env + (mag - env) * release
+    }
+}
+
+struct Bass {
+    /// The band under 120 Hz of the front pair's mean.
+    band: Biquad,
+    env: f32,
+    release: f32,
+    harm_hp: Biquad,
+    harm_lp: Biquad,
+    shelf: Vec<Biquad>,
+}
+
+impl Bass {
+    fn new(rate: u32, channels: usize) -> Bass {
+        Bass {
+            band: Biquad::new(Coeffs::low_pass(rate, 120.0, FRAC_1_SQRT_2)),
+            env: 0.0,
+            release: release(rate, BASS_RELEASE_S),
+            harm_hp: Biquad::new(Coeffs::high_pass(rate, 90.0, FRAC_1_SQRT_2)),
+            harm_lp: Biquad::new(Coeffs::low_pass(rate, 500.0, FRAC_1_SQRT_2)),
+            shelf: vec![Biquad::default(); channels],
+        }
+    }
+
+    fn set_shelf(&mut self, rate: u32, amount: f32) {
+        let c = Coeffs::low_shelf(rate, 100.0, BASS_SHELF_DB * amount);
+        for f in &mut self.shelf {
+            f.set(c);
+        }
+    }
+
+    /// The harmonics of `mono`'s bass.
+    fn harmonics(&mut self, mono: f32) -> f32 {
+        let low = self.band.run(mono);
+        self.env = follow(self.env, low.abs(), self.release);
+        // |n| <= 1, since the envelope rises at once.
+        let n = low / self.env.max(1e-6);
+        // The rectified band: 2f, 4f, … (its mean goes in the high-pass).
+        let even = low.abs();
+        // T3(n) = 4n³ - 3n is cos 3θ for n = cos θ: the third harmonic
+        // alone of a tone at the envelope's level.
+        let third = BASS_THIRD * low * (4.0 * n * n - 3.0);
+        self.harm_lp.run(self.harm_hp.run(even + third))
+    }
+}
+
+struct Air {
+    /// Everything over `AIR_FROM`, whose envelope levels the band.
+    hp: Biquad,
+    /// Three sections: the band's upper edge steep enough that little
+    /// over it is doubled past the Nyquist frequency.
+    lp: [Biquad; 3],
+    env: f32,
+    release: f32,
+    out: [Biquad; 2],
+    shelf: Biquad,
+}
+
+impl Air {
+    fn new(rate: u32) -> Air {
+        // Doubled, the band's top stays under the Nyquist frequency.
+        let top = AIR_TO.min(rate as f32 * 0.23);
+        let lp = Biquad::new(Coeffs::low_pass(rate, top, FRAC_1_SQRT_2));
+        let out = Biquad::new(Coeffs::high_pass(rate, AIR_OUT, FRAC_1_SQRT_2));
+        Air {
+            hp: Biquad::new(Coeffs::high_pass(rate, AIR_FROM, FRAC_1_SQRT_2)),
+            lp: [lp; 3],
+            env: 0.0,
+            release: release(rate, AIR_RELEASE_S),
+            out: [out; 2],
+            shelf: Biquad::default(),
+        }
+    }
+
+    fn run(&mut self, x: f32, mix: f32) -> f32 {
+        let wide = self.hp.run(x);
+        self.env = follow(self.env, wide.abs(), self.release);
+        let band = self.lp.iter_mut().fold(wide, |s, f| f.run(s));
+        // band² / env: the band's level, not its square, so a quiet
+        // passage gets its air too; the ratio kept within 2 for a band
+        // ringing over what it came from.
+        let ratio = (band / self.env.max(1e-6)).clamp(-2.0, 2.0);
+        let doubled = band * ratio;
+        let air = self.out.iter_mut().fold(doubled, |s, f| f.run(s));
+        self.shelf.run(x) + mix * AIR_MIX * air
+    }
 }
 
 pub struct Enhancer {
     rate: u32,
     channels: usize,
-    a: Amounts,
-    // Bass: the band (mono), its envelope, the harmonics' band, the shelf
-    // per channel.
-    bass_band: Biquad,
-    bass_env: f32,
-    env_release: f32,
-    harm_hp: Biquad,
-    harm_lp: Biquad,
-    bass_shelf: Vec<Biquad>,
-    // Clarity, per channel.
-    air_hp: Vec<Biquad>,
-    air_out: Vec<Biquad>,
-    air_shelf: Vec<Biquad>,
-    // Width: the side's high-pass.
+    /// The amounts asked for, and those applied now, sliding to them.
+    target: Amounts,
+    now: Amounts,
+    slide: f32,
+    /// The amounts the shelves were made for.
+    shelves_for: (f32, f32),
+    bass: Bass,
+    air: Vec<Air>,
     side_hp: Biquad,
 }
 
-/// The saturator's drive for the bass harmonics and the air.
-const BASS_DRIVE: f32 = 2.5;
-const AIR_DRIVE: f32 = 3.0;
-/// Warmth's saturation drive.
-const WARMTH_DRIVE: f32 = 2.5;
-
 impl Enhancer {
     pub fn new(rate: u32, channels: usize, a: Amounts) -> Enhancer {
-        let per = |c: Coeffs| vec![Biquad::new(c); channels];
+        let a = a.clamped();
         let mut e = Enhancer {
             rate,
             channels,
-            a: Amounts::default(),
-            bass_band: Biquad::new(Coeffs::low_pass(
-                rate,
-                120.0,
-                std::f32::consts::FRAC_1_SQRT_2,
-            )),
-            bass_env: 0.0,
-            env_release: 1.0 - (-1.0 / (rate as f32 * 0.2)).exp(),
-            harm_hp: Biquad::new(Coeffs::high_pass(
-                rate,
-                90.0,
-                std::f32::consts::FRAC_1_SQRT_2,
-            )),
-            harm_lp: Biquad::new(Coeffs::low_pass(
-                rate,
-                500.0,
-                std::f32::consts::FRAC_1_SQRT_2,
-            )),
-            bass_shelf: per(Coeffs::default()),
-            air_hp: per(Coeffs::high_pass(
-                rate,
-                4000.0,
-                std::f32::consts::FRAC_1_SQRT_2,
-            )),
-            air_out: per(Coeffs::high_pass(
-                rate,
-                6000.0,
-                std::f32::consts::FRAC_1_SQRT_2,
-            )),
-            air_shelf: per(Coeffs::default()),
-            side_hp: Biquad::new(Coeffs::high_pass(
-                rate,
-                250.0,
-                std::f32::consts::FRAC_1_SQRT_2,
-            )),
+            target: a,
+            now: a,
+            slide: 1.0 - (-(SUB as f32) / (rate as f32 * SLIDE_S)).exp(),
+            shelves_for: (-1.0, -1.0),
+            bass: Bass::new(rate, channels),
+            air: (0..channels).map(|_| Air::new(rate)).collect(),
+            side_hp: Biquad::new(Coeffs::high_pass(rate, 250.0, FRAC_1_SQRT_2)),
         };
-        e.configure(a);
+        e.set_shelves();
         e
     }
 
-    /// New amounts; the filters' state is kept.
+    /// New amounts, slid to; the filters' state is kept.
     pub fn configure(&mut self, a: Amounts) {
-        self.a = Amounts {
-            bass: a.bass.clamp(0.0, 1.0),
-            clarity: a.clarity.clamp(0.0, 1.0),
-            width: a.width.clamp(0.0, 1.0),
-            warmth: a.warmth.clamp(0.0, 1.0),
+        self.target = a.clamped();
+    }
+
+    /// Nothing to do, nor anything sliding away.
+    fn idle(&self) -> bool {
+        self.now.is_zero() && self.target.is_zero()
+    }
+
+    fn set_shelves(&mut self) {
+        let (bass, clarity) = (self.now.bass, self.now.clarity);
+        let (was_bass, was_clarity) = self.shelves_for;
+        if (bass - was_bass).abs() > 1e-4 {
+            self.bass.set_shelf(self.rate, bass);
+        }
+        if (clarity - was_clarity).abs() > 1e-4 {
+            let c = Coeffs::high_shelf(self.rate, 9000.0, AIR_SHELF_DB * clarity);
+            for air in &mut self.air {
+                air.shelf.set(c);
+            }
+        }
+        self.shelves_for = (bass, clarity);
+    }
+
+    /// One step of the slide; a stage starting from 0 starts with empty
+    /// filters.
+    fn step(&mut self) {
+        let k = self.slide;
+        let slid = |now: f32, to: f32| {
+            if (to - now).abs() < 1e-3 {
+                to
+            } else {
+                now + (to - now) * k
+            }
         };
-        let shelf = Coeffs::low_shelf(self.rate, 100.0, 5.0 * self.a.bass);
-        for f in &mut self.bass_shelf {
-            f.set(shelf);
+        let (was, to) = (self.now, self.target);
+        self.now = Amounts {
+            bass: slid(was.bass, to.bass),
+            clarity: slid(was.clarity, to.clarity),
+            width: slid(was.width, to.width),
+            warmth: slid(was.warmth, to.warmth),
+        };
+        if was.bass <= 0.0 && self.now.bass > 0.0 {
+            self.bass = Bass::new(self.rate, self.channels);
+            self.shelves_for.0 = -1.0;
         }
-        let air = Coeffs::high_shelf(self.rate, 9000.0, 2.5 * self.a.clarity);
-        for f in &mut self.air_shelf {
-            f.set(air);
+        if was.clarity <= 0.0 && self.now.clarity > 0.0 {
+            self.air = (0..self.channels).map(|_| Air::new(self.rate)).collect();
+            self.shelves_for.1 = -1.0;
         }
+        if was.width <= 0.0 && self.now.width > 0.0 {
+            self.side_hp = Biquad::new(Coeffs::high_pass(self.rate, 250.0, FRAC_1_SQRT_2));
+        }
+        self.set_shelves();
     }
 
     pub fn process(&mut self, samples: &mut [f32]) {
-        if self.a.is_zero() {
+        if self.idle() {
             return;
         }
         let n = self.channels;
-        let a = self.a;
-        for frame in samples.chunks_exact_mut(n) {
-            // Bass.
-            if a.bass > 0.0 {
-                let mono = frame.iter().sum::<f32>() / n as f32;
-                let low = self.bass_band.run(mono);
-                // The envelope: up at once, down over 200 ms, so the
-                // saturator sees the same level whatever the music's.
-                let mag = low.abs();
-                self.bass_env = if mag > self.bass_env {
-                    mag
-                } else {
-                    self.bass_env + (mag - self.bass_env) * self.env_release
-                };
-                let norm = low / self.bass_env.max(1e-3);
-                let sat = (BASS_DRIVE * norm).tanh() * self.bass_env;
-                let harm = self.harm_lp.run(self.harm_hp.run(sat));
-                for (ch, x) in frame.iter_mut().enumerate() {
-                    *x = self.bass_shelf[ch].run(*x) + 0.7 * a.bass * harm;
+        // The front pair (or the one channel) gets the bass harmonics.
+        let front = n.min(2);
+        // Unity at -12 dBFS, so the music's level stays while the peaks
+        // round off.
+        let warmth_gain = 0.25 * WARMTH_DRIVE / (0.25 * WARMTH_DRIVE).tanh() / WARMTH_DRIVE;
+        for block in samples.chunks_mut(n * SUB) {
+            if self.now != self.target {
+                self.step();
+            }
+            let a = self.now;
+            for frame in block.chunks_exact_mut(n) {
+                if a.warmth > 0.0 {
+                    for x in frame.iter_mut() {
+                        let sat = (WARMTH_DRIVE * *x).tanh() * warmth_gain;
+                        *x += a.warmth * (sat - *x);
+                    }
                 }
-            }
-            // Clarity.
-            if a.clarity > 0.0 {
-                for (ch, x) in frame.iter_mut().enumerate() {
-                    let hp = self.air_hp[ch].run(*x);
-                    let sat = (AIR_DRIVE * hp).tanh() / AIR_DRIVE;
-                    let air = self.air_out[ch].run(sat);
-                    *x = self.air_shelf[ch].run(*x) + 1.2 * a.clarity * air;
+                if a.bass > 0.0 {
+                    let mono = frame[..front].iter().sum::<f32>() / front as f32;
+                    let harm = BASS_MIX * a.bass * self.bass.harmonics(mono);
+                    for (ch, x) in frame.iter_mut().enumerate() {
+                        *x = self.bass.shelf[ch].run(*x);
+                        if ch < front {
+                            *x += harm;
+                        }
+                    }
                 }
-            }
-            // Width.
-            if a.width > 0.0 && n == 2 {
-                let (l, r) = (frame[0], frame[1]);
-                let mid = (l + r) / 2.0;
-                let side = (l - r) / 2.0;
-                let side = side + a.width * self.side_hp.run(side);
-                frame[0] = mid + side;
-                frame[1] = mid - side;
-            }
-            // Warmth.
-            if a.warmth > 0.0 {
-                for x in frame.iter_mut() {
-                    let sat = (WARMTH_DRIVE * *x).tanh() / WARMTH_DRIVE;
-                    // Unity at -12 dBFS, so the music's level stays while
-                    // the peaks round off.
-                    let sat = sat * (0.25 * WARMTH_DRIVE / (0.25 * WARMTH_DRIVE).tanh());
-                    *x += a.warmth * (sat - *x);
+                if a.clarity > 0.0 {
+                    for (x, air) in frame.iter_mut().zip(&mut self.air) {
+                        *x = air.run(*x, a.clarity);
+                    }
+                }
+                if a.width > 0.0 && n == 2 {
+                    let (l, r) = (frame[0], frame[1]);
+                    let mid = (l + r) / 2.0;
+                    let side = (l - r) / 2.0;
+                    let side = side + a.width * self.side_hp.run(side);
+                    frame[0] = mid + side;
+                    frame[1] = mid - side;
                 }
             }
         }
@@ -199,6 +346,38 @@ mod tests {
             as f32
     }
 
+    /// The amplitude of `f` in the left channel of the last second of
+    /// interleaved stereo `s` (a whole number of its periods, `f` in Hz).
+    fn level(s: &[f32], rate: u32, f: f32) -> f32 {
+        let left: Vec<f32> = s[s.len() - 2 * rate as usize..]
+            .iter()
+            .step_by(2)
+            .copied()
+            .collect();
+        let (mut c, mut si) = (0f64, 0f64);
+        for (i, &x) in left.iter().enumerate() {
+            let w = 2.0 * std::f64::consts::PI * f64::from(f) * i as f64 / f64::from(rate);
+            c += f64::from(x) * w.cos();
+            si += f64::from(x) * w.sin();
+        }
+        (2.0 * (c * c + si * si).sqrt() / left.len() as f64) as f32
+    }
+
+    /// `s` through one shelf per channel (the enhancer's shelves alone).
+    fn shelved(s: &[f32], c: Coeffs) -> Vec<f32> {
+        let mut f = [Biquad::new(c), Biquad::new(c)];
+        s.iter()
+            .enumerate()
+            .map(|(i, &x)| f[i % 2].run(x))
+            .collect()
+    }
+
+    fn only(f: impl FnOnce(&mut Amounts)) -> Amounts {
+        let mut a = Amounts::default();
+        f(&mut a);
+        a
+    }
+
     #[test]
     fn zero_amounts_change_nothing() {
         let rate = 48000;
@@ -210,50 +389,55 @@ mod tests {
     }
 
     #[test]
-    fn bass_adds_harmonics_above_the_fundamental() {
+    fn bass_adds_the_second_and_third_harmonics_but_no_fundamental() {
         let rate = 48000;
-        let mut e = Enhancer::new(
-            rate,
-            2,
-            Amounts {
-                bass: 1.0,
-                ..Default::default()
-            },
-        );
-        // A 60 Hz tone: after the enhancer there is energy between 90 and
-        // 500 Hz that was not there (its harmonics), measured with a
-        // band-pass.
-        let mut s = sine(rate, 60.0, 0.3, 2.0);
+        let mut e = Enhancer::new(rate, 2, only(|a| a.bass = 1.0));
+        let original = sine(rate, 60.0, 0.3, 2.0);
+        let mut s = original.clone();
         e.process(&mut s);
-        let mut hp = Biquad::new(Coeffs::high_pass(
-            rate,
-            100.0,
-            std::f32::consts::FRAC_1_SQRT_2,
-        ));
-        let mut lp = Biquad::new(Coeffs::low_pass(
-            rate,
-            500.0,
-            std::f32::consts::FRAC_1_SQRT_2,
-        ));
-        let band: Vec<f32> = s[rate as usize..]
-            .iter()
-            .step_by(2)
-            .map(|&x| lp.run(hp.run(x)))
-            .collect();
-        assert!(rms(&band) > 0.02, "{}", rms(&band));
+        let shelf = shelved(&original, Coeffs::low_shelf(rate, 100.0, BASS_SHELF_DB));
+        // The fundamental is the shelf's alone.
+        let (got, want) = (level(&s, rate, 60.0), level(&shelf, rate, 60.0));
+        assert!((got / want - 1.0).abs() < 0.03, "{got} against {want}");
+        // 2f and 3f, which the shelf alone does not make.
+        for f in [120.0, 180.0] {
+            assert!(level(&shelf, rate, f) < 1e-3);
+            assert!(level(&s, rate, f) > 0.05, "{f} Hz: {}", level(&s, rate, f));
+        }
+    }
+
+    #[test]
+    fn clarity_adds_harmonics_without_cutting_the_band() {
+        let rate = 48000;
+        let mut e = Enhancer::new(rate, 2, only(|a| a.clarity = 1.0));
+        let original = sine(rate, 5000.0, 0.3, 2.0);
+        let mut s = original.clone();
+        e.process(&mut s);
+        let shelf = shelved(&original, Coeffs::high_shelf(rate, 9000.0, AIR_SHELF_DB));
+        let (got, want) = (level(&s, rate, 5000.0), level(&shelf, rate, 5000.0));
+        assert!((got / want - 1.0).abs() < 0.02, "{got} against {want}");
+        assert!(level(&shelf, rate, 10000.0) < 1e-3);
+        let second = level(&s, rate, 10000.0);
+        assert!(second > 0.02, "{second}");
+    }
+
+    #[test]
+    fn clarity_folds_nothing_back() {
+        // 12 kHz at 44.1 kHz: its second harmonic, 24 kHz, would come back
+        // at 20.1 kHz.
+        let rate = 44100;
+        let mut e = Enhancer::new(rate, 2, only(|a| a.clarity = 1.0));
+        let mut s = sine(rate, 12000.0, 0.5, 2.0);
+        e.process(&mut s);
+        let folded = level(&s, rate, 20100.0);
+        // Under -48 dB of the tone.
+        assert!(folded < 0.5 * 0.004, "{folded}");
     }
 
     #[test]
     fn width_widens_and_keeps_the_middle() {
         let rate = 48000;
-        let mut e = Enhancer::new(
-            rate,
-            2,
-            Amounts {
-                width: 1.0,
-                ..Default::default()
-            },
-        );
+        let mut e = Enhancer::new(rate, 2, only(|a| a.width = 1.0));
         // Left only at 1 kHz: side and mid equal; the side doubles.
         let mut s: Vec<f32> = (0..rate as usize)
             .flat_map(|i| {
@@ -278,14 +462,7 @@ mod tests {
     #[test]
     fn warmth_rounds_peaks_and_keeps_quiet_levels() {
         let rate = 48000;
-        let mut e = Enhancer::new(
-            rate,
-            2,
-            Amounts {
-                warmth: 1.0,
-                ..Default::default()
-            },
-        );
+        let mut e = Enhancer::new(rate, 2, only(|a| a.warmth = 1.0));
         let mut loud = sine(rate, 440.0, 1.0, 0.5);
         e.process(&mut loud);
         let peak = loud.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
@@ -296,5 +473,78 @@ mod tests {
         // gain is a little over 1).
         let r = rms(&quiet[rate as usize / 2..]);
         assert!((r / (0.1 / 2f32.sqrt()) - 1.0).abs() < 0.15, "{r}");
+    }
+
+    #[test]
+    fn a_stage_turned_on_slides_in() {
+        // A 60 Hz tone the bass's shelf raises by about 4 dB: turned on at
+        // once, the step in level would be a click of about 0.3.
+        let rate = 48000;
+        let mut e = Enhancer::new(rate, 2, Amounts::default());
+        let mut s = sine(rate, 60.0, 0.5, 2.0);
+        let half = s.len() / 2;
+        let (before, after) = s.split_at_mut(half);
+        e.process(before);
+        e.configure(only(|a| a.bass = 1.0));
+        e.process(after);
+        let jump = s
+            .windows(3)
+            .step_by(2)
+            .map(|w| (w[2] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        // The tone's own steps are under 0.01 even at its end level.
+        assert!(jump < 0.02, "{jump}");
+        // And it got there (the last second, the slide's 50 ms in it).
+        let raised = level(&s, rate, 60.0);
+        assert!(raised > 0.7, "{raised}");
+    }
+
+    #[test]
+    fn surround_gets_the_bass_harmonics_in_the_front_pair_only() {
+        let rate = 48000;
+        let all = Amounts {
+            bass: 1.0,
+            clarity: 1.0,
+            width: 1.0,
+            warmth: 1.0,
+        };
+        let mut e = Enhancer::new(rate, 6, all);
+        let mut s: Vec<f32> = (0..rate as usize)
+            .flat_map(|i| {
+                let x = 0.5 * (2.0 * PI * 60.0 * i as f32 / rate as f32).sin();
+                [x, x, 0.0, 0.0, 0.0, 0.0]
+            })
+            .collect();
+        e.process(&mut s);
+        assert!(s.chunks(6).all(|f| f[2..].iter().all(|&x| x == 0.0)));
+        assert!(rms(&s) > 0.1);
+    }
+
+    #[test]
+    fn extremes_stay_finite_and_bounded() {
+        let rate = 44100;
+        let all = Amounts {
+            bass: 1.0,
+            clarity: 1.0,
+            width: 1.0,
+            warmth: 1.0,
+        };
+        let mut e = Enhancer::new(rate, 2, all);
+        // Full-scale noise, then silence, then a full-scale square.
+        let mut seed = 0x2545_f491u32;
+        let mut s: Vec<f32> = (0..rate as usize * 2)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                seed as f32 / u32::MAX as f32 * 2.0 - 1.0
+            })
+            .collect();
+        s.extend(std::iter::repeat_n(0.0, rate as usize));
+        s.extend((0..rate as usize * 2).map(|i| if (i / 2 / 50) % 2 == 0 { 1.0 } else { -1.0 }));
+        e.process(&mut s);
+        let peak = s.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
+        assert!(s.iter().all(|x| x.is_finite()));
+        assert!(peak < 4.0, "{peak}");
     }
 }

@@ -78,7 +78,12 @@ impl DspSettings {
         self.normalize || self.eq || self.enhancer
     }
 
+    /// The enhancer's amounts, all 0 while it is off (so turning it off
+    /// slides it out, and on again in, with empty filters).
     fn amounts(&self) -> enhancer::Amounts {
+        if !self.enhancer {
+            return enhancer::Amounts::default();
+        }
         let f = |v: u8| f32::from(v.min(10)) / 10.0;
         enhancer::Amounts {
             bass: f(self.bass),
@@ -205,9 +210,9 @@ impl Chain {
         if s.eq {
             self.eq.process(samples);
         }
-        if s.enhancer {
-            self.enhancer.process(samples);
-        }
+        // Also after it was turned off, while its amounts slide out (it
+        // returns at once when idle).
+        self.enhancer.process(samples);
         self.channels_stage.process(samples, s.balance, s.mono);
         if s.limiter {
             self.limiter.process(samples);
