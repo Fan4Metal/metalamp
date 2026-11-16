@@ -18,7 +18,10 @@
 //!   the band levelled by its envelope the third (3f), with some of the
 //!   fundamental in phase on the peaks, which the shelf's bass keeps; both
 //!   are needed, the even ones alone are heard an octave up. Kept between
-//!   90 and 500 Hz, and put into the front pair only.
+//!   90 and 500 Hz, and put into the front pair only. What the bass adds
+//!   gives way to the limiter's ceiling (`Bass::give`), so a loud record
+//!   gets less of it rather than the limiter turning the voice down with
+//!   each beat.
 //! - **Clarity**: the second harmonics (and sum tones) of the band from
 //!   4.5 to 8 kHz, squared, so nothing of the band itself is added (a
 //!   saturator's near-linear output, high-passed twice, cancelled the
@@ -81,6 +84,8 @@ const BASS_THIRD: f32 = 0.3;
 const BASS_MIX: f32 = 1.0;
 /// The bass envelope's fall, seconds.
 const BASS_RELEASE_S: f32 = 0.2;
+/// The added bass, given way to the ceiling, comes back over this, seconds.
+const GIVE_RELEASE_S: f32 = 0.3;
 
 /// The high shelf's gain at a full clarity, dB.
 pub const AIR_SHELF_DB: f32 = 4.0;
@@ -134,6 +139,22 @@ struct Bass {
     harm_hp: Biquad,
     harm_lp: Biquad,
     shelf: Vec<Biquad>,
+    /// What the bass adds to each channel of the frame in hand.
+    added: Vec<f32>,
+    /// The share of it let through now (`give`): 1 while it fits under
+    /// the ceiling.
+    given: f32,
+    give_release: f32,
+}
+
+/// The share of `added` that keeps `dry + added` within `ceiling`: 1 when
+/// it fits, 0 when the dry sound alone is over it.
+fn fit(dry: f32, added: f32, ceiling: f32) -> f32 {
+    if (dry + added).abs() <= ceiling {
+        1.0
+    } else {
+        ((ceiling - dry.abs()) / added.abs().max(1e-9)).clamp(0.0, 1.0)
+    }
 }
 
 impl Bass {
@@ -145,7 +166,30 @@ impl Bass {
             harm_hp: Biquad::new(Coeffs::high_pass(rate, 90.0, FRAC_1_SQRT_2)),
             harm_lp: Biquad::new(Coeffs::low_pass(rate, 500.0, FRAC_1_SQRT_2)),
             shelf: vec![Biquad::default(); channels],
+            added: vec![0.0; channels],
+            given: 1.0,
+            give_release: release(rate, GIVE_RELEASE_S),
         }
+    }
+
+    /// The share of the added bass let through, following `fits` (what
+    /// this frame has room for): down at once, back up over
+    /// `GIVE_RELEASE_S`, so on a loud passage it settles and the bass added
+    /// is only less, not chopped. The limiter after the chain turns the
+    /// whole sound down for a peak, the voice with it: with a bass of 6 a
+    /// loud passage's peaks came to +3.8 dBFS and the voice's bands lost
+    /// 0.7 to 1 dB on average (far more at each beat), heard as the voice
+    /// going quiet when the enhancer was turned on. So the bass gives way
+    /// first; what the limiter still takes is what the record's own peaks
+    /// ask for (measured: 0.2 dB with or without the bass). With 0.5 ms of
+    /// attack the peaks still passed (+1.1 dBFS, 0.4 dB taken).
+    fn give(&mut self, fits: f32) -> f32 {
+        if fits < self.given {
+            self.given = fits;
+        } else {
+            self.given += (fits - self.given) * self.give_release;
+        }
+        self.given
     }
 
     fn set_shelf(&mut self, rate: u32, amount: f32) {
@@ -342,6 +386,8 @@ pub struct Enhancer {
     air: Vec<Air>,
     side_hp: Biquad,
     warmth: Warmth,
+    /// The limiter's ceiling, which the added bass gives way to.
+    ceiling: f32,
 }
 
 impl Enhancer {
@@ -358,6 +404,7 @@ impl Enhancer {
             air: (0..channels).map(|_| Air::new(rate)).collect(),
             side_hp: Biquad::new(Coeffs::high_pass(rate, 250.0, FRAC_1_SQRT_2)),
             warmth: Warmth::new(channels),
+            ceiling: super::biquad::db_to_gain(super::CEILING_DB),
         };
         e.set_shelves();
         e
@@ -435,11 +482,20 @@ impl Enhancer {
                 if a.bass > 0.0 {
                     let mono = frame[..front].iter().sum::<f32>() / front as f32;
                     let harm = BASS_MIX * a.bass * self.bass.harmonics(mono);
-                    for (ch, x) in frame.iter_mut().enumerate() {
-                        *x = self.bass.shelf[ch].run(*x);
+                    // What the bass adds to each channel, and how much of
+                    // it fits under the ceiling with the sound as it was.
+                    let mut fits = 1f32;
+                    for (ch, &x) in frame.iter().enumerate() {
+                        let mut added = self.bass.shelf[ch].run(x) - x;
                         if ch < front {
-                            *x += harm;
+                            added += harm;
                         }
+                        self.bass.added[ch] = added;
+                        fits = fits.min(fit(x, added, self.ceiling));
+                    }
+                    let give = self.bass.give(fits);
+                    for (x, added) in frame.iter_mut().zip(&self.bass.added) {
+                        *x += give * added;
                     }
                 }
                 if a.clarity > 0.0 {
@@ -730,6 +786,32 @@ mod tests {
         e.process(&mut s);
         assert!(s.chunks(6).all(|f| f[2..].iter().all(|&x| x == 0.0)));
         assert!(rms(&s) > 0.1);
+    }
+
+    #[test]
+    fn the_bass_gives_way_to_the_ceiling() {
+        // A 60 Hz tone right under the ceiling with a quiet voice (1 kHz)
+        // on it: the bass has no room, so it adds nothing over the
+        // ceiling, and the voice is as it was. With room, the bass is
+        // raised as ever (the other tests).
+        let rate = 48000;
+        let ceiling = crate::audio::dsp::biquad::db_to_gain(crate::audio::dsp::CEILING_DB);
+        let mut e = Enhancer::new(rate, 2, only(|a| a.bass = 1.0));
+        let original: Vec<f32> = (0..2 * rate as usize)
+            .flat_map(|i| {
+                let t = 2.0 * PI * i as f32 / rate as f32;
+                let x = 0.8 * (60.0 * t).sin() + 0.05 * (1000.0 * t).sin();
+                [x, x]
+            })
+            .collect();
+        let mut s = original.clone();
+        e.process(&mut s);
+        let peak = s.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
+        assert!(peak <= ceiling + 1e-4, "{peak}");
+        let (voice, was) = (level(&s, rate, 1000.0), level(&original, rate, 1000.0));
+        assert!((voice / was - 1.0).abs() < 0.02, "{voice} against {was}");
+        // The bass is not turned down under what it was.
+        assert!(level(&s, rate, 60.0) >= 0.99 * level(&original, rate, 60.0));
     }
 
     #[test]
