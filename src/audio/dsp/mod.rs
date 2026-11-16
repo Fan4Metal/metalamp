@@ -210,8 +210,9 @@ impl Chain {
         if s.eq {
             self.eq.process(samples);
         }
-        // Also after it was turned off, while its amounts slide out (it
-        // returns at once when idle).
+        // Also after it was turned off, while its amounts slide out; and
+        // off, it still delays the sound by its `LATENCY`, so turning it
+        // on or off does not shift it.
         self.enhancer.process(samples);
         self.channels_stage.process(samples, s.balance, s.mono);
         if s.limiter {

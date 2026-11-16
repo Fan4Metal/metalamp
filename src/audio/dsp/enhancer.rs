@@ -4,7 +4,13 @@
 //!
 //! - **Warmth**: a blend with a soft saturation of the whole, which
 //!   rounds the peaks as tape does; first, so the bass raised after it
-//!   does not drive the rest into it.
+//!   does not drive the rest into it. The saturation's own part (what it
+//!   takes from the signal and the harmonics it adds) is worked out at
+//!   twice the rate and brought back through a half-band filter, so the
+//!   harmonics over the Nyquist frequency do not fold back into the
+//!   music (the third of a 15 kHz tone came back at 900 Hz at 44.1 kHz);
+//!   the signal itself only waits `LATENCY` frames for it, always, so
+//!   turning warmth on or off does not shift the sound.
 //! - **Bass**: a low shelf under 100 Hz, and harmonics of the band under
 //!   120 Hz, which small speakers that cannot play the fundamental still
 //!   make heard as bass (the missing fundamental). The harmonics carry no
@@ -44,10 +50,6 @@ pub struct Amounts {
 }
 
 impl Amounts {
-    pub fn is_zero(&self) -> bool {
-        self.bass <= 0.0 && self.clarity <= 0.0 && self.width <= 0.0 && self.warmth <= 0.0
-    }
-
     fn clamped(self) -> Amounts {
         Amounts {
             bass: self.bass.clamp(0.0, 1.0),
@@ -88,6 +90,19 @@ const AIR_RELEASE_S: f32 = 0.1;
 
 /// Warmth's saturation drive.
 const WARMTH_DRIVE: f32 = 2.5;
+
+/// The half-band filter of warmth's twice the rate: its side taps on
+/// either side of the middle one (`HALF_TAPS` × 4 − 1 taps in all, every
+/// other one 0).
+const HALF_TAPS: usize = 8;
+/// The frames the enhancer delays the sound by (the half-band filter's
+/// delay going up and coming down): 15, 0.34 ms at 44.1 kHz.
+pub const LATENCY: usize = 2 * HALF_TAPS - 1;
+/// The Kaiser window's β: about 70 dB of stopband.
+const KAISER_BETA: f64 = 7.0;
+/// The rings' lengths, powers of two over what is looked back on.
+const DRY_RING: usize = 32;
+const WET_RING: usize = 64;
 
 fn release(rate: u32, seconds: f32) -> f32 {
     1.0 - (-1.0 / (rate as f32 * seconds)).exp()
@@ -188,6 +203,120 @@ impl Air {
     }
 }
 
+/// The modified Bessel function of the first kind, order 0 (Kaiser's
+/// window).
+fn bessel_i0(x: f64) -> f64 {
+    let (mut sum, mut term) = (1.0, 1.0);
+    for k in 1..50 {
+        term *= (x / 2.0) / k as f64;
+        sum += term * term;
+        if term * term < sum * 1e-17 {
+            break;
+        }
+    }
+    sum
+}
+
+/// The half-band filter's side taps `s[i]`, at `±(2i + 1)` from the
+/// middle tap (0.5); scaled so that they add up to 0.25 on each side, so
+/// the filter passes DC whole.
+fn half_band() -> [f32; HALF_TAPS] {
+    let edge = (2 * HALF_TAPS) as f64;
+    let mut s = [0f64; HALF_TAPS];
+    for (i, tap) in s.iter_mut().enumerate() {
+        let j = (2 * i + 1) as f64;
+        let ideal = (std::f64::consts::FRAC_PI_2 * j).sin() / (std::f64::consts::PI * j);
+        let r = j / edge;
+        let window = bessel_i0(KAISER_BETA * (1.0 - r * r).sqrt()) / bessel_i0(KAISER_BETA);
+        *tap = ideal * window;
+    }
+    let total: f64 = s.iter().sum();
+    s.map(|t| (t * 0.25 / total) as f32)
+}
+
+/// Warmth at twice the rate, and the delay of the dry sound, per channel.
+#[derive(Clone)]
+struct WarmthChannel {
+    /// The input, by frame.
+    dry: [f32; DRY_RING],
+    /// The saturation's part at twice the rate, by its time.
+    wet: [f32; WET_RING],
+}
+
+struct Warmth {
+    taps: [f32; HALF_TAPS],
+    channels: Vec<WarmthChannel>,
+    /// The frames gone through.
+    n: usize,
+    /// `tanh`'s gain making it unity at -12 dBFS.
+    gain: f32,
+}
+
+impl Warmth {
+    fn new(channels: usize) -> Warmth {
+        Warmth {
+            taps: half_band(),
+            channels: vec![
+                WarmthChannel {
+                    dry: [0.0; DRY_RING],
+                    wet: [0.0; WET_RING],
+                };
+                channels
+            ],
+            n: 0,
+            gain: 0.25 * WARMTH_DRIVE / (0.25 * WARMTH_DRIVE).tanh() / WARMTH_DRIVE,
+        }
+    }
+
+    /// The saturation's part dropped (it is of the sound long before).
+    fn clear_wet(&mut self) {
+        for ch in &mut self.channels {
+            ch.wet = [0.0; WET_RING];
+        }
+    }
+
+    /// One frame: each sample `LATENCY` frames back, with `amount` of the
+    /// saturation's part blended in.
+    fn run(&mut self, frame: &mut [f32], amount: f32) {
+        let n = self.n;
+        self.n = n.wrapping_add(1);
+        let m = HALF_TAPS - 1;
+        let s = &self.taps;
+        for (x, ch) in frame.iter_mut().zip(&mut self.channels) {
+            ch.dry[n % DRY_RING] = *x;
+            let dry = |back: usize| ch.dry[n.wrapping_sub(back) % DRY_RING];
+            let out = dry(LATENCY);
+            if amount <= 0.0 {
+                *x = out;
+                continue;
+            }
+            // Up: the zero-stuffed input through the half-band filter (times
+            // two). The odd phase is the input `m` frames back; the even one
+            // lies half a frame before it.
+            let mut even = 0.0;
+            for (i, &tap) in s.iter().enumerate() {
+                even += tap * (dry(m - i) + dry(m + 1 + i));
+            }
+            let even = 2.0 * even;
+            let odd = dry(m);
+            let part = |u: f32| (WARMTH_DRIVE * u).tanh() * self.gain - u;
+            let t = 2 * n;
+            ch.wet[t % WET_RING] = part(even);
+            ch.wet[(t + 1) % WET_RING] = part(odd);
+            // Down: the half-band filter at time `t`, which is the frame
+            // `LATENCY` back; its middle tap falls on an odd time, the side
+            // taps on even ones.
+            let wet = |at: usize| ch.wet[at % WET_RING];
+            let middle = t + WET_RING - LATENCY;
+            let mut down = 0.5 * wet(middle);
+            for (i, &tap) in s.iter().enumerate() {
+                down += tap * (wet(middle + 2 * i + 1) + wet(middle - 2 * i - 1));
+            }
+            *x = out + amount * down;
+        }
+    }
+}
+
 pub struct Enhancer {
     rate: u32,
     channels: usize,
@@ -200,6 +329,7 @@ pub struct Enhancer {
     bass: Bass,
     air: Vec<Air>,
     side_hp: Biquad,
+    warmth: Warmth,
 }
 
 impl Enhancer {
@@ -215,6 +345,7 @@ impl Enhancer {
             bass: Bass::new(rate, channels),
             air: (0..channels).map(|_| Air::new(rate)).collect(),
             side_hp: Biquad::new(Coeffs::high_pass(rate, 250.0, FRAC_1_SQRT_2)),
+            warmth: Warmth::new(channels),
         };
         e.set_shelves();
         e
@@ -223,11 +354,6 @@ impl Enhancer {
     /// New amounts, slid to; the filters' state is kept.
     pub fn configure(&mut self, a: Amounts) {
         self.target = a.clamped();
-    }
-
-    /// Nothing to do, nor anything sliding away.
-    fn idle(&self) -> bool {
-        self.now.is_zero() && self.target.is_zero()
     }
 
     fn set_shelves(&mut self) {
@@ -274,31 +400,26 @@ impl Enhancer {
         if was.width <= 0.0 && self.now.width > 0.0 {
             self.side_hp = Biquad::new(Coeffs::high_pass(self.rate, 250.0, FRAC_1_SQRT_2));
         }
+        if was.warmth <= 0.0 && self.now.warmth > 0.0 {
+            self.warmth.clear_wet();
+        }
         self.set_shelves();
     }
 
+    /// Processes interleaved `samples`, delayed by `LATENCY` frames
+    /// whatever the amounts (all 0: the delay alone), so the chain's delay
+    /// stays the same while they change.
     pub fn process(&mut self, samples: &mut [f32]) {
-        if self.idle() {
-            return;
-        }
         let n = self.channels;
         // The front pair (or the one channel) gets the bass harmonics.
         let front = n.min(2);
-        // Unity at -12 dBFS, so the music's level stays while the peaks
-        // round off.
-        let warmth_gain = 0.25 * WARMTH_DRIVE / (0.25 * WARMTH_DRIVE).tanh() / WARMTH_DRIVE;
         for block in samples.chunks_mut(n * SUB) {
             if self.now != self.target {
                 self.step();
             }
             let a = self.now;
             for frame in block.chunks_exact_mut(n) {
-                if a.warmth > 0.0 {
-                    for x in frame.iter_mut() {
-                        let sat = (WARMTH_DRIVE * *x).tanh() * warmth_gain;
-                        *x += a.warmth * (sat - *x);
-                    }
-                }
+                self.warmth.run(frame, a.warmth);
                 if a.bass > 0.0 {
                     let mono = frame[..front].iter().sum::<f32>() / front as f32;
                     let harm = BASS_MIX * a.bass * self.bass.harmonics(mono);
@@ -379,13 +500,55 @@ mod tests {
     }
 
     #[test]
-    fn zero_amounts_change_nothing() {
+    fn zero_amounts_only_delay() {
         let rate = 48000;
         let mut e = Enhancer::new(rate, 2, Amounts::default());
         let original = sine(rate, 440.0, 0.5, 0.5);
         let mut s = original.clone();
         e.process(&mut s);
-        assert_eq!(s, original);
+        assert!(s[..2 * LATENCY].iter().all(|&x| x == 0.0));
+        assert_eq!(s[2 * LATENCY..], original[..original.len() - 2 * LATENCY]);
+    }
+
+    #[test]
+    fn half_band_passes_dc_whole() {
+        let s = half_band();
+        assert!((0.5 + 2.0 * s.iter().sum::<f32>() - 1.0).abs() < 1e-6);
+        assert!((2.0 * 2.0 * s.iter().sum::<f32>() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn warmth_lines_up_with_the_sound_it_comes_from() {
+        // A quiet 10 kHz tone: warmth is its small-signal gain then, so
+        // the output is the input `LATENCY` back times that gain; the
+        // saturation's part a frame off would be out by about its whole
+        // size (0.006).
+        let rate = 48000;
+        let mut e = Enhancer::new(rate, 2, only(|a| a.warmth = 1.0));
+        let original = sine(rate, 10000.0, 0.05, 0.2);
+        let mut s = original.clone();
+        e.process(&mut s);
+        let d = 0.25 * WARMTH_DRIVE;
+        let g = d / d.tanh();
+        let error = s[2 * (LATENCY + 64)..]
+            .iter()
+            .zip(&original[2 * 64..])
+            .map(|(&y, &x)| (y - g * x).abs())
+            .fold(0.0f32, f32::max);
+        assert!(error < 0.0015, "{error}");
+    }
+
+    #[test]
+    fn warmth_folds_nothing_back() {
+        // 15 kHz at 44.1 kHz: its third harmonic, 45 kHz, came back at
+        // 900 Hz without the twice the rate.
+        let rate = 44100;
+        let mut e = Enhancer::new(rate, 2, only(|a| a.warmth = 1.0));
+        let mut s = sine(rate, 15000.0, 0.9, 2.0);
+        e.process(&mut s);
+        let folded = level(&s, rate, 900.0);
+        // Under -60 dB of the tone.
+        assert!(folded < 0.9 * 0.001, "{folded}");
     }
 
     #[test]
