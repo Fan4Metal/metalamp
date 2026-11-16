@@ -48,6 +48,59 @@ impl Beat {
     }
 }
 
+/// A note starting in a band: the band over `ONSET_FROM` and
+/// `ONSET_RISE` over its mean of the last `ONSET_MEAN_S`, `ONSET_GAP_S`
+/// after the band's last; the mean then takes the level, so a note held
+/// starts only once, and only a further rise starts another.
+pub const ONSET_FROM: f32 = 0.35;
+const ONSET_RISE: f32 = 0.07;
+const ONSET_MEAN_S: f32 = 0.3;
+const ONSET_GAP_S: f32 = 0.12;
+
+/// The notes starting in each band of the analyzer's levels (the harp's
+/// plucks, the ripples' drops).
+#[derive(Default)]
+pub struct Onsets {
+    mean: Vec<f32>,
+    since: Vec<f32>,
+}
+
+impl Onsets {
+    /// Moves on by `seconds` with the `n` bands' levels heard now (`None`:
+    /// nothing, the means fall): the strength (0.4–1) of a note starting
+    /// now in each band, 0 where none does. The first levels, or a count
+    /// of bands other than the last, only set the means, so not every
+    /// band starts a note at once.
+    pub fn feed(&mut self, levels: Option<&[f32]>, n: usize, seconds: f32) -> Vec<f32> {
+        let level = |k: usize| levels.and_then(|l| l.get(k)).copied().unwrap_or(0.0);
+        if self.mean.len() != n {
+            self.mean = (0..n).map(level).collect();
+            self.since = vec![ONSET_GAP_S; n];
+            return vec![0.0; n];
+        }
+        let follow = (seconds / ONSET_MEAN_S).min(1.0);
+        (0..n)
+            .map(|k| {
+                let raw = level(k);
+                let rise = raw - self.mean[k];
+                self.mean[k] += rise * follow;
+                self.since[k] += seconds;
+                if levels.is_some()
+                    && raw > ONSET_FROM
+                    && rise > ONSET_RISE
+                    && self.since[k] > ONSET_GAP_S
+                {
+                    self.since[k] = 0.0;
+                    self.mean[k] = raw;
+                    (0.4 + (rise - ONSET_RISE) * 6.0).clamp(0.4, 1.0)
+                } else {
+                    0.0
+                }
+            })
+            .collect()
+    }
+}
+
 /// Xorshift64: enough for flames and sparks.
 pub struct Rng(u64);
 
@@ -126,6 +179,28 @@ mod tests {
             assert_eq!(beat.feed(None, 0.02), None);
         }
         assert_eq!((beat.bass, beat.level, beat.kick), (0.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn a_note_starts_once_where_its_band_rises() {
+        let mut o = Onsets::default();
+        let quiet = vec![0.5; 8];
+        // The first levels only set the means.
+        assert!(o.feed(Some(&quiet), 8, 0.02).iter().all(|&s| s == 0.0));
+        for _ in 0..20 {
+            assert!(o.feed(Some(&quiet), 8, 0.02).iter().all(|&s| s == 0.0));
+        }
+        let mut note = quiet.clone();
+        note[3] = 0.9;
+        let starts = o.feed(Some(&note), 8, 0.02);
+        assert!(starts[3] >= 0.4);
+        assert!(starts.iter().enumerate().all(|(k, &s)| k == 3 || s == 0.0));
+        // Held: not again.
+        for _ in 0..50 {
+            assert_eq!(o.feed(Some(&note), 8, 0.02)[3], 0.0);
+        }
+        // Nothing heard: nothing starts.
+        assert!(o.feed(None, 8, 0.02).iter().all(|&s| s == 0.0));
     }
 
     #[test]

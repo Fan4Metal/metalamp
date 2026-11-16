@@ -14,7 +14,7 @@ use std::f32::consts::{PI, TAU};
 use egui::epaint::PathStroke;
 use egui::{Painter, Pos2, Rect, Shape, Stroke, pos2};
 
-use super::beat::{Rng, glow};
+use super::beat::{ONSET_FROM, Onsets, Rng, glow};
 use crate::palette;
 use crate::settings::Visual;
 
@@ -22,12 +22,6 @@ use crate::settings::Visual;
 const PITCH: f32 = 13.0;
 const FEWEST: usize = 12;
 const MOST: usize = 48;
-/// A pluck: the band over `FROM` and `RISE` over its mean of the last
-/// `MEAN_S`, at least `GAP_S` after the string's last.
-const FROM: f32 = 0.35;
-const RISE: f32 = 0.07;
-const MEAN_S: f32 = 0.3;
-const GAP_S: f32 = 0.12;
 /// A string swings `HZ_LONG` times a second on the bass to `HZ_SHORT`
 /// on the treble and rings out in `RING_LONG` to `RING_SHORT` seconds.
 const HZ_LONG: f32 = 2.6;
@@ -49,8 +43,7 @@ const STILL: f32 = 0.01;
 
 #[derive(Clone, Copy, Default)]
 struct Wire {
-    /// The band's recent mean and its level now (over `FROM`, 0–1).
-    mean: f32,
+    /// The band's level now (over `ONSET_FROM`, 0–1).
     level: f32,
     /// Seconds since the last pluck, its place along the string (0: the
     /// soundboard) and the swing left of it.
@@ -62,6 +55,7 @@ struct Wire {
 
 pub struct Harp {
     wires: Vec<Wire>,
+    onsets: Onsets,
     rng: Rng,
     /// Something was heard since the strings last went still.
     shown: bool,
@@ -77,6 +71,7 @@ impl Harp {
     pub fn new() -> Harp {
         Harp {
             wires: Vec::new(),
+            onsets: Onsets::default(),
             rng: Rng::default(),
             shown: false,
         }
@@ -95,24 +90,12 @@ impl Harp {
     pub fn feed(&mut self, heard: Option<(&[f32], f32)>, dt: f32, width: f32) {
         let n = Self::strings(width);
         if self.wires.len() != n {
-            // Never plucked: long since.
-            let wire = Wire {
-                age: GAP_S,
-                ..Wire::default()
-            };
-            self.wires = vec![wire; n];
+            self.wires = vec![Wire::default(); n];
         }
         let (levels, seconds) = match heard {
             Some((levels, seconds)) => {
                 if seconds <= 0.0 {
                     return;
-                }
-                if !self.shown {
-                    // The first sound: the means start at it, so not
-                    // every string is plucked at once.
-                    for (w, &l) in self.wires.iter_mut().zip(levels) {
-                        w.mean = l;
-                    }
                 }
                 self.shown = true;
                 (Some(levels), seconds)
@@ -120,25 +103,20 @@ impl Harp {
             None if self.shown => (None, dt),
             None => return,
         };
-        let follow = (seconds / MEAN_S).min(1.0);
-        for k in 0..n {
+        let plucks = self.onsets.feed(levels, n, seconds);
+        for (k, &strength) in plucks.iter().enumerate() {
             let place = k as f32 / (n - 1) as f32;
             let w = &mut self.wires[k];
             w.age += seconds;
             w.swing *= (-seconds / lerp(RING_LONG, RING_SHORT, place)).exp();
             w.spark = (w.spark - seconds / SPARK_S).max(0.0);
             let raw = levels.and_then(|l| l.get(k)).copied().unwrap_or(0.0);
-            let rise = raw - w.mean;
-            w.mean += rise * follow;
-            w.level = ((raw - FROM) / (1.0 - FROM)).clamp(0.0, 1.0);
-            if levels.is_some() && raw > FROM && rise > RISE && w.age > GAP_S {
-                let strength = (0.4 + (rise - RISE) * 6.0).clamp(0.4, 1.0);
+            w.level = ((raw - ONSET_FROM) / (1.0 - ONSET_FROM)).clamp(0.0, 1.0);
+            if strength > 0.0 {
                 w.swing = w.swing.max(strength);
                 w.age = 0.0;
                 w.at = self.rng.between(0.2, 0.8);
                 w.spark = strength;
-                // A note held is not plucked again: only a further rise.
-                w.mean = raw;
             }
         }
         if levels.is_none() && self.wires.iter().all(|w| w.swing < STILL && w.spark <= 0.0) {
