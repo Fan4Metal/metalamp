@@ -11,7 +11,7 @@
 //!   music (the third of a 15 kHz tone came back at 900 Hz at 44.1 kHz);
 //!   the signal itself only waits `LATENCY` frames for it, always, so
 //!   turning warmth on or off does not shift the sound.
-//! - **Bass**: a low shelf under 100 Hz, and harmonics of the band under
+//! - **Bass**: a low shelf under `BASS_SHELF_HZ`, and harmonics of the band under
 //!   120 Hz, which small speakers that cannot play the fundamental still
 //!   make heard as bass (the missing fundamental): the band rectified
 //!   gives the even ones (2f, 4f, …), with no fundamental; the cube of
@@ -20,14 +20,17 @@
 //!   are needed, the even ones alone are heard an octave up. Kept between
 //!   90 and 500 Hz, and put into the front pair only.
 //! - **Clarity**: the second harmonics (and sum tones) of the band from
-//!   3 to 8 kHz, squared, so nothing of the band itself is added (a
+//!   4.5 to 8 kHz, squared, so nothing of the band itself is added (a
 //!   saturator's near-linear output, high-passed twice, cancelled the
-//!   music around 5 kHz), its output over 6 kHz, and a high shelf over
-//!   9 kHz: the air an MP3's low-pass took away. The band's upper edge
+//!   music around 5 kHz), its output over 10 kHz, and a high shelf over
+//!   10 kHz: the air an MP3's low-pass took away. Kept over 10 kHz, since
+//!   the sum tones of a distorted guitar's dense 3 to 5 kHz, let in at 6
+//!   to 10 kHz, are grit there, not air. The band's upper edge
 //!   keeps the doubled tones under the Nyquist frequency, so nothing
 //!   folds back as an inharmonic whistle; their level follows the
-//!   envelope of all that is over 3 kHz, so a tone leaking in from over
-//!   the band stays as weak as it came in.
+//!   envelope of all that is over 4.5 kHz, so a tone leaking in from over
+//!   the band stays as weak as it came in (and music, whose peaks the
+//!   envelope holds, gets some 12 dB less of them than a sine: `AIR_MIX`).
 //! - **Width**: the side signal over 250 Hz raised (the bass stays in
 //!   the middle), up to twice; stereo only.
 //!
@@ -66,7 +69,12 @@ const SLIDE_S: f32 = 0.05;
 const SUB: usize = 32;
 
 /// The low shelf's gain at a full bass, dB.
-const BASS_SHELF_DB: f32 = 5.0;
+pub const BASS_SHELF_DB: f32 = 6.0;
+/// The low shelf's corner, where it gives half its gain: the weight of a
+/// distorted guitar is at 120 to 200 Hz, and a shelf at 100 Hz raised what
+/// a rock record hardly has (measured: +3 dB under 80 Hz, +0.4 dB in the
+/// record's loudest band, 159 Hz).
+pub const BASS_SHELF_HZ: f32 = 140.0;
 /// The third harmonic's share against the rectified band's.
 const BASS_THIRD: f32 = 0.3;
 /// The harmonics' gain at a full bass.
@@ -75,15 +83,17 @@ const BASS_MIX: f32 = 1.0;
 const BASS_RELEASE_S: f32 = 0.2;
 
 /// The high shelf's gain at a full clarity, dB.
-const AIR_SHELF_DB: f32 = 2.5;
+pub const AIR_SHELF_DB: f32 = 4.0;
+/// The high shelf's corner.
+pub const AIR_SHELF_HZ: f32 = 10000.0;
 /// The band doubled: from here …
-const AIR_FROM: f32 = 3000.0;
+const AIR_FROM: f32 = 4500.0;
 /// … to here (or less at low rates, see `Air::new`).
 const AIR_TO: f32 = 8000.0;
 /// The harmonics kept from here up.
-const AIR_OUT: f32 = 6000.0;
+const AIR_OUT: f32 = 10000.0;
 /// The harmonics' gain at a full clarity.
-const AIR_MIX: f32 = 1.0;
+const AIR_MIX: f32 = 3.0;
 /// The envelope over `AIR_FROM`: its fall, seconds.
 const AIR_RELEASE_S: f32 = 0.1;
 
@@ -139,7 +149,7 @@ impl Bass {
     }
 
     fn set_shelf(&mut self, rate: u32, amount: f32) {
-        let c = Coeffs::low_shelf(rate, 100.0, BASS_SHELF_DB * amount);
+        let c = Coeffs::low_shelf(rate, BASS_SHELF_HZ, BASS_SHELF_DB * amount);
         for f in &mut self.shelf {
             f.set(c);
         }
@@ -365,7 +375,7 @@ impl Enhancer {
             self.bass.set_shelf(self.rate, bass);
         }
         if (clarity - was_clarity).abs() > 1e-4 {
-            let c = Coeffs::high_shelf(self.rate, 9000.0, AIR_SHELF_DB * clarity);
+            let c = Coeffs::high_shelf(self.rate, AIR_SHELF_HZ, AIR_SHELF_DB * clarity);
             for air in &mut self.air {
                 air.shelf.set(c);
             }
@@ -560,7 +570,7 @@ mod tests {
         let original = sine(rate, 60.0, 0.3, 2.0);
         let mut s = original.clone();
         e.process(&mut s);
-        let shelf = shelved(&original, Coeffs::low_shelf(rate, 100.0, BASS_SHELF_DB));
+        let shelf = shelved(&original, Coeffs::low_shelf(rate, BASS_SHELF_HZ, BASS_SHELF_DB));
         // The fundamental is the shelf's and a little of the cube's, in
         // phase: the harmonics never take from it.
         let (got, want) = (level(&s, rate, 60.0), level(&shelf, rate, 60.0));
@@ -594,7 +604,7 @@ mod tests {
             .collect();
         let mut s = original.clone();
         e.process(&mut s);
-        let shelf = shelved(&original, Coeffs::low_shelf(rate, 100.0, BASS_SHELF_DB));
+        let shelf = shelved(&original, Coeffs::low_shelf(rate, BASS_SHELF_HZ, BASS_SHELF_DB));
         // The quiet parts of the second second, from 50 ms into them.
         let quiet = |v: &[f32]| -> Vec<f32> {
             v.chunks(2)
@@ -615,7 +625,7 @@ mod tests {
         let original = sine(rate, 5000.0, 0.3, 2.0);
         let mut s = original.clone();
         e.process(&mut s);
-        let shelf = shelved(&original, Coeffs::high_shelf(rate, 9000.0, AIR_SHELF_DB));
+        let shelf = shelved(&original, Coeffs::high_shelf(rate, AIR_SHELF_HZ, AIR_SHELF_DB));
         let (got, want) = (level(&s, rate, 5000.0), level(&shelf, rate, 5000.0));
         assert!((got / want - 1.0).abs() < 0.02, "{got} against {want}");
         assert!(level(&shelf, rate, 10000.0) < 1e-3);

@@ -1561,8 +1561,8 @@ fn processing(
             ui,
             tr!("Bass", "Бас"),
             tr!(
-                "A shelf under 100 Hz and the harmonics of the bass, which small speakers make heard as bass they cannot play.",
-                "Полка ниже 100 Гц и гармоники баса, которые на небольших колонках слышны как бас, недоступный им самим."
+                "A shelf under 140 Hz and the harmonics of the bass, which small speakers make heard as bass they cannot play.",
+                "Полка ниже 140 Гц и гармоники баса, которые на небольших колонках слышны как бас, недоступный им самим."
             ),
             &mut dsp.bass,
         );
@@ -1571,8 +1571,8 @@ fn processing(
             ui,
             tr!("Clarity", "Ясность"),
             tr!(
-                "Air over 6 kHz, the harmonics of the top: what an MP3's low-pass took away.",
-                "Воздух выше 6 кГц, гармоники верха: то, что срезал фильтр MP3."
+                "Air over 10 kHz, the harmonics of the top: what an MP3's low-pass took away.",
+                "Воздух выше 10 кГц, гармоники верха: то, что срезал фильтр MP3."
             ),
             &mut dsp.clarity,
         );

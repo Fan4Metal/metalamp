@@ -8,6 +8,10 @@
 //! - `--bench loudness <file>…`: each file's loudness (EBU R128), peak and
 //!   the gain normalisation would give it, with the time the measuring
 //!   took; `ffmpeg -af ebur128 -f null -` gives the figure to compare.
+//! - `--bench enhancer <file> [from s] [seconds] [bass,clarity,width,warmth]`:
+//!   what each of the enhancer's stages does to a passage of real music,
+//!   by third-octave bands (sines told too little: two faults were found
+//!   only this way), and what the limiter then takes.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -35,10 +39,14 @@ pub fn run(args: &[String]) -> i32 {
             bench_loudness(&files, &mut out);
             0
         }
+        Some("enhancer") if args.len() > 1 => {
+            bench_enhancer(&args[1..], &mut out);
+            0
+        }
         _ => {
             let _ = writeln!(
                 out,
-                "usage: metalamp --bench scan <folder>... | gapless <file>... | loudness <file>..."
+                "usage: metalamp --bench scan <folder>... | gapless <file>... | loudness <file>... | enhancer <file> [from s] [seconds] [bass,clarity,width,warmth]"
             );
             2
         }
@@ -244,4 +252,261 @@ fn bench_gapless(files: &[PathBuf], out: &mut impl Write) {
             }
         }
     }
+}
+
+/// The points of `third_octaves`' transform: bins of 2.7 Hz at 44.1 kHz.
+const SPECTRUM_N: usize = 16384;
+
+/// The power in each third-octave band from 31.5 Hz to 16 kHz of the mean
+/// of interleaved `s`'s channels (or of the first less the second, `side`):
+/// Hann windows of `SPECTRUM_N` frames, half overlapping, averaged. A
+/// full-scale sine reads about 0 dB.
+fn third_octaves(s: &[f32], rate: u32, ch: usize, side: bool) -> Vec<(f32, f64)> {
+    use std::f32::consts::PI;
+    let n = SPECTRUM_N;
+    let mono: Vec<f32> = s
+        .chunks_exact(ch)
+        .map(|f| {
+            if side {
+                (f[0] - f[ch.min(2) - 1]) / 2.0
+            } else {
+                f.iter().sum::<f32>() / ch as f32
+            }
+        })
+        .collect();
+    let twiddles: Vec<(f32, f32)> = (0..n / 2)
+        .map(|k| {
+            let a = -2.0 * PI * k as f32 / n as f32;
+            (a.cos(), a.sin())
+        })
+        .collect();
+    let window: Vec<f32> = (0..n)
+        .map(|i| 0.5 - 0.5 * (2.0 * PI * i as f32 / n as f32).cos())
+        .collect();
+    let mut power = vec![0f64; n / 2];
+    let mut frames = 0;
+    let mut at = 0;
+    while at + n <= mono.len() {
+        let mut re: Vec<f32> = mono[at..at + n]
+            .iter()
+            .zip(&window)
+            .map(|(x, w)| x * w)
+            .collect();
+        let mut im = vec![0f32; n];
+        crate::ui::spectrum::fft(&mut re, &mut im, &twiddles);
+        for (p, (r, i)) in power.iter_mut().zip(re.iter().zip(&im)) {
+            *p += f64::from(r * r + i * i);
+        }
+        frames += 1;
+        at += n / 2;
+    }
+    // A sine of amplitude 1 has n/4 in its bin (the window's mean is a
+    // half) and a little in the two beside it (1.5 times in all).
+    let scale = 1.0 / (frames.max(1) as f64 * (n as f64 / 4.0).powi(2) * 1.5);
+    let hz = f64::from(rate) / n as f64;
+    (0..28)
+        .map(|k| {
+            let centre = 31.5 * 2f64.powf(f64::from(k) / 3.0);
+            let (lo, hi) = (
+                centre / 2f64.powf(1.0 / 6.0),
+                centre * 2f64.powf(1.0 / 6.0),
+            );
+            let sum: f64 = power
+                .iter()
+                .enumerate()
+                .filter(|(b, _)| (lo..hi).contains(&(*b as f64 * hz)))
+                .map(|(_, p)| p)
+                .sum();
+            (centre as f32, sum * scale)
+        })
+        .collect()
+}
+
+/// `--bench enhancer <file> [from s] [seconds] [bass,clarity,width,warmth]`
+/// (the amounts 0 to 10; the settings' when left out): the passage dry, by
+/// third-octave bands in dBFS, and what each stage adds to each band in dB:
+/// the bass's shelf alone and the whole bass, the clarity's shelf alone and
+/// the whole clarity, warmth, all four, and all four through the limiter.
+fn bench_enhancer(args: &[String], out: &mut impl Write) {
+    use crate::audio::decoder::{Decoder, SECOND};
+    use crate::audio::dsp::biquad::{Biquad, Coeffs, db_to_gain, gain_to_db};
+    use crate::audio::dsp::enhancer::{
+        AIR_SHELF_DB, AIR_SHELF_HZ, Amounts, BASS_SHELF_DB, BASS_SHELF_HZ, Enhancer,
+    };
+    use crate::audio::dsp::{CEILING_DB, limiter::Limiter};
+    use crate::audio::mf;
+    let file = PathBuf::from(&args[0]);
+    let from: f64 = args.get(1).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let seconds: f64 = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(15.0);
+    let amounts: Vec<f32> = match args.get(3) {
+        Some(list) => list
+            .split(',')
+            .filter_map(|v| v.parse::<f32>().ok())
+            .collect(),
+        None => {
+            let d = crate::settings::Settings::load().dsp;
+            [d.bass, d.clarity, d.width, d.warmth]
+                .map(f32::from)
+                .to_vec()
+        }
+    };
+    if amounts.len() != 4 {
+        let _ = writeln!(
+            out,
+            "the amounts: bass,clarity,width,warmth, 0 to 10 each"
+        );
+        return;
+    }
+    let a = Amounts {
+        bass: amounts[0] / 10.0,
+        clarity: amounts[1] / 10.0,
+        width: amounts[2] / 10.0,
+        warmth: amounts[3] / 10.0,
+    };
+    let _com = mf::com_init_mta();
+    let _mf = match mf::Mf::start() {
+        Ok(m) => m,
+        Err(e) => {
+            let _ = writeln!(out, "Media Foundation: {}", mf::describe(&e));
+            return;
+        }
+    };
+    let mut decoder = match Decoder::open(&file) {
+        Ok(d) => d,
+        Err(e) => {
+            let _ = writeln!(out, "{}: {}", file.display(), mf::describe(&e));
+            return;
+        }
+    };
+    let _ = decoder.seek((from * SECOND as f64) as i64);
+    let (rate, ch) = (decoder.rate, usize::from(decoder.channels));
+    let want = (seconds * f64::from(rate)) as usize * ch;
+    let mut dry = Vec::with_capacity(want);
+    while dry.len() < want {
+        match decoder.next() {
+            Ok(Some(block)) => dry.extend(block),
+            _ => break,
+        }
+    }
+    dry.truncate(want);
+    if dry.len() < SPECTRUM_N * ch {
+        let _ = writeln!(out, "too short a passage");
+        return;
+    }
+    let enhanced = |a: Amounts| {
+        let mut s = dry.clone();
+        Enhancer::new(rate, ch, a).process(&mut s);
+        s
+    };
+    let shelved = |c: Coeffs| {
+        let mut f = vec![Biquad::new(c); ch];
+        dry.iter()
+            .enumerate()
+            .map(|(i, &x)| f[i % ch].run(x))
+            .collect::<Vec<f32>>()
+    };
+    let none = Amounts::default();
+    let all = enhanced(a);
+    let mut limited = all.clone();
+    Limiter::new(rate, ch, db_to_gain(CEILING_DB)).process(&mut limited);
+    let columns: [(&str, Vec<f32>); 7] = [
+        (
+            "b.shelf",
+            shelved(Coeffs::low_shelf(rate, BASS_SHELF_HZ, BASS_SHELF_DB * a.bass)),
+        ),
+        ("bass", enhanced(Amounts { bass: a.bass, ..none })),
+        (
+            "c.shelf",
+            shelved(Coeffs::high_shelf(rate, AIR_SHELF_HZ, AIR_SHELF_DB * a.clarity)),
+        ),
+        (
+            "clarity",
+            enhanced(Amounts {
+                clarity: a.clarity,
+                ..none
+            }),
+        ),
+        (
+            "warmth",
+            enhanced(Amounts {
+                warmth: a.warmth,
+                ..none
+            }),
+        ),
+        ("all", all.clone()),
+        ("limited", limited.clone()),
+    ];
+    let db = |p: f64| 10.0 * p.max(1e-20).log10();
+    let base = third_octaves(&dry, rate, ch, false);
+    let _ = writeln!(
+        out,
+        "{}: {from} s + {seconds} s, {rate} Hz, {ch} ch; bass {}, clarity {}, width {}, warmth {}",
+        file.display(),
+        amounts[0],
+        amounts[1],
+        amounts[2],
+        amounts[3]
+    );
+    let _ = write!(out, "{:>7} {:>7}", "Hz", "dry dB");
+    for (name, _) in &columns {
+        let _ = write!(out, " {name:>7}");
+    }
+    let _ = writeln!(out);
+    let spectra: Vec<Vec<(f32, f64)>> = columns
+        .iter()
+        .map(|(_, s)| third_octaves(s, rate, ch, false))
+        .collect();
+    for (i, (centre, p)) in base.iter().enumerate() {
+        if f64::from(*centre) > f64::from(rate) * 0.45 {
+            break;
+        }
+        let _ = write!(out, "{centre:>7.0} {:>7.1}", db(*p));
+        for s in &spectra {
+            let _ = write!(out, " {:>+7.1}", db(s[i].1) - db(*p));
+        }
+        let _ = writeln!(out);
+    }
+    let rms = |s: &[f32]| {
+        gain_to_db(
+            (s.iter().map(|&x| f64::from(x * x)).sum::<f64>() / s.len() as f64).sqrt() as f32,
+        )
+    };
+    let peak = |s: &[f32]| gain_to_db(s.iter().fold(0f32, |m, &x| m.max(x.abs())));
+    let ceiling = db_to_gain(CEILING_DB);
+    let over = |s: &[f32]| {
+        100.0
+            * s.chunks_exact(ch)
+                .filter(|f| f.iter().any(|x| x.abs() > ceiling))
+                .count() as f64
+            / (s.len() / ch) as f64
+    };
+    if ch >= 2 {
+        let side = |s: &[f32]| {
+            db(third_octaves(s, rate, ch, true)
+                .iter()
+                .map(|b| b.1)
+                .sum())
+        };
+        let _ = writeln!(
+            out,
+            "side: dry {:.1} dB, all {:+.1} dB",
+            side(&dry),
+            side(&all) - side(&dry)
+        );
+    }
+    let _ = writeln!(
+        out,
+        "dry: RMS {:.1} dB, peak {:.1} dB, {:.2} % of the frames over the ceiling ({CEILING_DB} dB)",
+        rms(&dry),
+        peak(&dry),
+        over(&dry)
+    );
+    let _ = writeln!(
+        out,
+        "all: RMS {:+.1} dB, peak {:.1} dB, {:.2} % over the ceiling; the limiter takes {:.1} dB of the RMS",
+        rms(&all) - rms(&dry),
+        peak(&all),
+        over(&all),
+        rms(&all) - rms(&limited)
+    );
 }

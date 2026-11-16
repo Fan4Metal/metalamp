@@ -396,7 +396,7 @@ fn smooth(points: &[Pos2], top: f32, bottom: f32) -> Vec<Pos2> {
 
 /// An in-place radix-2 FFT of `re.len()` points (a power of two), with
 /// `twiddles[k]` = `(cos, sin)` of `-2π k / n` for `k < n / 2`.
-pub(super) fn fft(re: &mut [f32], im: &mut [f32], twiddles: &[(f32, f32)]) {
+pub(crate) fn fft(re: &mut [f32], im: &mut [f32], twiddles: &[(f32, f32)]) {
     let n = re.len();
     debug_assert!(n.is_power_of_two() && im.len() == n && twiddles.len() == n / 2);
     let mut j = 0;
