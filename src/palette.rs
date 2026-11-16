@@ -305,6 +305,15 @@ fn scheme(visual: Visual) -> Scheme {
             peak: &[0xffe0f2, 0xece6ff, 0xdcfffb],
             by_level: false,
         },
+        // A pond at night: deep blue on the bass, aqua, lilac on the treble.
+        Visual::Ripples => Scheme {
+            rows: &[
+                (0.0, &[0x0a2a4a, 0x0a3a4a, 0x2a2050]),
+                (1.0, &[0x3aa0ff, 0x4ef0e0, 0xc8a0ff]),
+            ],
+            peak: &[0xe0f0ff, 0xe0fffb, 0xf2e8ff],
+            by_level: false,
+        },
         // Indigo peaks round an ice-blue middle.
         Visual::Waveform => Scheme {
             rows: &[

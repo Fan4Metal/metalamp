@@ -28,7 +28,7 @@ MetalAMP is an audio player for Windows built around a media library: the music 
 - **Gapless playback**: the next track is opened before the current one ends, and MP3 files are cut to their music by their LAME tags (see [Playback](#playback)).
 - **Formats of Windows**: MP3, AAC (M4A), FLAC, WMA and WAV, decoded by Media Foundation; M3U and M3U8 playlists.
 - **Sound processing**: the same loudness for every track, a ten-band equalizer, an enhancer, crossfade and a limiter, all off by default (see [Sound processing](#sound-processing)).
-- **Visualizations**: spectrum analyzers, ridges, a spectrogram, synthwave, lightning, a vortex, fire, sparks, an aurora, a cloth, a waveform, an oscilloscope, a goniometer, the notes, a piano, guitar strings and a harp (see [Visualizations](#visualizations)).
+- **Visualizations**: spectrum analyzers, ridges, a spectrogram, synthwave, lightning, a vortex, fire, sparks, an aurora, a cloth, ripples, a waveform, an oscilloscope, a goniometer, the notes, a piano, guitar strings and a harp (see [Visualizations](#visualizations)).
 - **A playlist** beside the library, kept between runs, and saved playlists (see [The playlist](#the-playlist)).
 - **Library statistics**: the numbers of tracks, albums, artists and genres, the length and size, the plays, and charts of the bit rates, formats, years, genres, artists and the tracks played most (see [Statistics](#statistics)).
 - **File info and tags**: every field of a track's tag, its cover and its audio properties, in a window opened by a click on the player's cover or `I`, where the tags of one file or of several are also edited (see [File info](#file-info)).
@@ -233,6 +233,7 @@ The display right of the player shows the sound heard. A click on it goes on to 
 - **Sparks**: a fountain of sparks, each band of the spectrum throwing them its own way (the bass to the left), and a sheaf on each beat; they fall back, bounce and cool.
 - **Aurora**: curtains of light swaying over the spectrum, streaked by drifting rays.
 - **Cloth**: a sheet stretched in a frame, seen in perspective: the spectrum pushes its near edge, each beat drops a stone on it and the treble rains on it, the waves reflecting from the frame and passing through one another.
+- **Ripples**: a pond at night: drops fall on it as notes start in the bands, the bass on the left in wide slow rings, the treble on the right in small quick ones; where the rings cross they light up, and each beat sends a great wave over the whole pond.
 - **Waveform** rolling from the right, and an **oscilloscope**.
 - **Goniometer**: the stereo field as a studio's meter shows it, a glowing trace (a mono sound is a line straight up, a wide one a cloud), with the balance of the channels and their correlation beside it.
 - **Notes**: the twelve notes with their octaves added up (which notes sound now), or a **piano**'s keys lit by the notes heard, or **guitar strings**: the loudest notes played on a guitar's neck, a string to a note as a hand would play them, each ringing from its fret.
