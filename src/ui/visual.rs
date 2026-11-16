@@ -42,6 +42,7 @@ use crate::ui::aurora::{self, Aurora};
 use crate::ui::cloth::{self, Cloth};
 use crate::ui::fire::{self, Fire};
 use crate::ui::goniometer::Goniometer;
+use crate::ui::harp::Harp;
 use crate::ui::lightning::{self, Lightning};
 use crate::ui::notes::{self, Notes};
 use crate::ui::sparks::{self, Sparks};
@@ -104,6 +105,7 @@ pub struct Visualizer {
     cloth: Cloth,
     goniometer: Goniometer,
     strings: Strings,
+    harp: Harp,
     /// The ridges' lines, oldest first: the levels across, the lowest
     /// band first.
     ridges: VecDeque<Vec<f32>>,
@@ -155,6 +157,7 @@ impl Visualizer {
             cloth: Cloth::new(),
             goniometer: Goniometer::new(),
             strings: Strings::new(),
+            harp: Harp::new(),
             ridges: VecDeque::new(),
             strata: Strata::new(),
             owed: 0.0,
@@ -313,6 +316,17 @@ impl Visualizer {
                     None => self.ridges.clear(),
                 }
             }
+            Visual::Harp => {
+                let bands = Harp::strings(size.x);
+                let levels = heard.map(|(s, h)| {
+                    let levels = self
+                        .analyzer
+                        .levels(&s[s.len() - spectrum::N..], h.rate, bands);
+                    (levels, new as f32 / h.rate as f32)
+                });
+                let heard = levels.as_ref().map(|(l, seconds)| (l.as_slice(), *seconds));
+                self.harp.feed(heard, dt, size.x);
+            }
             Visual::Cloth => {
                 let levels = heard.map(|(s, h)| {
                     let levels =
@@ -455,6 +469,7 @@ impl Visualizer {
             Visual::Strata => self.strata.active(),
             Visual::Chroma | Visual::Piano => self.notes.active(),
             Visual::Strings => self.strings.active(),
+            Visual::Harp => self.harp.active(),
             Visual::Fire => self.fire.active(),
             Visual::Sparks => self.sparks.active(),
             Visual::Aurora => self.aurora.active(),
@@ -483,6 +498,7 @@ impl Visualizer {
             Visual::Cloth => self.cloth.paint(painter, rect),
             Visual::Goniometer => self.goniometer.paint(painter, rect),
             Visual::Strings => self.strings.paint(painter, rect),
+            Visual::Harp => self.harp.paint(painter, rect),
             Visual::Ridges => self.paint_ridges(painter, rect),
             Visual::Strata => self.strata.paint(painter, rect),
             Visual::Chroma => self.paint_chroma(painter, rect),
@@ -982,6 +998,7 @@ mod tests {
             Visual::Cloth,
             Visual::Goniometer,
             Visual::Strings,
+            Visual::Harp,
         ] {
             let mut v = Visualizer::new();
             let ctx = egui::Context::default();

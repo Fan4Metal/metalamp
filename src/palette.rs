@@ -350,6 +350,15 @@ fn scheme(visual: Visual) -> Scheme {
             peak: &[0xffffff],
             by_level: false,
         },
+        // A concert harp: gold on the bass, ivory, silver-blue on the treble.
+        Visual::Harp => Scheme {
+            rows: &[
+                (0.0, &[0x5a3a0a, 0x4a4030, 0x22364e]),
+                (1.0, &[0xffc04a, 0xfff0c8, 0x8fd2ff]),
+            ],
+            peak: &[0xfff4d8, 0xffffff, 0xe6f6ff],
+            by_level: false,
+        },
         // The strings: bronze wound ones, then gold, the plain steel ones.
         Visual::Strings => Scheme {
             rows: &[

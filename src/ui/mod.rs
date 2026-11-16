@@ -10,6 +10,7 @@ pub mod beat;
 pub mod eq_window;
 pub mod fire;
 pub mod goniometer;
+pub mod harp;
 pub mod icons;
 pub mod info;
 pub mod library;

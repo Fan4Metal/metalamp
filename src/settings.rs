@@ -578,13 +578,15 @@ pub enum Visual {
     /// The notes on a guitar's neck: the strings ringing, the frets
     /// played lit.
     Strings,
+    /// A harp's strings, one a band, plucked as the bands' notes start.
+    Harp,
     /// An empty display, and no frames drawn for it.
     Off,
 }
 
 impl Visual {
     /// As the display's menu and the settings list them, "none" last.
-    pub const ALL: [Visual; 21] = [
+    pub const ALL: [Visual; 22] = [
         Visual::Spectrum,
         Visual::Led,
         Visual::Curve,
@@ -605,6 +607,7 @@ impl Visual {
         Visual::Chroma,
         Visual::Piano,
         Visual::Strings,
+        Visual::Harp,
         Visual::Off,
     ];
 
@@ -630,6 +633,7 @@ impl Visual {
             Visual::Chroma => tr!("Notes", "Ноты"),
             Visual::Piano => tr!("Piano", "Клавиатура"),
             Visual::Strings => tr!("Guitar strings", "Гитарные струны"),
+            Visual::Harp => tr!("Harp", "Арфа"),
             Visual::Off => tr!("No visualization", "Без визуализации"),
         }
     }
@@ -1021,7 +1025,8 @@ mod tests {
         assert_eq!(s.look().visual, VisualColours::Fire);
         // A click goes through "none" too.
         assert_eq!(Visual::Piano.next(), Visual::Strings);
-        assert_eq!(Visual::Strings.next(), Visual::Off);
+        assert_eq!(Visual::Strings.next(), Visual::Harp);
+        assert_eq!(Visual::Harp.next(), Visual::Off);
         assert_eq!(Visual::Off.next(), Visual::Spectrum);
         assert_eq!(Visual::Spectrum.next(), Visual::Led);
         // Kept by their names.
@@ -1036,6 +1041,7 @@ mod tests {
             (Visual::Cloth, "cloth"),
             (Visual::Goniometer, "goniometer"),
             (Visual::Strings, "strings"),
+            (Visual::Harp, "harp"),
         ] {
             assert_eq!(serde_json::to_string(&v).unwrap(), format!("\"{name}\""));
         }
