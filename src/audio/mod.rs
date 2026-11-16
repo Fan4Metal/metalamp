@@ -593,7 +593,6 @@ fn run(
         log::error!("cannot start the open thread: {e}");
     }
     run_player(rx, opener_tx, events, shared, ctx, device, dsp);
-    unsafe { windows::Win32::Media::timeEndPeriod(1) };
     // Decoders handed over and not taken, released while Media Foundation
     // is up here.
     while rx.try_recv().is_ok() {}
@@ -640,8 +639,10 @@ fn run_player(
         fade_in: None,
         seek_fade_ms: 0,
     };
+    let mut timer = FineTimer(false);
     loop {
         let busy = p.decoding.is_some() && !p.paused;
+        timer.set(busy);
         let wait = if busy { 10 } else { 250 };
         match rx.recv_timeout(Duration::from_millis(wait)) {
             Ok(cmd) => {
@@ -673,9 +674,34 @@ fn raise_priority() {
     {
         log::debug!("MMCSS: {}", mf::describe(&e));
     }
-    // Its waits of 10 ms last 10 ms, not the 15.6 of Windows' timer: the
-    // device holds little (`WRITE_AHEAD`). Ended by `run`.
-    unsafe { windows::Win32::Media::timeBeginPeriod(1) };
+}
+
+/// Windows' timer at 1 ms while sound plays, so the audio thread's waits
+/// of 10 ms last 10 ms, not up to 15.6 + 10: the device holds little
+/// (`WRITE_AHEAD`). Back to Windows' own when nothing plays (paused,
+/// stopped) and when dropped: the finer timer wakes the processor more
+/// often, and a program that only sits there should not cost power.
+struct FineTimer(bool);
+
+impl FineTimer {
+    fn set(&mut self, on: bool) {
+        if on != self.0 {
+            self.0 = on;
+            unsafe {
+                if on {
+                    windows::Win32::Media::timeBeginPeriod(1);
+                } else {
+                    windows::Win32::Media::timeEndPeriod(1);
+                }
+            };
+        }
+    }
+}
+
+impl Drop for FineTimer {
+    fn drop(&mut self) {
+        self.set(false);
+    }
 }
 
 impl Player<'_> {
