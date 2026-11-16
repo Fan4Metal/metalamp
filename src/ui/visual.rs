@@ -39,6 +39,7 @@ use crate::audio::vis::Heard;
 use crate::palette;
 use crate::settings::Visual;
 use crate::ui::aurora::{self, Aurora};
+use crate::ui::cloth::{self, Cloth};
 use crate::ui::fire::{self, Fire};
 use crate::ui::goniometer::Goniometer;
 use crate::ui::lightning::{self, Lightning};
@@ -100,6 +101,7 @@ pub struct Visualizer {
     fire: Fire,
     sparks: Sparks,
     aurora: Aurora,
+    cloth: Cloth,
     goniometer: Goniometer,
     strings: Strings,
     /// The ridges' lines, oldest first: the levels across, the lowest
@@ -150,6 +152,7 @@ impl Visualizer {
             fire: Fire::new(),
             sparks: Sparks::new(),
             aurora: Aurora::new(),
+            cloth: Cloth::new(),
             goniometer: Goniometer::new(),
             strings: Strings::new(),
             ridges: VecDeque::new(),
@@ -310,6 +313,16 @@ impl Visualizer {
                     None => self.ridges.clear(),
                 }
             }
+            Visual::Cloth => {
+                let levels = heard.map(|(s, h)| {
+                    let levels =
+                        self.analyzer
+                            .levels(&s[s.len() - spectrum::N..], h.rate, cloth::BANDS);
+                    (smoothed(&levels), new as f32 / h.rate as f32)
+                });
+                let heard = levels.as_ref().map(|(l, seconds)| (l.as_slice(), *seconds));
+                self.cloth.feed(heard, dt);
+            }
             Visual::Strata => {
                 let bands = Strata::lines(size.y);
                 let levels = heard.map(|(s, h)| {
@@ -445,6 +458,7 @@ impl Visualizer {
             Visual::Fire => self.fire.active(),
             Visual::Sparks => self.sparks.active(),
             Visual::Aurora => self.aurora.active(),
+            Visual::Cloth => self.cloth.active(),
             Visual::Goniometer => self.goniometer.active(),
             Visual::Waveform => !self.wave.is_empty(),
             Visual::Spectrogram => !self.gram.is_empty(),
@@ -466,6 +480,7 @@ impl Visualizer {
             Visual::Fire => self.fire.paint(painter, rect),
             Visual::Sparks => self.sparks.paint(painter, rect),
             Visual::Aurora => self.aurora.paint(painter, rect),
+            Visual::Cloth => self.cloth.paint(painter, rect),
             Visual::Goniometer => self.goniometer.paint(painter, rect),
             Visual::Strings => self.strings.paint(painter, rect),
             Visual::Ridges => self.paint_ridges(painter, rect),
@@ -964,6 +979,7 @@ mod tests {
             Visual::Fire,
             Visual::Sparks,
             Visual::Aurora,
+            Visual::Cloth,
             Visual::Goniometer,
             Visual::Strings,
         ] {

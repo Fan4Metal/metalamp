@@ -540,8 +540,8 @@ pub enum Visual {
     Mirror,
     /// The spectra of the last moments as lines one behind the other.
     Ridges,
-    /// Each band's levels over time as lines one behind the other, the
-    /// bass in front, rolling from the right.
+    /// A string per band held at a nut on the left, the levels running
+    /// right along them as vibrating swells, plucked by the beats.
     Strata,
     /// The spectrum's bands as colours rolling from the right.
     Spectrogram,
@@ -561,6 +561,9 @@ pub enum Visual {
     Sparks,
     /// Curtains of light over the spectrum, swaying.
     Aurora,
+    /// A sheet in a frame, its near edge pushed by the spectrum, stones
+    /// dropped on it on the beats, the treble raining on it.
+    Cloth,
     /// The sound's peaks rolling from the right.
     Waveform,
     /// The wave itself.
@@ -581,7 +584,7 @@ pub enum Visual {
 
 impl Visual {
     /// As the display's menu and the settings list them, "none" last.
-    pub const ALL: [Visual; 20] = [
+    pub const ALL: [Visual; 21] = [
         Visual::Spectrum,
         Visual::Led,
         Visual::Curve,
@@ -595,6 +598,7 @@ impl Visual {
         Visual::Fire,
         Visual::Sparks,
         Visual::Aurora,
+        Visual::Cloth,
         Visual::Waveform,
         Visual::Scope,
         Visual::Goniometer,
@@ -619,6 +623,7 @@ impl Visual {
             Visual::Fire => tr!("Fire", "Огонь"),
             Visual::Sparks => tr!("Sparks", "Искры"),
             Visual::Aurora => tr!("Aurora", "Северное сияние"),
+            Visual::Cloth => tr!("Cloth", "Полотно"),
             Visual::Waveform => tr!("Waveform", "Волна"),
             Visual::Scope => tr!("Oscilloscope", "Осциллограф"),
             Visual::Goniometer => tr!("Goniometer", "Гониометр"),
@@ -1028,6 +1033,7 @@ mod tests {
             (Visual::Fire, "fire"),
             (Visual::Sparks, "sparks"),
             (Visual::Aurora, "aurora"),
+            (Visual::Cloth, "cloth"),
             (Visual::Goniometer, "goniometer"),
             (Visual::Strings, "strings"),
         ] {

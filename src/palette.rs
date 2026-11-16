@@ -296,6 +296,15 @@ fn scheme(visual: Visual) -> Scheme {
             peak: &[0xdcffe9, 0xd9fffa, 0xf0e0ff],
             by_level: false,
         },
+        // Silk: rose in the middle (the bass), violet, teal at the sides.
+        Visual::Cloth => Scheme {
+            rows: &[
+                (0.0, &[0x4a1040, 0x2a1a5e, 0x0a3a4a]),
+                (1.0, &[0xff5ab4, 0x9a7aff, 0x3ae8e0]),
+            ],
+            peak: &[0xffe0f2, 0xece6ff, 0xdcfffb],
+            by_level: false,
+        },
         // Indigo peaks round an ice-blue middle.
         Visual::Waveform => Scheme {
             rows: &[

@@ -5,6 +5,7 @@
 
 pub mod about;
 pub mod aurora;
+pub mod cloth;
 pub mod beat;
 pub mod eq_window;
 pub mod fire;
