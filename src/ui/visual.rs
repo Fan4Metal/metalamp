@@ -113,6 +113,10 @@ pub struct Visualizer {
     /// The ridges' lines, oldest first: the levels across, the lowest
     /// band first.
     ridges: VecDeque<Vec<f32>>,
+    /// The ridges' line heard now (the front one, not kept yet), and the
+    /// share of the way the lines have moved on to their next places.
+    ridge_live: Vec<f32>,
+    ridge_moved: f32,
     strata: Strata,
     /// Columns (or lines) owed to the history shown (fractions carried
     /// on).
@@ -165,6 +169,8 @@ impl Visualizer {
             strings: Strings::new(),
             harp: Harp::new(),
             ridges: VecDeque::new(),
+            ridge_live: Vec::new(),
+            ridge_moved: 0.0,
             strata: Strata::new(),
             owed: 0.0,
             wave: VecDeque::new(),
@@ -300,26 +306,34 @@ impl Visualizer {
                     self.ridges.clear();
                 }
                 let shown = self.ridges.iter().any(|l| l.iter().any(|&v| v > 0.0));
+                // The line heard now, every frame: the front one, coming
+                // up into its place until it is kept.
+                let line = match heard {
+                    Some((s, h)) => smoothed(&self.analyzer.levels(
+                        &s[s.len() - spectrum::N..],
+                        h.rate,
+                        points,
+                    )),
+                    None => vec![0.0; points],
+                };
                 match self.due(rate, new, RIDGE_S, dt, shown) {
                     Some(due) => {
-                        if due > 0 {
-                            let line = match heard {
-                                Some((s, h)) => smoothed(&self.analyzer.levels(
-                                    &s[s.len() - spectrum::N..],
-                                    h.rate,
-                                    points,
-                                )),
-                                None => vec![0.0; points],
-                            };
-                            for _ in 0..due.min(cap) {
-                                self.ridges.push_back(line.clone());
-                            }
+                        for _ in 0..due.min(cap) {
+                            self.ridges.push_back(line.clone());
                         }
                         while self.ridges.len() > cap {
                             self.ridges.pop_front();
                         }
+                        // How far the lines have moved on to their next
+                        // places.
+                        self.ridge_moved = if rate > 0 { self.owed } else { self.idle };
+                        self.ridge_live = line;
                     }
-                    None => self.ridges.clear(),
+                    None => {
+                        self.ridges.clear();
+                        self.ridge_live.clear();
+                        self.ridge_moved = 0.0;
+                    }
                 }
             }
             Visual::Harp => {
@@ -557,12 +571,25 @@ impl Visualizer {
         let ground = palette::list_bg();
         let colours = palette::visual_for(Visual::Ridges);
         let cx = rect.center().x;
-        for (i, line) in self.ridges.iter().enumerate() {
-            let age = n - 1 - i;
-            let depth = age as f32 / (lines - 1).max(1) as f32;
-            let base = rect.bottom() - 1.0 - spacing * age as f32;
+        let painter = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
+        // Each line a share of the way on to its next place, so they glide
+        // up between the lines kept; in front the line heard now, coming
+        // up from under the bottom into the front place.
+        let moved = self.ridge_moved;
+        let live = Some(&self.ridge_live).filter(|l| l.len() == points);
+        let all = self
+            .ridges
+            .iter()
+            .enumerate()
+            .map(|(i, line)| ((n - 1 - i) as f32 + moved, line))
+            .chain(live.map(|line| (moved - 1.0, line)));
+        for (age, line) in all {
+            let depth = (age / (lines - 1).max(1) as f32).clamp(0.0, 1.0);
+            let base = rect.bottom() - 1.0 - spacing * age;
             let width = rect.width() * (1.0 - RIDGE_NARROWER * depth);
             let tall = height * (1.0 - RIDGE_LOWER * depth);
+            // The oldest fades as it goes.
+            let leaving = (lines as f32 - age).clamp(0.0, 1.0);
             let shown: Vec<Pos2> = line
                 .iter()
                 .enumerate()
@@ -587,7 +614,7 @@ impl Visualizer {
                 mesh.add_triangle(i, i + 2, i + 3);
             }
             painter.add(mesh);
-            let fade = 1.0 - RIDGE_FAINTER * depth;
+            let fade = (1.0 - RIDGE_FAINTER * depth) * leaving;
             let left = cx - width / 2.0;
             painter.add(Shape::line(
                 shown,
@@ -1158,6 +1185,17 @@ mod tests {
         assert_eq!(v.ridges.len(), 2);
         assert_eq!(v.ridges[0].len(), 100);
         assert!(v.ridges[0].iter().any(|&l| l > 0.5));
+        // 25 ms more: half the way on to the next places, the line heard
+        // now coming up in front.
+        v.feed(
+            Visual::Ridges,
+            Some((&s, Heard { rate, end: 16_000 })),
+            None,
+            size,
+        );
+        assert_eq!(v.ridges.len(), 2);
+        assert!((v.ridge_moved - 0.5).abs() < 0.01, "{}", v.ridge_moved);
+        assert_eq!(v.ridge_live.len(), 100);
         // Never more than the display holds.
         for i in 1..20 {
             let end = 14_800 + i * 8000;
