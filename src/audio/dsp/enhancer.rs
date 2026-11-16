@@ -13,13 +13,12 @@
 //!   turning warmth on or off does not shift the sound.
 //! - **Bass**: a low shelf under 100 Hz, and harmonics of the band under
 //!   120 Hz, which small speakers that cannot play the fundamental still
-//!   make heard as bass (the missing fundamental). The harmonics carry no
-//!   fundamental of their own (a saturator's output is mostly its input,
-//!   which only added more bass): the band rectified gives the even ones
-//!   (2f, 4f, …), the third Chebyshev polynomial of the band levelled by
-//!   its envelope the third (3f); both are needed, the even ones alone
-//!   are heard an octave up. Kept between 90 and 500 Hz, and put into the
-//!   front pair only.
+//!   make heard as bass (the missing fundamental): the band rectified
+//!   gives the even ones (2f, 4f, …), with no fundamental; the cube of
+//!   the band levelled by its envelope the third (3f), with some of the
+//!   fundamental in phase on the peaks, which the shelf's bass keeps; both
+//!   are needed, the even ones alone are heard an octave up. Kept between
+//!   90 and 500 Hz, and put into the front pair only.
 //! - **Clarity**: the second harmonics (and sum tones) of the band from
 //!   3 to 8 kHz, squared, so nothing of the band itself is added (a
 //!   saturator's near-linear output, high-passed twice, cancelled the
@@ -154,9 +153,12 @@ impl Bass {
         let n = low / self.env.max(1e-6);
         // The rectified band: 2f, 4f, … (its mean goes in the high-pass).
         let even = low.abs();
-        // T3(n) = 4n³ - 3n is cos 3θ for n = cos θ: the third harmonic
-        // alone of a tone at the envelope's level.
-        let third = BASS_THIRD * low * (4.0 * n * n - 3.0);
+        // The cube: a tone at the envelope's level gives its third
+        // harmonic at `BASS_THIRD` and its fundamental, in phase, three
+        // times that. Not T3(n) = 4n³ - 3n, the third alone at that level:
+        // music stays under the envelope, which holds its peaks, and there
+        // -3n was the band turned over, cancelling the shelf.
+        let third = BASS_THIRD * 4.0 * low * n * n;
         self.harm_lp.run(self.harm_hp.run(even + third))
     }
 }
@@ -552,21 +554,58 @@ mod tests {
     }
 
     #[test]
-    fn bass_adds_the_second_and_third_harmonics_but_no_fundamental() {
+    fn bass_adds_the_second_and_third_harmonics_over_the_shelf() {
         let rate = 48000;
         let mut e = Enhancer::new(rate, 2, only(|a| a.bass = 1.0));
         let original = sine(rate, 60.0, 0.3, 2.0);
         let mut s = original.clone();
         e.process(&mut s);
         let shelf = shelved(&original, Coeffs::low_shelf(rate, 100.0, BASS_SHELF_DB));
-        // The fundamental is the shelf's alone.
+        // The fundamental is the shelf's and a little of the cube's, in
+        // phase: the harmonics never take from it.
         let (got, want) = (level(&s, rate, 60.0), level(&shelf, rate, 60.0));
-        assert!((got / want - 1.0).abs() < 0.03, "{got} against {want}");
+        assert!(got >= want && got < 1.3 * want, "{got} against {want}");
         // 2f and 3f, which the shelf alone does not make.
         for f in [120.0, 180.0] {
             assert!(level(&shelf, rate, f) < 1e-3);
             assert!(level(&s, rate, f) > 0.05, "{f} Hz: {}", level(&s, rate, f));
         }
+    }
+
+    #[test]
+    fn bass_under_its_envelope_is_not_turned_over() {
+        // A 100 Hz tone (a guitar's low strings; at 60 Hz the harmonics'
+        // high-pass turns what it adds by 120° and hides this) loud for
+        // 100 ms, then quiet for 300: the envelope holds the loud level
+        // into the quiet part, as it holds music's peaks. There the bass
+        // must still be the shelf's or more (T3's -3n turned it over and
+        // cancelled the shelf: on a real song the octave 62-125 Hz got
+        // +0.4 dB at a bass of 6 where the shelf alone gives +1.5).
+        let rate = 48000;
+        let period = rate as usize * 2 / 5;
+        let loud = rate as usize / 10;
+        let mut e = Enhancer::new(rate, 2, only(|a| a.bass = 1.0));
+        let original: Vec<f32> = (0..2 * rate as usize)
+            .flat_map(|i| {
+                let amp = if i % period < loud { 0.3 } else { 0.05 };
+                let x = amp * (2.0 * PI * 100.0 * i as f32 / rate as f32).sin();
+                [x, x]
+            })
+            .collect();
+        let mut s = original.clone();
+        e.process(&mut s);
+        let shelf = shelved(&original, Coeffs::low_shelf(rate, 100.0, BASS_SHELF_DB));
+        // The quiet parts of the second second, from 50 ms into them.
+        let quiet = |v: &[f32]| -> Vec<f32> {
+            v.chunks(2)
+                .enumerate()
+                .skip(rate as usize)
+                .filter(|(i, _)| i % period >= loud + rate as usize / 20)
+                .map(|(_, f)| f[0])
+                .collect()
+        };
+        let (got, want) = (rms(&quiet(&s)), rms(&quiet(&shelf)));
+        assert!(got >= want, "{got} against {want}");
     }
 
     #[test]
