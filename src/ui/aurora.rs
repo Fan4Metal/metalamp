@@ -5,23 +5,40 @@
 //! the edge and fades upwards, in the visualization's colours: the edge
 //! a colour's top, the light above it a colour further across. On a dark
 //! theme it is added to the ground, over a few faint stars. The levels
-//! rise quickly and fall slowly, so the curtains breathe with the music
-//! rather than flicker. Paused, it stands; stopped, it fades.
+//! rise at once and fall in a third of a second, raised to a power so the
+//! upper part of the range, where music sits, moves the light; the louder
+//! the music, the faster the curtains sway and the rays drift. A beat
+//! makes them flash and leap, and sends a surge of light across from the
+//! bass. Paused, it stands; stopped, it fades.
 
 use std::f32::consts::TAU;
 
 use egui::{Color32, Mesh, Painter, Rect, pos2};
 
-use super::beat::{glow, level_at};
+use super::beat::{Beat, glow, level_at};
 use crate::palette;
 
 /// The bands of the levels fed.
 pub const BANDS: usize = 40;
 /// The levels rise in about `RISE_S` and fall in about `FALL_S`.
-const RISE_S: f32 = 0.08;
-const FALL_S: f32 = 0.7;
-/// A level under this lights nothing.
-const FROM: f32 = 0.2;
+const RISE_S: f32 = 0.06;
+const FALL_S: f32 = 0.35;
+/// A level under `FROM` lights nothing; over it, raised to `POWER`, so
+/// the upper part of the range, where music sits, moves the light.
+const FROM: f32 = 0.25;
+const POWER: f32 = 1.8;
+/// The curtains sway and their rays drift at `CALM` of their speed in
+/// silence, up to `CALM` + `LIVELY` at full level, a kick adding `KICKED`.
+const CALM: f32 = 0.5;
+const LIVELY: f32 = 1.5;
+const KICKED: f32 = 1.5;
+/// A beat lights the curtains up to `FLASH` more and raises them up to
+/// `LEAP` of the height, and sends a surge of light across from the bass
+/// at `SURGE_SPEED` widths a second, `SURGE_WIDTH` wide.
+const FLASH: f32 = 0.8;
+const LEAP: f32 = 0.06;
+const SURGE_SPEED: f32 = 1.4;
+const SURGE_WIDTH: f32 = 0.12;
 /// A column of the curtains every so many points.
 const PITCH: f32 = 3.0;
 /// The curtains, the furthest first: the height of their edge (a share
@@ -34,7 +51,12 @@ const STAR_LIGHT: f32 = 0.35;
 
 pub struct Aurora {
     levels: Vec<f32>,
+    /// The curtains' clock, running faster as the music is louder.
     time: f32,
+    beat: Beat,
+    /// The surges running across: their place (a share of the width) and
+    /// strength.
+    surges: Vec<(f32, f32)>,
 }
 
 impl Default for Aurora {
@@ -48,6 +70,8 @@ impl Aurora {
         Aurora {
             levels: vec![0.0; BANDS],
             time: 0.0,
+            beat: Beat::default(),
+            surges: Vec::new(),
         }
     }
 
@@ -57,11 +81,21 @@ impl Aurora {
         if levels.is_some() && !moved {
             return;
         }
-        self.time += dt;
+        let overall = self.levels.iter().sum::<f32>() / BANDS as f32;
+        self.time += dt * (CALM + LIVELY * overall + KICKED * self.beat.kick);
+        for surge in &mut self.surges {
+            surge.0 += SURGE_SPEED * dt;
+        }
+        self.surges.retain(|s| s.0 < 1.0 + 3.0 * SURGE_WIDTH);
+        if let Some(strength) = self.beat.feed(levels, dt) {
+            self.surges.push((-SURGE_WIDTH, strength));
+        }
         for (i, shown) in self.levels.iter_mut().enumerate() {
             let wanted = levels.map_or(0.0, |l| {
                 let place = i as f32 / (BANDS - 1) as f32;
-                ((level_at(l, place) - FROM) / (1.0 - FROM)).clamp(0.0, 1.0)
+                ((level_at(l, place) - FROM) / (1.0 - FROM))
+                    .clamp(0.0, 1.0)
+                    .powf(POWER)
             });
             let speed = if wanted > *shown { RISE_S } else { FALL_S };
             *shown += (wanted - *shown) * (1.0 - (-dt / speed).exp());
@@ -73,7 +107,19 @@ impl Aurora {
 
     /// Some light still shows: keep repainting.
     pub fn active(&self) -> bool {
-        self.levels.iter().any(|&l| l > 0.0)
+        self.levels.iter().any(|&l| l > 0.0) || !self.surges.is_empty()
+    }
+
+    /// The surges' light at `u` across.
+    fn surge_at(&self, u: f32) -> f32 {
+        self.surges
+            .iter()
+            .map(|&(at, strength)| {
+                let d = (u - at) / SURGE_WIDTH;
+                strength * (-d * d).exp()
+            })
+            .sum::<f32>()
+            .min(1.0)
     }
 
     pub fn paint(&self, painter: &Painter, rect: Rect) {
@@ -86,6 +132,7 @@ impl Aurora {
             return;
         }
         let overall = self.levels.iter().sum::<f32>() / BANDS as f32;
+        let kick = self.beat.kick;
 
         if dark {
             // Stars at fixed places, twinkling, dimmed under the light.
@@ -124,15 +171,22 @@ impl Aurora {
                 // Folds in the hem, with finer detail than the slow
                 // sway. The layers drift separately, giving them depth.
                 let fold = (TAU * u * (5.0 + k) + t * 0.45 + k * 1.7).sin();
-                let y = rect.top() + h * (edge + sway + fold * 0.018);
-                let tall = h * (0.2 + 0.65 * level) * (0.85 + 0.15 * (TAU * u * 2.0 + t).sin());
+                // A beat raises the curtains; a surge passing, more so.
+                let surge = self.surge_at(u);
+                let leap = LEAP * (kick + 0.8 * surge);
+                let y = rect.top() + h * (edge + sway + fold * 0.018 - leap);
+                let tall = h
+                    * (0.2 + 0.65 * level + 0.2 * surge)
+                    * (0.85 + 0.15 * (TAU * u * 2.0 + t).sin());
                 // Rays drifting along.
                 let rays = 0.45
                     + 0.55
                         * (0.5 + 0.5 * (TAU * u * 23.0 + t * 1.7 + 2.0 * k).sin())
                         * (0.5 + 0.5 * (TAU * u * 9.3 - t * 0.9 + k).sin());
                 let edge_fade = (u * 18.0).min((1.0 - u) * 18.0).min(1.0);
-                let bright = level.powf(0.65) * rays * light * edge_fade;
+                let bright = (level.powf(0.65) * rays * (1.0 + FLASH * kick) + 0.6 * surge)
+                    * light
+                    * edge_fade;
                 let place = (u * 0.8 + 0.1).min(1.0);
                 let low = colours.at(0.6 + 0.4 * level, place);
                 let low = if dark {
@@ -195,6 +249,42 @@ mod tests {
         let quiet = vec![0.15; BANDS];
         a.feed(Some(&quiet), true, 0.02);
         assert!(!a.active());
+    }
+
+    #[test]
+    fn louder_moves_the_light_more_and_faster() {
+        let settle = |level: f32| {
+            let mut a = Aurora::new();
+            for _ in 0..50 {
+                a.feed(Some(&[level; BANDS]), true, 0.02);
+            }
+            a
+        };
+        let (soft, loud) = (settle(0.6), settle(0.9));
+        // 0.6 against 0.9 heard: the light more than twice as high.
+        assert!(loud.levels[0] > soft.levels[0] * 2.0);
+        // The curtains sway faster.
+        assert!(loud.time > soft.time * 1.3);
+    }
+
+    #[test]
+    fn a_beat_sends_a_surge_across() {
+        let mut a = Aurora::new();
+        for _ in 0..30 {
+            a.feed(Some(&[0.1; BANDS]), true, 0.02);
+        }
+        let mut kick = [0.3; BANDS];
+        kick[..7].fill(0.95);
+        a.feed(Some(&kick), true, 0.02);
+        assert_eq!(a.surges.len(), 1);
+        assert!(a.beat.kick > 0.0);
+        a.feed(Some(&[0.1; BANDS]), true, 0.3);
+        let at = a.surges[0].0;
+        assert!(a.surge_at(at) > 0.4 && a.surge_at((at + 0.5).min(1.0)) < 0.1);
+        for _ in 0..60 {
+            a.feed(Some(&[0.1; BANDS]), true, 0.02);
+        }
+        assert!(a.surges.is_empty());
     }
 
     #[test]

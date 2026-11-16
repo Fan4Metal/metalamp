@@ -231,7 +231,7 @@ The display right of the player shows the sound heard. A click on it goes on to 
 - **Vortex**: the waves heard flying out from the middle in swirling trails that fade, thrown outwards on the beats, as the pictures of Winamp's MilkDrop.
 - **Fire**: flames rising from the spectrum along the bottom, as the fire of Doom, thrown higher on the beats.
 - **Sparks**: a fountain of sparks, each band of the spectrum throwing them its own way (the bass to the left), and a sheaf on each beat; they fall back, bounce and cool.
-- **Aurora**: curtains of light swaying over the spectrum, streaked by drifting rays.
+- **Aurora**: curtains of light swaying over the spectrum, streaked by drifting rays, swaying faster as the music is louder; each beat makes them flash and leap and sends a surge of light across.
 - **Cloth**: a sheet stretched in a frame, seen in perspective: the spectrum pushes its near edge, each beat drops a stone on it and the treble rains on it, the waves reflecting from the frame and passing through one another.
 - **Ripples**: a pond at night: drops fall on it as notes start in the bands, the bass on the left in wide slow rings, the treble on the right in small quick ones; where the rings cross they light up, and each beat sends a great wave over the whole pond.
 - **Ribbons**: three ribbons of light, the bass, the middle and the treble, winding across and turning about their length; each band's loudness flows along its ribbon from the left, widening and lighting it, and each beat sends a sharp bend running along them.
