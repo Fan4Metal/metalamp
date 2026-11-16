@@ -449,7 +449,7 @@ impl WindowLayout {
 
 /// The player and playlist layout's least size and its size at first,
 /// in points.
-pub const PLAYLIST_MIN_SIZE: [f32; 2] = [440.0, 400.0];
+pub const PLAYLIST_MIN_SIZE: [f32; 2] = [380.0, 400.0];
 pub const PLAYLIST_SIZE: [f32; 2] = [440.0, 780.0];
 
 /// What the window is: the library's layout, the player and playlist
