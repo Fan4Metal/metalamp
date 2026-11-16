@@ -74,7 +74,7 @@ pub const BASS_SHELF_DB: f32 = 6.0;
 /// distorted guitar is at 120 to 200 Hz, and a shelf at 100 Hz raised what
 /// a rock record hardly has (measured: +3 dB under 80 Hz, +0.4 dB in the
 /// record's loudest band, 159 Hz).
-pub const BASS_SHELF_HZ: f32 = 140.0;
+pub const BASS_SHELF_HZ: f32 = 120.0;
 /// The third harmonic's share against the rectified band's.
 const BASS_THIRD: f32 = 0.3;
 /// The harmonics' gain at a full bass.

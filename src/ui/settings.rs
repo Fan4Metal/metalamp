@@ -1561,8 +1561,8 @@ fn processing(
             ui,
             tr!("Bass", "Бас"),
             tr!(
-                "A shelf under 140 Hz and the harmonics of the bass, which small speakers make heard as bass they cannot play.",
-                "Полка ниже 140 Гц и гармоники баса, которые на небольших колонках слышны как бас, недоступный им самим."
+                "A shelf under 120 Hz and the harmonics of the bass, which small speakers make heard as bass they cannot play.",
+                "Полка ниже 120 Гц и гармоники баса, которые на небольших колонках слышны как бас, недоступный им самим."
             ),
             &mut dsp.bass,
         );
