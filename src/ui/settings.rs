@@ -1709,6 +1709,13 @@ pub(crate) fn tool(ui: &mut Ui, tip: &str, enabled: bool, icon: Icon) -> Respons
     response.on_hover_text(tip)
 }
 
+/// A built-in preset includes its headroom-setting preamp.
+fn built_in_preset(dsp: &DspSettings) -> Option<usize> {
+    eq::PRESETS
+        .iter()
+        .position(|p| p.bands == dsp.bands && p.preamp == dsp.preamp)
+}
+
 /// The equalizer's switch, the built-in presets and the user's own in one
 /// list (the one the sliders stand at named; "Custom" otherwise), and
 /// beside it saving the sliders as one's own and deleting one's own; the
@@ -1727,15 +1734,15 @@ fn eq_head(
         .data(|d| d.get_temp::<usize>(chosen_id))
         .filter(|&i| presets.get(i).is_some_and(same))
         .or_else(|| presets.iter().position(same));
-    // A built-in preset sets the preamp to 0: one stands at it only so.
-    let built_in = eq::PRESETS
-        .iter()
-        .find(|(_, _, bands)| *bands == dsp.bands && dsp.preamp == 0.0)
-        .map(|(en, ru, _)| tr!(*en, *ru));
+    // Presets include their preamp, which leaves room for their boosts.
+    let built_in = built_in_preset(dsp).map(|i| {
+        let p = eq::PRESETS[i];
+        tr!(p.name, p.ru)
+    });
     ui.horizontal(|ui| {
         switch(ui, &mut dsp.eq).on_hover_text(tr!(
-            "Ten bands and a preamp; the limiter after them keeps the sound from clipping.",
-            "Десять полос и предусиление; лимитер после них не даёт звуку клиповать."
+            "Ten bands and a preamp. Presets leave room for their boosts to preserve dynamics; the limiter catches remaining peaks. The line includes the bands and preamp at 48 kHz.",
+            "Десять полос и предусиление. Пресеты оставляют запас для усиления, сохраняя динамику; лимитер удерживает оставшиеся пики. Линия учитывает полосы и предусиление при 48 кГц."
         ));
         ui.add_space(4.0);
         let name = match (mine, built_in) {
@@ -1748,13 +1755,15 @@ fn eq_head(
             .selected_text(name)
             .width(width)
             .show_ui(ui, |ui| {
-                for (en, ru, bands) in eq::PRESETS {
-                    let on = mine.is_none() && bands == dsp.bands && dsp.preamp == 0.0;
-                    if ui.selectable_label(on, tr!(en, ru)).clicked() {
-                        dsp.bands = bands;
-                        dsp.preamp = 0.0;
+                for preset in eq::PRESETS {
+                    let on = mine.is_none()
+                        && preset.bands == dsp.bands
+                        && preset.preamp == dsp.preamp;
+                    if ui.selectable_label(on, tr!(preset.name, preset.ru)).clicked() {
+                        dsp.bands = preset.bands;
+                        dsp.preamp = preset.preamp;
                         // Flat leaves the switch as it is: nothing to hear.
-                        if bands.iter().any(|&b| b != 0.0) {
+                        if preset.bands.iter().any(|&b| b != 0.0) {
                             dsp.eq = true;
                         }
                     }
@@ -1926,8 +1935,8 @@ fn gain_text(gain: f32) -> String {
 
 /// The bands as metalmpv's: the preamp's column, a scale of ±12 dB, then
 /// a vertical slider per band with its gain over it and its frequency
-/// and reset under it, the 0 dB line across and a curve through the
-/// knobs drawn under them; greyed while the equalizer is off.
+/// and reset under it, the 0 dB line across and the combined frequency
+/// response including the preamp; greyed while the equalizer is off.
 fn bands(ui: &mut Ui, dsp: &mut DspSettings) {
     let on = dsp.eq;
     ui.add_space(6.0);
@@ -2038,7 +2047,12 @@ fn bands(ui: &mut Ui, dsp: &mut DspSettings) {
         } else {
             palette::text_weak().gamma_multiply(0.4)
         };
-        shapes.push(egui::Shape::line(smooth(&knobs), Stroke::new(2.0, curve)));
+        if let Some((top, bottom)) = travel {
+            shapes.push(egui::Shape::line(
+                eq_response_curve(ui, dsp, &knobs, top, bottom),
+                Stroke::new(2.0, curve),
+            ));
+        }
         ui.painter().set(under, egui::Shape::Vec(shapes));
     });
     ui.add_space(4.0);
@@ -2058,28 +2072,64 @@ fn slider_double_clicked(ui: &Ui, response: &Response) -> bool {
         })
 }
 
-/// A curve through `points` (Catmull-Rom, eight steps a span).
-fn smooth(points: &[egui::Pos2]) -> Vec<egui::Pos2> {
-    if points.len() < 3 {
-        return points.to_vec();
+#[derive(Clone)]
+struct EqCurve {
+    key: [u32; 11],
+    db: Vec<f32>,
+}
+
+/// Sample the actual filters only when the controls move. The columns
+/// stay evenly spaced; frequency between them is interpolated in log Hz.
+fn eq_response_curve(
+    ui: &Ui,
+    dsp: &DspSettings,
+    knobs: &[egui::Pos2],
+    top: f32,
+    bottom: f32,
+) -> Vec<egui::Pos2> {
+    const STEPS: usize = 16;
+    let mut key = [0; 11];
+    key[0] = dsp.preamp.to_bits();
+    for (to, gain) in key[1..].iter_mut().zip(dsp.bands) {
+        *to = gain.to_bits();
     }
-    let at = |i: isize| points[i.clamp(0, points.len() as isize - 1) as usize].to_vec2();
-    let mut out = Vec::new();
-    for i in 0..points.len() as isize - 1 {
-        let (p0, p1, p2, p3) = (at(i - 1), at(i), at(i + 1), at(i + 2));
-        for step in 0..8 {
-            let t = step as f32 / 8.0;
-            let (t2, t3) = (t * t, t * t * t);
-            let v = 0.5
-                * ((2.0 * p1)
-                    + (p2 - p0) * t
-                    + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
-                    + (3.0 * p1 - p0 - 3.0 * p2 + p3) * t3);
-            out.push(v.to_pos2());
-        }
-    }
-    out.push(*points.last().expect("three points or more"));
-    out
+    let id = ui.id().with("eq_response_curve");
+    let cached = ui.data(|d| d.get_temp::<EqCurve>(id)).filter(|c| c.key == key);
+    let db = cached.map_or_else(
+        || {
+            let response = eq::Response::new(48000, dsp.preamp, &dsp.bands);
+            let mut db = Vec::with_capacity((eq::BANDS.len() - 1) * STEPS + 1);
+            for pair in eq::BANDS.windows(2) {
+                for step in 0..STEPS {
+                    let t = step as f32 / STEPS as f32;
+                    let hz = pair[0] * (pair[1] / pair[0]).powf(t);
+                    db.push(response.gain_db(hz));
+                }
+            }
+            db.push(response.gain_db(eq::BANDS[eq::BANDS.len() - 1]));
+            ui.data_mut(|d| d.insert_temp(id, EqCurve { key, db: db.clone() }));
+            db
+        },
+        |c| c.db,
+    );
+    let zero = (top + bottom) / 2.0;
+    db.into_iter()
+        .enumerate()
+        .map(|(n, gain)| {
+            let band = n / STEPS;
+            let x = if band == knobs.len() - 1 {
+                knobs[band].x
+            } else {
+                egui::lerp(
+                    knobs[band].x..=knobs[band + 1].x,
+                    (n % STEPS) as f32 / STEPS as f32,
+                )
+            };
+            let y = zero - gain.clamp(-eq::RANGE_DB, eq::RANGE_DB)
+                * (bottom - top) / (2.0 * eq::RANGE_DB);
+            pos2(x, y)
+        })
+        .collect()
 }
 
 /// The width of the accents' row: ten swatches.
@@ -2746,4 +2796,60 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     settings.volume_step = d.volume_step;
     settings.tray = d.tray;
     updates.enabled = d.check_updates;
+}
+
+#[cfg(test)]
+mod eq_tests {
+    use super::*;
+
+    #[test]
+    fn built_in_presets_include_their_preamp() {
+        for (index, preset) in eq::PRESETS.iter().enumerate() {
+            let mut dsp = DspSettings {
+                preamp: preset.preamp,
+                bands: preset.bands,
+                ..Default::default()
+            };
+            assert_eq!(built_in_preset(&dsp), Some(index), "{}", preset.name);
+            dsp.preamp += 0.5;
+            assert_eq!(built_in_preset(&dsp), None, "{}", preset.name);
+        }
+    }
+
+    #[test]
+    fn equalizer_renders_and_the_curve_follows_the_preamp() {
+        let ctx = egui::Context::default();
+        let preset = eq::PRESETS[6];
+        let mut dsp = DspSettings {
+            eq: true,
+            preamp: preset.preamp,
+            bands: preset.bands,
+            ..Default::default()
+        };
+        let saved = dsp.clone();
+        let mut own = Vec::new();
+        let mut naming = None;
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0))),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input.clone(), |ui| {
+            ui.set_width(560.0);
+            equalizer(ui, &mut dsp, &mut own, &mut naming);
+        });
+        out.textures_delta.clear();
+        assert_eq!(dsp, saved);
+        assert!(!ctx.tessellate(out.shapes, out.pixels_per_point).is_empty());
+
+        let knobs: Vec<_> = (0..10).map(|i| pos2(40.0 * i as f32, 200.0)).collect();
+        let mut out = ctx.run_ui(input, |ui| {
+            let mut flat = DspSettings::default();
+            let zero = eq_response_curve(ui, &flat, &knobs, 100.0, 300.0);
+            assert!(zero.iter().all(|p| (p.y - 200.0).abs() < 1e-4));
+            flat.preamp = -3.0;
+            let lower = eq_response_curve(ui, &flat, &knobs, 100.0, 300.0);
+            assert!(lower.iter().all(|p| (p.y - 225.0).abs() < 1e-4));
+        });
+        out.textures_delta.clear();
+    }
 }
