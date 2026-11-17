@@ -1031,9 +1031,11 @@ mod tests {
         assert_eq!(old.dsp.air, 5);
         assert_eq!(old.dsp.clarity, 0);
         assert_eq!(old.dsp.bass_harmonics, 0);
+        assert_eq!(old.dsp.brilliance, 0);
         let mut new = old;
         new.dsp.clarity = 4;
         new.dsp.bass_harmonics = 3;
+        new.dsp.brilliance = 6;
         let json = serde_json::to_vec(&new).unwrap();
         let again = Settings::from_json(&json).unwrap();
         assert_eq!(again.dsp, new.dsp);

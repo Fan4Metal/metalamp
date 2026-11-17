@@ -1,7 +1,7 @@
 //! The sound tuning window, opened by the player bar's button under it:
 //! the same equalizer as the settings window's Sound page (the switch,
 //! the presets, one's own presets, the sliders) and under it the
-//! enhancer (its switch and six amounts two a row), each a section whose
+//! enhancer (its switch and seven amounts two a row), each a section whose
 //! sliders fold away (kept in the settings), on a card of its own,
 //! the limiter's state beside the cross (a click switches it).
 //! Not modal: the player and its keys go on. The cross, Esc or the bar's

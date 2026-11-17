@@ -1,7 +1,10 @@
-//! Six independent controls: bass depth, bass harmonics, clarity, air,
-//! stereo width and warmth. The bass detector only sees low frequencies;
-//! treble transients cannot duck its gain. Clarity uses linked dynamic EQ
-//! instead of synthesizing high-frequency sum tones. The boosts turn the
+//! Seven independent controls: bass depth, bass harmonics, brilliance,
+//! clarity, air, stereo width and warmth. The bass detector only sees low
+//! frequencies; treble transients cannot duck its gain. Clarity uses
+//! linked dynamic EQ instead of synthesizing high-frequency sum tones;
+//! brilliance is its mirror, a treble shelf raised as far as the treble is
+//! dull against the middle (what AudioBurst PowerFX's bands do, measured
+//! through a virtual cable: `BRIGHT_*`). The boosts turn the
 //! whole sound down only as far as they would push its peaks over the
 //! ceiling and over the peaks it had (an adaptive reserve, at most the
 //! largest boost): with headroom, as after loudness normalisation, a boost
@@ -17,6 +20,7 @@ pub struct Amounts {
     /// 0 to 1 each.
     pub bass: f32,
     pub bass_harmonics: f32,
+    pub brilliance: f32,
     pub clarity: f32,
     pub air: f32,
     pub width: f32,
@@ -34,6 +38,7 @@ impl Amounts {
         Self {
             bass: finite(self.bass),
             bass_harmonics: finite(self.bass_harmonics),
+            brilliance: finite(self.brilliance),
             clarity: finite(self.clarity),
             air: finite(self.air),
             width: finite(self.width),
@@ -46,6 +51,7 @@ impl Amounts {
     pub fn most_reserve_db(self, channels: usize) -> f32 {
         (BASS_SHELF_DB * self.bass + 2.0 * self.bass_harmonics)
             .max(AIR_SHELF_DB * self.air)
+            .max(BRIGHT_MOST_DB * self.brilliance)
             .max(if channels == 2 {
                 WIDTH_DB * self.width
             } else {
@@ -220,10 +226,50 @@ const TONE_SPAN_DB: [f32; 3] = [6.0, 6.0, 6.0];
 const TONE_CUT_DB: [f32; 3] = [1.5, 3.0, 3.0];
 /// Band powers under this (about -100 dBFS) are not judged.
 const TONE_FLOOR: f32 = 1e-10;
+/// Brilliance: the treble (7 to 13 kHz) judged against the
+/// middle as clarity's bands are, pink noise reading 0 dB, and a shelf at
+/// `BRIGHT_SHELF_HZ` raised by `BRIGHT_RATIO` of how far it is under
+/// `BRIGHT_TARGET_DB`, at most `BRIGHT_MOST_DB`, times the control's
+/// amount. PowerFX (Winamp), measured with tilted pink noise: its treble
+/// over 8 kHz raised by 0.6 of how far it was under pink + 6 dB, 14 dB at
+/// 18 dB under, nothing at 6 dB over; on MP3s 8 to 14 dB at 8 to 12 kHz.
+/// The target here is half PowerFX's, pink + 3 dB: music falls faster than
+/// pink, so an ordinary mix still gets several dB, a dull one more, a
+/// bright one none. At 10, Beast In Black's Blind And Frozen (60-90 s, its
+/// treble 12.7 dB under pink) gets a shelf of a mean 8.7 dB: +5.7 dB at
+/// 10 kHz, +7.1 at 12.5 kHz (PowerFX: +10 and +12); with the target at
+/// pink itself, +4.6 at 10 kHz. The shelf drops where cymbals come, so the
+/// spectrum's mean raise is under the shelf's mean.
+/// The treble band: two high-passes at `BRIGHT_FROM_HZ` (24 dB an octave)
+/// and a low-pass at `BRIGHT_TO_HZ`. A band-pass of the second order, as
+/// clarity's, let so much of the middle through its skirts that a treble
+/// low-passed at 3 kHz read only 11 dB under pink.
+const BRIGHT_FROM_HZ: f32 = 7000.0;
+const BRIGHT_TO_HZ: f32 = 13000.0;
+/// The band's power over the middle's for pink noise, dB: taken off, so
+/// pink reads 0 (`brilliance_reads_pink_noise_as_balanced`).
+const BRIGHT_PINK_DB: f32 = -3.6;
+const BRIGHT_SHELF_HZ: f32 = 8000.0;
+const BRIGHT_TARGET_DB: f32 = 3.0;
+const BRIGHT_RATIO: f32 = 0.6;
+pub const BRIGHT_MOST_DB: f32 = 12.0;
+/// The treble and the middle are followed over this (power, one pole):
+/// longer than clarity's 20 ms, so a hi-hat's stroke does not make the
+/// shelf breathe between strokes.
+const BRIGHT_MEAN_S: f32 = 0.06;
+/// The shelf comes up slowly and goes down fast when the treble is back
+/// (PowerFX: 10 dB in about 250 ms up, 11 dB in 60 to 100 ms down).
+const BRIGHT_RISE_S: f32 = 0.3;
+const BRIGHT_FALL_S: f32 = 0.04;
+/// Under this rate the treble band and shelf would sit at the edge: no
+/// brilliance.
+const BRIGHT_LEAST_RATE: u32 = 32000;
 struct ToneChannel {
     detect: [Biquad; 3],
     reference: Biquad,
     filters: [Biquad; 3],
+    bright_detect: [Biquad; 3],
+    bright: Biquad,
 }
 struct Tone {
     channels: Vec<ToneChannel>,
@@ -235,6 +281,16 @@ struct Tone {
     mean: f32,
     attack: f32,
     release: f32,
+    /// Brilliance's treble and middle powers, its treble over the middle
+    /// (dB, as `excess`; kept while the middle is silent) and its shelf now.
+    bright_power: f32,
+    bright_reference: f32,
+    bright_excess: f32,
+    bright_db: f32,
+    bright_mean: f32,
+    bright_rise: f32,
+    bright_fall: f32,
+    bright_able: bool,
 }
 impl Tone {
     fn new(rate: u32, channels: usize) -> Self {
@@ -246,6 +302,12 @@ impl Tone {
                     }),
                     reference: Biquad::new(Coeffs::band_pass(rate, REFERENCE_HZ, REFERENCE_Q)),
                     filters: [Biquad::default(); 3],
+                    bright_detect: [
+                        Biquad::new(Coeffs::high_pass(rate, BRIGHT_FROM_HZ, FRAC_1_SQRT_2)),
+                        Biquad::new(Coeffs::high_pass(rate, BRIGHT_FROM_HZ, FRAC_1_SQRT_2)),
+                        Biquad::new(Coeffs::low_pass(rate, BRIGHT_TO_HZ, FRAC_1_SQRT_2)),
+                    ],
+                    bright: Biquad::default(),
                 })
                 .collect(),
             power: [0.0; 3],
@@ -255,6 +317,53 @@ impl Tone {
             mean: release(rate, 0.02),
             attack: release(rate, 0.01),
             release: release(rate, 0.12),
+            bright_power: 0.0,
+            bright_reference: 0.0,
+            // Balanced until heard: a track's first moments are not raised
+            // for a treble not yet measured.
+            bright_excess: BRIGHT_TARGET_DB,
+            // (the target itself: nothing to raise)
+            bright_db: 0.0,
+            bright_mean: release(rate, BRIGHT_MEAN_S),
+            bright_rise: release(rate, BRIGHT_RISE_S),
+            bright_fall: release(rate, BRIGHT_FALL_S),
+            bright_able: rate >= BRIGHT_LEAST_RATE,
+        }
+    }
+    /// Brilliance's shelf for the treble heard: `amount` 0 to 1.
+    fn brilliance(&mut self, rate: u32, amount: f32) {
+        let reference = self.bright_reference * REFERENCE_Q;
+        if reference >= TONE_FLOOR {
+            let band = self.bright_power;
+            self.bright_excess = if band < TONE_FLOOR {
+                -100.0
+            } else {
+                10.0 * (band / reference).log10() - BRIGHT_PINK_DB
+            };
+        }
+        let target = if self.bright_able {
+            amount
+                * (BRIGHT_RATIO * (BRIGHT_TARGET_DB - self.bright_excess))
+                    .clamp(0.0, BRIGHT_MOST_DB)
+        } else {
+            0.0
+        };
+        let k = if target > self.bright_db {
+            self.bright_rise
+        } else {
+            self.bright_fall
+        };
+        self.bright_db += (target - self.bright_db) * (1.0 - (1.0 - k).powi(SUB as i32));
+        if target == 0.0 && self.bright_db.abs() < 1e-4 {
+            self.bright_db = 0.0;
+        }
+        let c = if self.bright_db == 0.0 {
+            Coeffs::default()
+        } else {
+            Coeffs::high_shelf(rate, BRIGHT_SHELF_HZ, self.bright_db)
+        };
+        for ch in &mut self.channels {
+            ch.bright.set(c);
         }
     }
     fn coefficients(&mut self, rate: u32, bass: f32, clarity: f32) {
@@ -293,6 +402,7 @@ impl Tone {
     fn run(&mut self, frame: &mut [f32]) {
         let mut reference = 0.0;
         let mut power = [0.0; 3];
+        let mut treble = 0.0;
         for (x, ch) in frame.iter_mut().zip(&mut self.channels) {
             let middle = ch.reference.run(*x);
             reference += middle * middle;
@@ -300,14 +410,19 @@ impl Tone {
                 let band = detector.run(*x);
                 power[i] += band * band;
             }
+            let band = ch.bright_detect.iter_mut().fold(*x, |y, f| f.run(y));
+            treble += band * band;
             for filter in &mut ch.filters {
                 *x = filter.run(*x);
             }
+            *x = ch.bright.run(*x);
         }
         self.reference += (reference - self.reference) * self.mean;
         for (env, p) in self.power.iter_mut().zip(power) {
             *env += (p - *env) * self.mean;
         }
+        self.bright_reference += (reference - self.bright_reference) * self.bright_mean;
+        self.bright_power += (treble - self.bright_power) * self.bright_mean;
     }
 }
 
@@ -568,6 +683,7 @@ impl Enhancer {
         self.now = Amounts {
             bass: slid(was.bass, to.bass),
             bass_harmonics: slid(was.bass_harmonics, to.bass_harmonics),
+            brilliance: slid(was.brilliance, to.brilliance),
             clarity: slid(was.clarity, to.clarity),
             air: slid(was.air, to.air),
             width: slid(was.width, to.width),
@@ -601,6 +717,7 @@ impl Enhancer {
         };
         self.tone
             .coefficients(self.rate, self.now.bass, self.now.clarity);
+        self.tone.brilliance(self.rate, self.now.brilliance);
     }
     /// Fixed latency even at zero. State keeps running while a stage is
     /// off, avoiding stale tails and allocations when a control moves.
@@ -675,6 +792,12 @@ impl Enhancer {
     /// 4 kHz, 7 kHz), for `--bench enhancer`.
     pub fn tone(&self) -> ([f32; 3], [f32; 3]) {
         (self.tone.excess, self.tone.db)
+    }
+
+    /// Brilliance's treble over the middle and its shelf now, dB, for
+    /// `--bench enhancer`.
+    pub fn brilliance(&self) -> (f32, f32) {
+        (self.tone.bright_excess, self.tone.bright_db)
     }
 }
 
@@ -1073,6 +1196,7 @@ mod tests {
         let a = Amounts {
             bass: 0.8,
             bass_harmonics: 0.4,
+            brilliance: 0.5,
             clarity: 0.7,
             air: 0.6,
             width: 0.2,
@@ -1109,6 +1233,128 @@ mod tests {
             .fold(0f32, f32::max);
         assert!(jump < 0.01, "{jump}");
     }
+    /// Pink noise, the same in both channels, about 0.1 RMS (Paul Kellet's
+    /// filter: within 0.05 dB of 3 dB an octave from 10 Hz at 44.1 kHz),
+    /// through `shelf` (none: as it is).
+    fn pink(rate: u32, seconds: f32, shelf: Option<Coeffs>) -> Vec<f32> {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut b = [0f32; 7];
+        let mut f = shelf.map(Biquad::new);
+        (0..(rate as f32 * seconds) as usize)
+            .flat_map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                let white = (seed >> 40) as f32 / (1u64 << 24) as f32 * 2.0 - 1.0;
+                b[0] = 0.99886 * b[0] + white * 0.055_517_9;
+                b[1] = 0.99332 * b[1] + white * 0.075_075_9;
+                b[2] = 0.969 * b[2] + white * 0.153_852;
+                b[3] = 0.8665 * b[3] + white * 0.310_485_6;
+                b[4] = 0.55 * b[4] + white * 0.532_952_2;
+                b[5] = -0.7616 * b[5] - white * 0.016_898;
+                let mut x = (b.iter().sum::<f32>() + white * 0.5362) * 0.03;
+                b[6] = white * 0.115_926;
+                if let Some(f) = &mut f {
+                    x = f.run(x);
+                }
+                [x, x]
+            })
+            .collect()
+    }
+
+    /// Brilliance's treble over the middle and its shelf after `s`, dB.
+    fn brilliance_after(rate: u32, s: &[f32]) -> (f32, f32) {
+        let mut e = Enhancer::new(rate, 2, only(|a| a.brilliance = 1.0));
+        e.process(&mut s.to_vec());
+        e.brilliance()
+    }
+
+    #[test]
+    fn brilliance_reads_pink_noise_as_balanced() {
+        for rate in [44100, 48000, 96000] {
+            let (excess, db) = brilliance_after(rate, &pink(rate, 3.0, None));
+            assert!(excess.abs() < 1.0, "{rate}: {excess} dB");
+            // Pink is raised towards pink + `BRIGHT_TARGET_DB`.
+            let wanted = BRIGHT_RATIO * (BRIGHT_TARGET_DB - excess);
+            assert!((db - wanted).abs() < 0.3, "{rate}: {db} dB");
+        }
+    }
+
+    #[test]
+    fn brilliance_raises_dull_treble_and_leaves_bright_treble_alone() {
+        let rate = 44100;
+        // The treble over 4 kHz 12 dB under pink: raised by 0.6 of how far
+        // it is under the target.
+        let dull = pink(rate, 3.0, Some(Coeffs::high_shelf(rate, 4000.0, -12.0)));
+        let (excess, db) = brilliance_after(rate, &dull);
+        assert!((-12.5..-10.5).contains(&excess), "{excess} dB");
+        let wanted = BRIGHT_RATIO * (BRIGHT_TARGET_DB - excess);
+        assert!((db - wanted).abs() < 0.5, "{excess} dB: {db} dB");
+        // At most `BRIGHT_MOST_DB`, however dull.
+        let dark = pink(rate, 3.0, Some(Coeffs::low_pass(rate, 3000.0, FRAC_1_SQRT_2)));
+        let (_, db) = brilliance_after(rate, &dark);
+        assert!((BRIGHT_MOST_DB - 0.1..=BRIGHT_MOST_DB).contains(&db), "{db} dB");
+        // 6 dB over pink: nothing at all, the shelf an exact wire.
+        let bright = pink(rate, 3.0, Some(Coeffs::high_shelf(rate, 4000.0, 6.0)));
+        let mut s = bright.clone();
+        let mut e = Enhancer::new(rate, 2, only(|a| a.brilliance = 1.0));
+        e.process(&mut s);
+        assert_eq!(e.brilliance().1, 0.0);
+        assert_eq!(s[2 * LATENCY..], bright[..bright.len() - 2 * LATENCY]);
+    }
+
+    #[test]
+    fn brilliance_comes_up_slowly_and_goes_down_fast() {
+        let rate = 44100;
+        let dull = pink(rate, 3.0, Some(Coeffs::high_shelf(rate, 4000.0, -12.0)));
+        // Over the target: nothing wanted once the treble is back.
+        let bright = pink(rate, 1.0, Some(Coeffs::high_shelf(rate, 4000.0, 6.0)));
+        let mut e = Enhancer::new(rate, 2, only(|a| a.brilliance = 1.0));
+        let tenth = 2 * rate as usize / 10;
+        let mut s = dull[..tenth].to_vec();
+        e.process(&mut s);
+        let early = e.brilliance().1;
+        let mut s = dull[tenth..].to_vec();
+        e.process(&mut s);
+        let raised = e.brilliance().1;
+        assert!(raised > 7.0, "{raised} dB");
+        // About 0.3 s to come up: under half of it after 0.1 s.
+        assert!(
+            (0.1..0.5).contains(&(early / raised)),
+            "after 0.1 s: {early} of {raised} dB"
+        );
+        let mut s = bright[..tenth].to_vec();
+        e.process(&mut s);
+        let back = e.brilliance().1;
+        assert!(
+            back < 0.35 * raised,
+            "0.1 s after the treble came back: {back} of {raised} dB"
+        );
+        let mut s = bright[tenth..2 * tenth].to_vec();
+        e.process(&mut s);
+        let gone = e.brilliance().1;
+        assert!(gone < 0.1 * raised, "0.2 s after: {gone} of {raised} dB");
+    }
+
+    #[test]
+    fn brilliance_raises_the_treble_it_measures() {
+        // A dull mix: 1 kHz at 0.1, 10 kHz at 0.01 (pink would hold the
+        // band 10 kHz as loud as 1 kHz's).
+        let rate = 48000;
+        let original: Vec<f32> = (0..3 * rate as usize)
+            .flat_map(|i| {
+                let t = 2.0 * PI * i as f32 / rate as f32;
+                let x = 0.1 * (1000.0 * t).sin() + 0.01 * (10000.0 * t).sin();
+                [x, x]
+            })
+            .collect();
+        let s = matched(only(|a| a.brilliance = 1.0), &original);
+        let treble = 20.0 * (level(&s, rate, 10000.0) / 0.01).log10();
+        let middle = 20.0 * (level(&s, rate, 1000.0) / 0.1).log10();
+        assert!(treble > 5.0, "{treble} dB");
+        assert!(middle.abs() < 0.2, "{middle} dB");
+    }
+
     #[test]
     fn all_controls_stay_finite_at_supported_rates_and_layouts() {
         for rate in [8000, 22050, 44100, 48000, 96000, 192000] {
@@ -1116,6 +1362,7 @@ mod tests {
                 let a = Amounts {
                     bass: 1.0,
                     bass_harmonics: 1.0,
+                    brilliance: 1.0,
                     clarity: 1.0,
                     air: 1.0,
                     width: 1.0,

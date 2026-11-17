@@ -1564,17 +1564,18 @@ fn processing(
 /// the switch in the equalizer's window.
 fn enhancer_hint() -> &'static str {
     tr!(
-        "Six independent controls; 0 leaves a part alone. A boost turns the rest down only as far as the peaks need: with loudness normalisation, hardly ever.",
-        "Шесть независимых регуляторов; 0 оставляет часть без изменений. Усиление приглушает остальное лишь настолько, насколько этого требуют пики: при нормализации громкости почти никогда."
+        "Seven independent controls; 0 leaves a part alone. A boost turns the rest down only as far as the peaks need: with loudness normalisation, hardly ever.",
+        "Семь независимых регуляторов; 0 оставляет часть без изменений. Усиление приглушает остальное лишь настолько, насколько этого требуют пики: при нормализации громкости почти никогда."
     )
 }
 
 /// One of the enhancer's amounts: its name, what it does, where it is kept.
 type EnhancerAmount = (&'static str, &'static str, fn(&mut DspSettings) -> &mut u8);
 
-/// The enhancer's six amounts in the order shown (the window's grid takes
-/// them two a row: the bass's two, the treble's two, the image's two).
-fn enhancer_amounts() -> [EnhancerAmount; 6] {
+/// The enhancer's seven amounts in the order shown (the window's grid takes
+/// them two a row: the bass's two, the two raising the treble, clarity and
+/// width, warmth).
+fn enhancer_amounts() -> [EnhancerAmount; 7] {
     [
         (
             tr!("Bass", "Бас"),
@@ -1593,12 +1594,12 @@ fn enhancer_amounts() -> [EnhancerAmount; 6] {
             |d| &mut d.bass_harmonics,
         ),
         (
-            tr!("Clarity", "Ясность"),
+            tr!("Brilliance", "Блеск"),
             tr!(
-                "Gently turns down the presence and sibilance when they stand out against the middle; linked dynamic EQ, no synthesized high frequencies.",
-                "Мягко приглушает присутствие и сибилянты, когда они выделяются на фоне середины; динамическая коррекция, связанная между каналами, без синтеза высоких частот."
+                "Raises the treble from 8 kHz as far as it is dull against the middle, up to 12 dB: a dull recording gets more, a bright one nothing. Comes up over a fraction of a second and goes back at once when the treble returns.",
+                "Поднимает верх от 8 кГц настолько, насколько он тусклее середины, до 12 дБ: тусклая запись получает больше, яркая — ничего. Нарастает за доли секунды и сразу уходит, когда верх возвращается."
             ),
-            |d| &mut d.clarity,
+            |d| &mut d.brilliance,
         ),
         (
             tr!("Air", "Воздух"),
@@ -1607,6 +1608,14 @@ fn enhancer_amounts() -> [EnhancerAmount; 6] {
                 "Мягкая полка на 11 кГц, до 3 дБ. Без синтеза утраченных гармоник."
             ),
             |d| &mut d.air,
+        ),
+        (
+            tr!("Clarity", "Ясность"),
+            tr!(
+                "Gently turns down the presence and sibilance when they stand out against the middle; linked dynamic EQ, no synthesized high frequencies.",
+                "Мягко приглушает присутствие и сибилянты, когда они выделяются на фоне середины; динамическая коррекция, связанная между каналами, без синтеза высоких частот."
+            ),
+            |d| &mut d.clarity,
         ),
         (
             tr!("Width", "Ширина"),
@@ -1636,8 +1645,8 @@ const ENHANCER_GAP: f32 = 28.0;
 /// columns: the switch and the name on the left (a click on the name folds
 /// or unfolds it), on the right, folded, the amounts not at 0, a round
 /// arrow putting every amount back to 0 under the equalizer's bin and the
-/// fold's chevron (`fold_button`) under its chevron; unfolded, the six amounts
-/// two a row (`enhancer_cell`), greyed while it is off.
+/// fold's chevron (`fold_button`) under its chevron; unfolded, the seven
+/// amounts two a row (`enhancer_cell`), greyed while it is off.
 pub(crate) fn enhancer(ui: &mut Ui, dsp: &mut DspSettings, open: &mut bool) {
     let amounts = enhancer_amounts();
     let mut fold = fold_of(ui, "eq_enhancer", *open);
@@ -1700,7 +1709,7 @@ pub(crate) fn enhancer(ui: &mut Ui, dsp: &mut DspSettings, open: &mut bool) {
     });
 }
 
-/// The six amounts two a row, greyed while the enhancer is off.
+/// The amounts two a row (the last alone), greyed while the enhancer is off.
 fn enhancer_grid(ui: &mut Ui, dsp: &mut DspSettings, amounts: &[EnhancerAmount], on: bool) {
     ui.add_enabled_ui(on, |ui| {
         let cell = ((ui.available_width() - ENHANCER_GAP) / 2.0).floor();
