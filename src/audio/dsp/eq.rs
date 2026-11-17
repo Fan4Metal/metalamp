@@ -16,7 +16,7 @@ pub struct Preset {
     pub preamp: f32,
     pub bands: [f32; 10],
 }
-/// Gentle starting points, with output headroom included in the preamp.
+/// Moderate tonal curves with neutral preamp; gain remains a manual control.
 /// Saved user curves retain their values and their manually chosen preamp.
 pub const PRESETS: [Preset; 11] = [
     Preset {
@@ -28,61 +28,61 @@ pub const PRESETS: [Preset; 11] = [
     Preset {
         name: "Warm",
         ru: "Тёплый",
-        preamp: -2.5,
+        preamp: 0.0,
         bands: [2.0, 1.5, 0.5, 0.0, -0.5, -0.5, -1.0, -1.0, -1.0, -1.0],
     },
     Preset {
         name: "Bright",
         ru: "Светлый",
-        preamp: -2.5,
+        preamp: 0.0,
         bands: [-1.0, -0.5, 0.0, 0.0, 0.0, 0.5, 1.5, 2.0, 2.0, 2.0],
     },
     Preset {
         name: "Bass",
         ru: "Бас",
-        preamp: -3.5,
+        preamp: 0.0,
         bands: [3.0, 2.5, 1.0, 0.0, -0.5, -0.5, 0.0, 0.0, 0.0, 0.0],
     },
     Preset {
         name: "Bass and treble",
         ru: "Бас и верх",
-        preamp: -2.5,
+        preamp: 0.0,
         bands: [2.0, 1.5, 0.0, -1.0, -1.0, 0.0, 1.0, 1.5, 1.5, 1.5],
     },
     Preset {
         name: "Vocal",
         ru: "Вокал",
-        preamp: -2.5,
+        preamp: 0.0,
         bands: [-2.0, -1.0, 0.0, 0.5, 1.5, 2.0, 0.0, -0.5, -0.5, -0.5],
     },
     Preset {
         name: "Rock",
         ru: "Рок",
-        preamp: -2.5,
+        preamp: 0.0,
         bands: [2.0, 1.0, -0.5, -1.0, -0.5, 0.5, 1.0, 1.0, 1.0, 1.0],
     },
     Preset {
         name: "Pop",
         ru: "Поп",
-        preamp: -1.5,
+        preamp: 0.0,
         bands: [0.5, 0.0, -0.5, 0.0, 1.0, 1.0, 0.5, 0.5, 0.5, 0.5],
     },
     Preset {
         name: "Electronic",
         ru: "Электронная музыка",
-        preamp: -3.0,
+        preamp: 0.0,
         bands: [2.5, 1.5, 0.0, -0.5, -0.5, 0.0, 1.0, 1.5, 1.5, 1.5],
     },
     Preset {
         name: "Acoustic",
         ru: "Акустика",
-        preamp: -1.5,
+        preamp: 0.0,
         bands: [-0.5, -0.5, 0.0, 0.5, 0.5, 1.0, 0.5, 0.5, 0.5, 0.5],
     },
     Preset {
         name: "Small speakers",
         ru: "Небольшие колонки",
-        preamp: -1.5,
+        preamp: 0.0,
         bands: [-3.0, 0.0, 1.0, 1.0, 0.5, 0.0, 0.5, 0.0, -0.5, -0.5],
     },
 ];
@@ -419,11 +419,12 @@ mod tests {
         }
     }
     #[test]
-    fn presets_have_headroom_and_moderate_curves() {
+    fn presets_keep_neutral_preamp_and_moderate_curves() {
         for p in PRESETS {
+            assert_eq!(p.preamp, 0.0, "{}", p.name);
             for rate in [44100, 48000, 96000, 192000] {
                 let r = Response::new(rate, p.preamp, &p.bands);
-                assert!(r.peak_db() <= 0.05, "{} {rate}: {} dB", p.name, r.peak_db());
+                assert!(r.peak_db() <= 3.1, "{} {rate}: {} dB", p.name, r.peak_db());
                 assert!(p.bands.iter().all(|v| v.abs() <= 3.0));
             }
         }

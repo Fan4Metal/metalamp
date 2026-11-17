@@ -1709,7 +1709,7 @@ pub(crate) fn tool(ui: &mut Ui, tip: &str, enabled: bool, icon: Icon) -> Respons
     response.on_hover_text(tip)
 }
 
-/// A built-in preset includes its headroom-setting preamp.
+/// A built-in preset uses neutral preamp, unlike a manually adjusted curve.
 fn built_in_preset(dsp: &DspSettings) -> Option<usize> {
     eq::PRESETS
         .iter()
@@ -1734,15 +1734,15 @@ fn eq_head(
         .data(|d| d.get_temp::<usize>(chosen_id))
         .filter(|&i| presets.get(i).is_some_and(same))
         .or_else(|| presets.iter().position(same));
-    // Presets include their preamp, which leaves room for their boosts.
+    // Built-in presets start at neutral gain; saved user presets keep their preamp.
     let built_in = built_in_preset(dsp).map(|i| {
         let p = eq::PRESETS[i];
         tr!(p.name, p.ru)
     });
     ui.horizontal(|ui| {
         switch(ui, &mut dsp.eq).on_hover_text(tr!(
-            "Ten bands and a preamp. Presets leave room for their boosts to preserve dynamics; the limiter catches remaining peaks. The line includes the bands and preamp at 48 kHz.",
-            "Десять полос и предусиление. Пресеты оставляют запас для усиления, сохраняя динамику; лимитер удерживает оставшиеся пики. Линия учитывает полосы и предусиление при 48 кГц."
+            "Ten bands and a manual preamp. Built-in presets use 0 dB preamp; the limiter catches peaks when enabled. The line includes the bands and preamp at 48 kHz.",
+            "Десять полос и ручное предусиление. Встроенные пресеты используют предусиление 0 дБ; включённый лимитер удерживает пики. Линия учитывает полосы и предусиление при 48 кГц."
         ));
         ui.add_space(4.0);
         let name = match (mine, built_in) {
