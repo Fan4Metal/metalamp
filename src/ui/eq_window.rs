@@ -1,11 +1,13 @@
 //! The equalizer's window, opened by the player bar's button under it:
 //! the same equalizer as the settings window's Sound page (the switch,
-//! the presets, one's own presets, the sliders), on a card of its own,
+//! the presets, one's own presets, the sliders) and under it the
+//! enhancer (its switch and six amounts two a row), on a card of its own,
 //! the limiter's state beside the cross (a click switches it).
 //! Not modal: the player and its keys go on. The cross, Esc or the bar's
 //! button close it; it can be dragged by its free space. When the
-//! program's window cannot hold it (the player and playlist layout), it
-//! is a window of its own, as the settings are (`super::OwnWindow`).
+//! program's window cannot hold it under the button (the player and
+//! playlist layout, a low window), it is a window of its own, as the
+//! settings are (`super::OwnWindow`).
 
 use egui::{Align, Layout, Pos2, Rect, RichText, pos2, vec2};
 
@@ -20,6 +22,9 @@ const WIDTH: f32 = 560.0;
 const MARGIN: i8 = 16;
 /// Kept from the window's edges and from the button.
 const GAP: f32 = 6.0;
+/// The window's height until it has been laid out once (about the
+/// equalizer's and the enhancer's together, the margins with them).
+const HEIGHT: f32 = 540.0;
 
 #[derive(Default)]
 pub struct EqWindow {
@@ -39,6 +44,9 @@ pub struct EqWindow {
     /// The player's keys pressed in its own window, for the app to run
     /// (the program's window does not hear them).
     pub cmds: Vec<crate::keymap::Cmd>,
+    /// The enhancer's section unfolded: the setting `eq_enhancer_open`,
+    /// set by the app before `show` and taken back after it.
+    pub enhancer_open: bool,
 }
 
 /// The limiter's state, "Limiter: on" (the state in the accent) or "off",
@@ -115,10 +123,14 @@ impl EqWindow {
         let fresh = std::mem::take(&mut self.fresh);
         let outer = WIDTH + 2.0 * f32::from(MARGIN);
         let screen = ctx.content_rect();
-        // Out of the program's window when it cannot hold it: as it opens,
-        // and when it gets smaller (another layout chosen); once out, it
-        // stays out until closed.
-        let small = screen.width() < outer + 2.0 * GAP;
+        // Out of the program's window when it cannot hold it under the
+        // button: as it opens, and when it gets smaller (another layout
+        // chosen); once out, it stays out until closed.
+        if self.height <= 0.0 {
+            self.height = HEIGHT;
+        }
+        let small = screen.width() < outer + 2.0 * GAP
+            || screen.bottom() < self.anchor.y + self.height + 2.0 * GAP;
         if fresh || (small && !self.windowed) {
             self.windowed = small;
             self.window.reset();
@@ -149,9 +161,12 @@ impl EqWindow {
             window = window.current_pos(pos2(x, self.anchor.y + GAP));
         }
         let mut close = false;
-        window.show(ctx, |ui| {
+        let shown = window.show(ctx, |ui| {
             close |= self.content(ui, dsp, presets);
         });
+        if let Some(shown) = shown {
+            self.height = shown.response.rect.height();
+        }
         // Esc: a list open over it or the name being typed take it first.
         if !fresh
             && keys
@@ -192,6 +207,10 @@ impl EqWindow {
         });
         ui.add_space(6.0);
         crate::ui::settings::equalizer(ui, dsp, presets, &mut self.naming);
+        ui.add_space(6.0);
+        crate::ui::settings::divider(ui);
+        ui.add_space(10.0);
+        crate::ui::settings::enhancer(ui, dsp, &mut self.enhancer_open);
         close
     }
 
@@ -210,9 +229,6 @@ impl EqWindow {
     ) -> bool {
         let margin = f32::from(MARGIN);
         let width = WIDTH + 2.0 * margin;
-        if self.height <= 0.0 {
-            self.height = 380.0;
-        }
         let size = vec2(width, self.height);
         let centre = ctx
             .input(|i| i.viewport().outer_rect)

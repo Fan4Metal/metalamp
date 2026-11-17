@@ -129,6 +129,8 @@ pub struct Settings {
     pub dsp: crate::audio::dsp::DspSettings,
     /// The user's equalizer presets (the classic ones are built in).
     pub eq_presets: Vec<EqPreset>,
+    /// The enhancer's section unfolded in the equalizer's window.
+    pub eq_enhancer_open: bool,
     /// The crossfade between tracks, in seconds (0: none), and whether
     /// between the tracks of one folder too (else albums play gapless).
     pub crossfade: u8,
@@ -719,6 +721,7 @@ impl Default for Settings {
             output_device_name: String::new(),
             dsp: Default::default(),
             eq_presets: Vec::new(),
+            eq_enhancer_open: true,
             crossfade: 0,
             crossfade_in_albums: false,
             crossfade_manual: 0.0,

@@ -2187,6 +2187,7 @@ impl eframe::App for App {
         crate::ui::paint_dragged_tracks(&ctx);
         // The equalizer's window, under the modals.
         let before = (self.settings.dsp.clone(), self.settings.eq_presets.clone());
+        self.eq_window.enhancer_open = self.settings.eq_enhancer_open;
         self.eq_window.show(
             &ctx,
             &mut self.settings.dsp,
@@ -2201,7 +2202,9 @@ impl eframe::App for App {
         if self.settings.dsp != before.0 {
             self.player.set_dsp(&self.settings.dsp);
         }
-        if (&self.settings.dsp, &self.settings.eq_presets) != (&before.0, &before.1) {
+        let folded = self.eq_window.enhancer_open != self.settings.eq_enhancer_open;
+        self.settings.eq_enhancer_open = self.eq_window.enhancer_open;
+        if folded || (&self.settings.dsp, &self.settings.eq_presets) != (&before.0, &before.1) {
             self.place_changed = Some(Instant::now());
         }
         self.file_info.cover_side = self.settings.tag_cover_side;

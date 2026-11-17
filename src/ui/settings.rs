@@ -885,7 +885,7 @@ fn section(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
 }
 
 /// A line between the rows of a card.
-fn divider(ui: &mut Ui) {
+pub(crate) fn divider(ui: &mut Ui) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
     ui.painter().hline(
         rect.x_range(),
@@ -1549,74 +1549,224 @@ fn processing(
         row(
             ui,
             tr!("Enhancer", "Улучшение звука"),
-            Some(tr!(
-                "Six independent controls; 0 leaves a part alone. A boost turns the rest down only as far as the peaks need: with loudness normalisation, hardly ever.",
-                "Шесть независимых регуляторов; 0 оставляет часть без изменений. Усиление приглушает остальное лишь настолько, насколько этого требуют пики: при нормализации громкости почти никогда."
-            )),
+            Some(enhancer_hint()),
             50.0,
             |ui| switch(ui, &mut dsp.enhancer),
         );
-        divider(ui);
-        amount(
-            ui,
+        for (title, hint, value) in enhancer_amounts() {
+            divider(ui);
+            amount(ui, title, hint, value(dsp));
+        }
+    });
+}
+
+/// What the enhancer's switch does: the Sound page's row and the tip of
+/// the switch in the equalizer's window.
+fn enhancer_hint() -> &'static str {
+    tr!(
+        "Six independent controls; 0 leaves a part alone. A boost turns the rest down only as far as the peaks need: with loudness normalisation, hardly ever.",
+        "Шесть независимых регуляторов; 0 оставляет часть без изменений. Усиление приглушает остальное лишь настолько, насколько этого требуют пики: при нормализации громкости почти никогда."
+    )
+}
+
+/// One of the enhancer's amounts: its name, what it does, where it is kept.
+type EnhancerAmount = (&'static str, &'static str, fn(&mut DspSettings) -> &mut u8);
+
+/// The enhancer's six amounts in the order shown (the window's grid takes
+/// them two a row: the bass's two, the treble's two, the image's two).
+fn enhancer_amounts() -> [EnhancerAmount; 6] {
+    [
+        (
             tr!("Bass", "Бас"),
             tr!(
                 "Depth below 120 Hz, controlled by the bass itself, with gentle low-mid masking reduction.",
                 "Глубина ниже 120 Гц с управлением по самому басу и мягким уменьшением гула в нижней середине."
             ),
-            &mut dsp.bass,
-        );
-        divider(ui);
-        amount(
-            ui,
+            |d| &mut d.bass,
+        ),
+        (
             tr!("Bass harmonics", "Гармоники баса"),
             tr!(
                 "Adds audible bass harmonics for small speakers. For full-range headphones, a low amount or zero is usually enough.",
                 "Добавляет слышимые гармоники баса для небольших колонок. Для полноразмерных наушников обычно достаточно малого значения или нуля."
             ),
-            &mut dsp.bass_harmonics,
-        );
-        divider(ui);
-        amount(
-            ui,
+            |d| &mut d.bass_harmonics,
+        ),
+        (
             tr!("Clarity", "Ясность"),
             tr!(
                 "Gently turns down the presence and sibilance when they stand out against the middle; linked dynamic EQ, no synthesized high frequencies.",
                 "Мягко приглушает присутствие и сибилянты, когда они выделяются на фоне середины; динамическая коррекция, связанная между каналами, без синтеза высоких частот."
             ),
-            &mut dsp.clarity,
-        );
-        divider(ui);
-        amount(
-            ui,
+            |d| &mut d.clarity,
+        ),
+        (
             tr!("Air", "Воздух"),
             tr!(
                 "A gentle high shelf at 11 kHz, up to 3 dB. Does not synthesize missing harmonics.",
                 "Мягкая полка на 11 кГц, до 3 дБ. Без синтеза утраченных гармоник."
             ),
-            &mut dsp.air,
-        );
-        divider(ui);
-        amount(
-            ui,
+            |d| &mut d.air,
+        ),
+        (
             tr!("Width", "Ширина"),
             tr!(
                 "Widens the mid and high stereo image with a smooth side shelf, preserving deep bass and the mono sum.",
                 "Плавно расширяет стереокартину средних и высоких частот, сохраняя глубокий бас и моносумму."
             ),
-            &mut dsp.width,
-        );
-        divider(ui);
-        amount(
-            ui,
+            |d| &mut d.width,
+        ),
+        (
             tr!("Warmth", "Теплота"),
             tr!(
                 "Soft saturation with antialias filtering. A low amount preserves the attack of already distorted instruments.",
                 "Мягкое насыщение с подавлением паразитных частот. Малое значение сохраняет атаку инструментов, уже записанных с дисторшном."
             ),
-            &mut dsp.warmth,
-        );
+            |d| &mut d.warmth,
+        ),
+    ]
+}
+
+/// The gap between the two columns of the enhancer's grid.
+const ENHANCER_GAP: f32 = 28.0;
+
+/// The enhancer in the equalizer's window (`ui::eq_window`), a section
+/// that folds as metalmpv's file info's: the arrow and the name (a click on
+/// either folds or unfolds it; `open`, kept in the settings), on the right
+/// the switch, a round arrow putting every amount back to 0 and, folded,
+/// the amounts not at 0; unfolded, the six amounts two a row
+/// (`enhancer_cell`), greyed while it is off.
+pub(crate) fn enhancer(ui: &mut Ui, dsp: &mut DspSettings, open: &mut bool) {
+    use egui::collapsing_header::{CollapsingState, paint_default_icon};
+    let amounts = enhancer_amounts();
+    let mut fold =
+        CollapsingState::load_with_default_open(ui.ctx(), egui::Id::new("eq_enhancer"), *open);
+    fold.set_open(*open);
+    let heading = ui
+        .horizontal(|ui| {
+            fold.show_toggle_button(ui, paint_default_icon);
+            let title = ui
+                .add(
+                    egui::Label::new(
+                        RichText::new(tr!("Enhancer", "Улучшение звука"))
+                            .size(15.0)
+                            .strong()
+                            .color(palette::text_bright()),
+                    )
+                    .sense(Sense::click()),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                switch(ui, &mut dsp.enhancer).on_hover_text(enhancer_hint());
+                ui.add_space(6.0);
+                let any = amounts.iter().any(|(_, _, value)| *value(dsp) != 0);
+                if tool(
+                    ui,
+                    tr!("All back to 0", "Вернуть все к 0"),
+                    any,
+                    Icon::RotateLeft,
+                )
+                .clicked()
+                {
+                    for (_, _, value) in &amounts {
+                        *value(dsp) = 0;
+                    }
+                }
+                if !fold.is_open() {
+                    // What is set, so a folded section still tells it.
+                    let set: Vec<String> = amounts
+                        .iter()
+                        .filter_map(|(title, _, value)| {
+                            let v = *value(dsp);
+                            (v != 0).then(|| format!("{title} {v}"))
+                        })
+                        .collect();
+                    let color = if dsp.enhancer {
+                        palette::text_weak()
+                    } else {
+                        palette::text_weak().gamma_multiply(0.6)
+                    };
+                    ui.add_space(4.0);
+                    ui.add(
+                        egui::Label::new(RichText::new(set.join(" · ")).size(12.5).color(color))
+                            .truncate(),
+                    );
+                }
+            });
+            title
+        })
+        .inner;
+    if heading.clicked() {
+        fold.toggle(ui);
+    }
+    *open = fold.is_open();
+    let on = dsp.enhancer;
+    fold.show_body_unindented(ui, |ui| {
+        ui.add_space(8.0);
+        enhancer_grid(ui, dsp, &amounts, on);
     });
+}
+
+/// The six amounts two a row, greyed while the enhancer is off.
+fn enhancer_grid(ui: &mut Ui, dsp: &mut DspSettings, amounts: &[EnhancerAmount], on: bool) {
+    ui.add_enabled_ui(on, |ui| {
+        let cell = ((ui.available_width() - ENHANCER_GAP) / 2.0).floor();
+        for pair in amounts.chunks(2) {
+            // Top-aligned: a centred row put the second cell lower.
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = ENHANCER_GAP;
+                for &(title, hint, value) in pair {
+                    ui.allocate_ui_with_layout(
+                        vec2(cell, 0.0),
+                        Layout::top_down(Align::Min),
+                        |ui| {
+                            ui.set_width(cell);
+                            enhancer_cell(ui, title, hint, value(dsp), on);
+                        },
+                    );
+                }
+            });
+            ui.add_space(6.0);
+        }
+    });
+}
+
+/// One amount in the enhancer's grid: its name (the hint as its tip) and
+/// its value (in the accent when not 0) over a slider of the cell's width;
+/// a double click on the slider puts it back to 0.
+fn enhancer_cell(ui: &mut Ui, title: &str, hint: &str, value: &mut u8, on: bool) {
+    let width = ui.available_width();
+    let tip = format!(
+        "{hint}\n\n{}",
+        tr!(
+            "A double click puts it back to 0.",
+            "Двойной щелчок возвращает 0."
+        )
+    );
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(title).size(13.5).color(palette::text()))
+            .on_hover_text(&tip);
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let color = if *value != 0 && on {
+                palette::accent_hover()
+            } else {
+                palette::text_weak()
+            };
+            ui.label(
+                RichText::new(value.to_string())
+                    .size(13.0)
+                    .strong()
+                    .color(color),
+            );
+        });
+    });
+    ui.spacing_mut().slider_width = width;
+    let response = ui
+        .add(egui::Slider::new(value, 0..=10).show_value(false))
+        .on_hover_text(&tip);
+    if slider_double_clicked(ui, &response) {
+        *value = 0;
+    }
 }
 
 /// What the limiter does: the loudness card's hint, and the tip of its
