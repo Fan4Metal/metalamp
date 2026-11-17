@@ -1550,8 +1550,8 @@ fn processing(
             ui,
             tr!("Enhancer", "Улучшение звука"),
             Some(tr!(
-                "Six independent controls. Boosts reserve up to 6 dB of headroom; compare at matched listening levels.",
-                "Шесть независимых регуляторов. Усиление резервирует до 6 дБ уровня; сравнение — при одинаковой громкости."
+                "Six independent controls; 0 leaves a part alone. A boost turns the rest down only as far as the peaks need: with loudness normalisation, hardly ever.",
+                "Шесть независимых регуляторов; 0 оставляет часть без изменений. Усиление приглушает остальное лишь настолько, насколько этого требуют пики: при нормализации громкости почти никогда."
             )),
             50.0,
             |ui| switch(ui, &mut dsp.enhancer),
@@ -1581,8 +1581,8 @@ fn processing(
             ui,
             tr!("Clarity", "Ясность"),
             tr!(
-                "Linked dynamic EQ gently reduces harsh presence and sibilance; no synthesized high frequencies.",
-                "Связанная между каналами динамическая коррекция мягко уменьшает резкость и сибилянты, без синтеза высоких частот."
+                "Gently turns down the presence and sibilance when they stand out against the middle; linked dynamic EQ, no synthesized high frequencies.",
+                "Мягко приглушает присутствие и сибилянты, когда они выделяются на фоне середины; динамическая коррекция, связанная между каналами, без синтеза высоких частот."
             ),
             &mut dsp.clarity,
         );

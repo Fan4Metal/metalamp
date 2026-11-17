@@ -163,8 +163,10 @@ impl Chain {
     /// they hold is the sound before (another track, a seek).
     pub fn reset(&mut self) {
         let gain = self.gain;
+        let reserve = self.enhancer.reserve_db();
         *self = Chain::new(self.rate, self.channels as u16, &self.settings);
         self.gain = gain;
+        self.enhancer.keep_reserve(reserve);
     }
 
     /// New settings; every stage's history and delay are kept. Only a

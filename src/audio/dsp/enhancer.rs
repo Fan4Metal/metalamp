@@ -1,11 +1,15 @@
 //! Six independent controls: bass depth, bass harmonics, clarity, air,
 //! stereo width and warmth. The bass detector only sees low frequencies;
 //! treble transients cannot duck its gain. Clarity uses linked dynamic EQ
-//! instead of synthesizing high-frequency sum tones. Enhancement reserves
-//! up to 6 dB before the boosts; comparisons need matched listening levels.
+//! instead of synthesizing high-frequency sum tones. The boosts turn the
+//! whole sound down only as far as they would push its peaks over the
+//! ceiling and over the peaks it had (an adaptive reserve, at most the
+//! largest boost): with headroom, as after loudness normalisation, a boost
+//! is heard as a boost and nothing else gets quieter.
 //! Warmth's oversampled residual and the dry signal share a fixed delay.
 
-use super::biquad::{Biquad, Coeffs, db_to_gain};
+use super::CEILING_DB;
+use super::biquad::{Biquad, Coeffs, db_to_gain, gain_to_db};
 use std::f32::consts::FRAC_1_SQRT_2;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -36,9 +40,10 @@ impl Amounts {
             warmth: finite(self.warmth),
         }
     }
-    /// Processing headroom, not output makeup gain. The largest boost
-    /// determines the reserve; all-zero controls keep exact unity.
-    pub fn headroom_db(self, channels: usize) -> f32 {
+    /// The most the reserve may take (dB): the largest boost. The reserve
+    /// itself is only what the peaks need (`Enhancer::step`); all-zero
+    /// controls keep exact unity.
+    pub fn most_reserve_db(self, channels: usize) -> f32 {
         (BASS_SHELF_DB * self.bass + 2.0 * self.bass_harmonics)
             .max(AIR_SHELF_DB * self.air)
             .max(if channels == 2 {
@@ -66,6 +71,13 @@ const HALF_TAPS: usize = 16;
 pub const LATENCY: usize = (7 * (2 * HALF_TAPS - 1) - 1) / 4;
 const KAISER_BETA: f64 = 7.0;
 const DRY_RING: usize = 128;
+/// The peaks before and after the enhancer are followed at once up and
+/// over this time constant down.
+const PEAK_RELEASE_S: f32 = 1.5;
+/// The reserve moves linearly in dB: quickly in (the limiter covers the
+/// first moments), slowly out, so it is a level, not a pumping.
+const RESERVE_ATTACK_DB_S: f32 = 20.0;
+const RESERVE_RELEASE_DB_S: f32 = 3.0;
 fn release(rate: u32, seconds: f32) -> f32 {
     1.0 - (-1.0 / (rate.max(1) as f32 * seconds)).exp()
 }
@@ -157,17 +169,39 @@ impl Bass {
 }
 
 /// Linked dynamic cuts: low-mid masking, harsh presence, sibilance.
-/// Relative band energy makes the decisions independent of input gain.
+/// Each band is judged against the middle (`REFERENCE_HZ`), not against
+/// the whole sound: the bass holds most of music's power, and against it
+/// the presence never stood out (a cut of 0.0 dB on dense rock). A
+/// band's power is weighed by its Q, so pink noise reads 0 dB in every
+/// band; music falls faster than pink, so the presence normally sits a
+/// few dB under the middle and the sibilance further.
 const TONE_HZ: [f32; 3] = [250.0, 4000.0, 7000.0];
 const TONE_Q: [f32; 3] = [0.8, 0.9, 1.2];
+const REFERENCE_HZ: f32 = 1250.0;
+const REFERENCE_Q: f32 = 0.7;
+/// The level over the middle (dB) where each cut starts, and how many dB
+/// more take it whole (`TONE_CUT_DB`, times the control's amount). Measured
+/// with `--bench enhancer` on ten tracks from pop to metal and orchestral:
+/// over the middle, 250 Hz has a median of +3 to +5 dB (+9 orchestral),
+/// 4 kHz -5 dB (about -1 at the 90th percentile; bright metal +1), 7 kHz
+/// -8 dB (-3), its sibilants +5 to +12; each starts about where the
+/// loudest tenth of an ordinary mix begins.
+const TONE_START_DB: [f32; 3] = [5.0, -1.0, -2.0];
+const TONE_SPAN_DB: [f32; 3] = [6.0, 6.0, 6.0];
+const TONE_CUT_DB: [f32; 3] = [1.5, 3.0, 3.0];
+/// Band powers under this (about -100 dBFS) are not judged.
+const TONE_FLOOR: f32 = 1e-10;
 struct ToneChannel {
     detect: [Biquad; 3],
+    reference: Biquad,
     filters: [Biquad; 3],
 }
 struct Tone {
     channels: Vec<ToneChannel>,
     power: [f32; 3],
-    wide: f32,
+    reference: f32,
+    /// Each band's level over the middle, dB (for `--bench enhancer`).
+    excess: [f32; 3],
     db: [f32; 3],
     mean: f32,
     attack: f32,
@@ -181,11 +215,13 @@ impl Tone {
                     detect: std::array::from_fn(|i| {
                         Biquad::new(Coeffs::band_pass(rate, TONE_HZ[i], TONE_Q[i]))
                     }),
+                    reference: Biquad::new(Coeffs::band_pass(rate, REFERENCE_HZ, REFERENCE_Q)),
                     filters: [Biquad::default(); 3],
                 })
                 .collect(),
             power: [0.0; 3],
-            wide: 0.0,
+            reference: 0.0,
+            excess: [-100.0; 3],
             db: [0.0; 3],
             mean: release(rate, 0.02),
             attack: release(rate, 0.01),
@@ -193,16 +229,17 @@ impl Tone {
         }
     }
     fn coefficients(&mut self, rate: u32, bass: f32, clarity: f32) {
+        let reference = (self.reference * REFERENCE_Q).max(TONE_FLOOR);
         for (i, amount) in [bass, clarity, clarity].into_iter().enumerate() {
-            let threshold = [0.35, 0.22, 0.12][i];
-            let ratio = if self.wide > 1e-10 {
-                self.power[i] / self.wide
+            let band = self.power[i] * TONE_Q[i];
+            self.excess[i] = if band < TONE_FLOOR {
+                -100.0
             } else {
-                0.0
+                10.0 * (band / reference).log10()
             };
-            let target = -[1.5, 3.0, 3.0][i]
+            let target = -TONE_CUT_DB[i]
                 * amount
-                * ((ratio - threshold) / (1.0 - threshold)).clamp(0.0, 1.0);
+                * ((self.excess[i] - TONE_START_DB[i]) / TONE_SPAN_DB[i]).clamp(0.0, 1.0);
             let k = if target < self.db[i] {
                 self.attack
             } else {
@@ -225,10 +262,11 @@ impl Tone {
         }
     }
     fn run(&mut self, frame: &mut [f32]) {
-        let mut wide = 0.0;
+        let mut reference = 0.0;
         let mut power = [0.0; 3];
         for (x, ch) in frame.iter_mut().zip(&mut self.channels) {
-            wide += *x * *x;
+            let middle = ch.reference.run(*x);
+            reference += middle * middle;
             for (i, detector) in ch.detect.iter_mut().enumerate() {
                 let band = detector.run(*x);
                 power[i] += band * band;
@@ -237,7 +275,7 @@ impl Tone {
                 *x = filter.run(*x);
             }
         }
-        self.wide += (wide - self.wide) * self.mean;
+        self.reference += (reference - self.reference) * self.mean;
         for (env, p) in self.power.iter_mut().zip(power) {
             *env += (p - *env) * self.mean;
         }
@@ -417,7 +455,17 @@ pub struct Enhancer {
     side_shelf: Biquad,
     warmth: Warmth,
     sub: usize,
-    reserve: f32,
+    /// The peaks coming in, and going out as they would without the
+    /// reserve; `peak_release` their coefficient.
+    in_peak: f32,
+    out_peak: f32,
+    peak_release: f32,
+    ceiling: f32,
+    /// The reserve now (dB, 0 or more), and its gain at the last step and
+    /// at this one, between which each frame's gain is interpolated.
+    reserve_db: f32,
+    reserve_from: f32,
+    reserve_to: f32,
 }
 impl Enhancer {
     pub fn new(rate: u32, channels: usize, a: Amounts) -> Self {
@@ -437,7 +485,13 @@ impl Enhancer {
             side_shelf: Biquad::default(),
             warmth: Warmth::new(channels),
             sub: 0,
-            reserve: db_to_gain(-a.headroom_db(channels)),
+            in_peak: 0.0,
+            out_peak: 0.0,
+            peak_release: release(rate, PEAK_RELEASE_S),
+            ceiling: db_to_gain(CEILING_DB),
+            reserve_db: 0.0,
+            reserve_from: 1.0,
+            reserve_to: 1.0,
         };
         e.set_shelves();
         e
@@ -494,7 +548,27 @@ impl Enhancer {
             self.warmth.clear_wet();
         }
         self.set_shelves();
-        self.reserve = db_to_gain(-self.now.headroom_db(self.channels));
+        // What the boosts add to the peaks over both the ceiling and the
+        // peaks the sound had: a master already over the ceiling is the
+        // limiter's as it was without the enhancer.
+        let reference = self.in_peak.max(self.ceiling);
+        let wanted = if self.out_peak > reference {
+            gain_to_db(self.out_peak / reference).min(self.now.most_reserve_db(self.channels))
+        } else {
+            0.0
+        };
+        let dt = SUB as f32 / self.rate as f32;
+        self.reserve_db = if wanted > self.reserve_db {
+            (self.reserve_db + RESERVE_ATTACK_DB_S * dt).min(wanted)
+        } else {
+            (self.reserve_db - RESERVE_RELEASE_DB_S * dt).max(wanted)
+        };
+        self.reserve_from = self.reserve_to;
+        self.reserve_to = if self.reserve_db == 0.0 {
+            1.0
+        } else {
+            db_to_gain(-self.reserve_db)
+        };
         self.tone
             .coefficients(self.rate, self.now.bass, self.now.clarity);
     }
@@ -505,12 +579,17 @@ impl Enhancer {
             if self.sub == 0 {
                 self.step();
             }
+            let reserve = self.reserve_from
+                + (self.reserve_to - self.reserve_from) * (self.sub + 1) as f32 / SUB as f32;
             self.sub = (self.sub + 1) % SUB;
             let a = self.now;
+            let peak = frame.iter().fold(0f32, |m, x| m.max(x.abs()));
+            self.in_peak = follow(self.in_peak, peak, self.peak_release);
             self.warmth.run(frame, a.warmth);
-            let reserve = self.reserve;
-            for x in frame.iter_mut() {
-                *x *= reserve;
+            if reserve != 1.0 {
+                for x in frame.iter_mut() {
+                    *x *= reserve;
+                }
             }
             self.bass.run(frame, a.bass_harmonics);
             self.tone.run(frame);
@@ -530,7 +609,34 @@ impl Enhancer {
                     frame[1] = mid - side;
                 }
             }
+            let peak = frame.iter().fold(0f32, |m, x| m.max(x.abs())) / reserve;
+            self.out_peak = follow(self.out_peak, peak, self.peak_release);
         }
+    }
+
+    /// The reserve taken now, dB.
+    pub fn reserve_db(&self) -> f32 {
+        self.reserve_db
+    }
+
+    /// The reserve carried into a chain made anew (another track, a seek),
+    /// so a track of the same loud album does not start without it; its
+    /// peaks are measured afresh.
+    pub fn keep_reserve(&mut self, db: f32) {
+        self.reserve_db = db.max(0.0);
+        let gain = if self.reserve_db == 0.0 {
+            1.0
+        } else {
+            db_to_gain(-self.reserve_db)
+        };
+        self.reserve_from = gain;
+        self.reserve_to = gain;
+    }
+
+    /// Each dynamic cut's band over the middle and its cut now, dB (250 Hz,
+    /// 4 kHz, 7 kHz), for `--bench enhancer`.
+    pub fn tone(&self) -> ([f32; 3], [f32; 3]) {
+        (self.tone.excess, self.tone.db)
     }
 }
 
@@ -671,14 +777,69 @@ mod tests {
         assert!((r / (0.1 / 2f32.sqrt()) - 1.0).abs() < 0.15, "{r}");
     }
 
-    /// Remove the intentional reserve for spectral comparisons only.
+    /// `original` through an enhancer of `a` at 48 kHz. The test signals
+    /// stay under the ceiling, so no reserve is taken.
     fn matched(a: Amounts, original: &[f32]) -> Vec<f32> {
         let mut s = original.to_vec();
-        Enhancer::new(48000, 2, a).process(&mut s);
-        for x in &mut s {
-            *x *= db_to_gain(a.headroom_db(2));
-        }
+        let mut e = Enhancer::new(48000, 2, a);
+        e.process(&mut s);
+        assert_eq!(e.reserve_db(), 0.0);
         s
+    }
+    fn peak(s: &[f32]) -> f32 {
+        s.iter().fold(0f32, |m, x| m.max(x.abs()))
+    }
+    /// Two tones, `low` Hz and 1 kHz, of `amplitude` each.
+    fn two_tones(low: f32, amplitude: f32, seconds: f32) -> Vec<f32> {
+        (0..(48000.0 * seconds) as usize)
+            .flat_map(|i| {
+                let t = 2.0 * PI * i as f32 / 48000.0;
+                let x = amplitude * ((low * t).sin() + (1000.0 * t).sin());
+                [x, x]
+            })
+            .collect()
+    }
+    #[test]
+    fn a_boost_with_headroom_turns_nothing_down() {
+        // Peaks at 0.4, as after loudness normalisation: the bass is
+        // raised and the middle keeps its level exactly.
+        let original = two_tones(60.0, 0.2, 2.0);
+        let s = matched(only(|a| a.bass = 1.0), &original);
+        let middle = 20.0 * (level(&s, 48000, 1000.0) / 0.2).log10();
+        assert!(middle.abs() < 0.05, "{middle} dB");
+        let bass = 20.0 * (level(&s, 48000, 60.0) / 0.2).log10();
+        assert!(bass > 5.0, "{bass} dB");
+    }
+    #[test]
+    fn a_boost_over_the_ceiling_takes_only_what_it_adds() {
+        // Peaks at 0.9, at the ceiling: the bass would push them to about
+        // 1.3, so the reserve takes about that (3 dB), not the whole 6 dB.
+        let original = two_tones(60.0, 0.45, 4.0);
+        let dry = peak(&original);
+        let mut e = Enhancer::new(48000, 2, only(|a| a.bass = 1.0));
+        let mut s = original.clone();
+        e.process(&mut s);
+        let reserve = e.reserve_db();
+        assert!((1.0..5.0).contains(&reserve), "{reserve}");
+        let last = peak(&s[s.len() - 48000..]);
+        assert!(last < dry.max(db_to_gain(CEILING_DB)) * 1.03, "{last}");
+        // Turned off, the reserve goes back to exact unity.
+        e.configure(Amounts::default());
+        let mut rest = original[..2 * 48000 * 3].to_vec();
+        e.process(&mut rest);
+        assert_eq!(e.reserve_db(), 0.0);
+        assert_eq!(rest[rest.len() - 1], original[2 * 48000 * 3 - 1 - 2 * LATENCY]);
+    }
+    #[test]
+    fn a_reserve_is_carried_into_a_chain_made_anew() {
+        // The air's shelf leaves 1 kHz alone; the reserve, not needed,
+        // goes out at 3 dB a second: 2.9 dB are left after 30 ms.
+        let mut e = Enhancer::new(48000, 2, only(|a| a.air = 1.0));
+        e.keep_reserve(3.0);
+        let mut s = sine(48000, 1000.0, 0.1, 0.03);
+        e.process(&mut s);
+        let out = peak(&s[s.len() - 2 * 480..]);
+        assert!((20.0 * (out / 0.1).log10() + 2.9).abs() < 0.1, "{out}");
     }
     #[test]
     fn bass_depth_does_not_synthesize_harmonics() {
@@ -694,8 +855,10 @@ mod tests {
     fn a_midrange_transient_cannot_duck_the_bass() {
         let mut original = sine(48000, 60.0, 0.1, 3.0);
         for (i, frame) in original.as_chunks_mut::<2>().0.iter_mut().enumerate() {
+            // Loud, but under the ceiling with the bass raised: the
+            // reserve (a level for everything) is not what is tested.
             if (48000..48480).contains(&i) {
-                let x = 0.85 * (2.0 * PI * 2000.0 * i as f32 / 48000.0).sin();
+                let x = 0.6 * (2.0 * PI * 2000.0 * i as f32 / 48000.0).sin();
                 for y in frame {
                     *y += x;
                 }
@@ -753,6 +916,30 @@ mod tests {
         assert!((level(&s, 48000, 1000.0) / 0.1 - 1.0).abs() < 0.02);
     }
     #[test]
+    fn clarity_judges_the_presence_against_the_middle() {
+        // The presence 6 dB under the middle is left alone, whatever the
+        // bass under them; 3.5 dB over it is cut by about 2 dB.
+        let with = |presence: f32, bass: f32| -> Vec<f32> {
+            (0..96000)
+                .flat_map(|i| {
+                    let t = 2.0 * PI * i as f32 / 48000.0;
+                    let x = bass * (50.0 * t).sin()
+                        + 0.1 * (1000.0 * t).sin()
+                        + presence * (4000.0 * t).sin();
+                    [x, x]
+                })
+                .collect()
+        };
+        for bass in [0.0, 0.4] {
+            let s = matched(only(|a| a.clarity = 1.0), &with(0.05, bass));
+            let db = 20.0 * (level(&s, 48000, 4000.0) / 0.05).log10();
+            assert!(db.abs() < 0.05, "{bass}: {db} dB");
+            let s = matched(only(|a| a.clarity = 1.0), &with(0.15, bass));
+            let db = 20.0 * (level(&s, 48000, 4000.0) / 0.15).log10();
+            assert!((-3.0..-1.5).contains(&db), "{bass}: {db} dB");
+        }
+    }
+    #[test]
     fn width_has_no_low_frequency_dip_and_keeps_the_mono_sum() {
         let a = only(|a| a.width = 1.0);
         // An isolated side signal exposes cancellation that a mono
@@ -792,7 +979,7 @@ mod tests {
     fn width_cannot_turn_down_mono_or_multichannel_sound() {
         for channels in [1, 6] {
             let a = only(|a| a.width = 1.0);
-            assert_eq!(a.headroom_db(channels), 0.0);
+            assert_eq!(a.most_reserve_db(channels), 0.0);
             let original: Vec<f32> = (0..10000).map(|i| (i as f32 * 0.1).sin() * 0.1).collect();
             let mut processed = original.clone();
             Enhancer::new(48000, channels, a).process(&mut processed);
