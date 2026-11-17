@@ -1631,20 +1631,26 @@ fn enhancer_amounts() -> [EnhancerAmount; 6] {
 const ENHANCER_GAP: f32 = 28.0;
 
 /// The enhancer in the equalizer's window (`ui::eq_window`), a section
-/// that folds as metalmpv's file info's: the arrow and the name (a click on
-/// either folds or unfolds it; `open`, kept in the settings), on the right
-/// the switch, a round arrow putting every amount back to 0 and, folded,
-/// the amounts not at 0; unfolded, the six amounts two a row
-/// (`enhancer_cell`), greyed while it is off.
+/// that folds (`open`, kept in the settings), laid out as the equalizer's
+/// head over it, so the two switches and the two pairs of tools stand in
+/// columns: the switch and the name on the left (a click on the name folds
+/// or unfolds it), on the right, folded, the amounts not at 0, a round
+/// arrow putting every amount back to 0 under the equalizer's plus and the
+/// fold's arrow (`fold_button`) under its bin; unfolded, the six amounts
+/// two a row (`enhancer_cell`), greyed while it is off.
 pub(crate) fn enhancer(ui: &mut Ui, dsp: &mut DspSettings, open: &mut bool) {
-    use egui::collapsing_header::{CollapsingState, paint_default_icon};
+    use egui::collapsing_header::CollapsingState;
     let amounts = enhancer_amounts();
     let mut fold =
         CollapsingState::load_with_default_open(ui.ctx(), egui::Id::new("eq_enhancer"), *open);
     fold.set_open(*open);
+    let openness = fold.openness(ui.ctx());
     let heading = ui
         .horizontal(|ui| {
-            fold.show_toggle_button(ui, paint_default_icon);
+            // As `eq_head`: the switch, 4 points, then the name where the
+            // presets' list starts.
+            switch(ui, &mut dsp.enhancer).on_hover_text(enhancer_hint());
+            ui.add_space(4.0);
             let title = ui
                 .add(
                     egui::Label::new(
@@ -1656,9 +1662,11 @@ pub(crate) fn enhancer(ui: &mut Ui, dsp: &mut DspSettings, open: &mut bool) {
                     .sense(Sense::click()),
                 )
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
+            let mut toggled = title.clicked();
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                switch(ui, &mut dsp.enhancer).on_hover_text(enhancer_hint());
-                ui.add_space(6.0);
+                // `eq_head`'s tools end a spacing short of the edge.
+                ui.add_space(ui.spacing().item_spacing.x);
+                toggled |= fold_button(ui, openness).clicked();
                 let any = amounts.iter().any(|(_, _, value)| *value(dsp) != 0);
                 if tool(
                     ui,
@@ -1693,10 +1701,10 @@ pub(crate) fn enhancer(ui: &mut Ui, dsp: &mut DspSettings, open: &mut bool) {
                     );
                 }
             });
-            title
+            toggled
         })
         .inner;
-    if heading.clicked() {
+    if heading {
         fold.toggle(ui);
     }
     *open = fold.is_open();
@@ -1857,6 +1865,41 @@ pub(crate) fn tool(ui: &mut Ui, tip: &str, enabled: bool, icon: Icon) -> Respons
     }
     icons::paint(ui.painter(), icon, rect.center(), icons::SIZE, color, fill);
     response.on_hover_text(tip)
+}
+
+/// The fold's button of a section, a `tool` of its own: a chevron in the
+/// icons' lines, pointing right while folded and turning down as it opens
+/// (`openness`, 0 to 1, egui's animation of the fold).
+fn fold_button(ui: &mut Ui, openness: f32) -> Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(TOOL, 24.0), Sense::click());
+    let color = if response.hovered() {
+        palette::text_bright()
+    } else {
+        palette::text()
+    };
+    if response.hovered() {
+        let fill = if response.is_pointer_button_down_on() {
+            palette::pressed()
+        } else {
+            palette::hover()
+        };
+        ui.painter().rect_filled(rect, 4.0, fill);
+    }
+    // A chevron pointing right, turned a quarter clockwise when open.
+    let turn = egui::emath::Rot2::from_angle(openness * std::f32::consts::FRAC_PI_2);
+    let c = rect.center();
+    let points = [vec2(-2.5, -5.0), vec2(2.5, 0.0), vec2(-2.5, 5.0)]
+        .map(|p| c + turn * p)
+        .to_vec();
+    ui.painter()
+        .add(egui::Shape::line(points, Stroke::new(1.5, color)));
+    response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(if openness > 0.5 {
+            tr!("Fold", "Свернуть")
+        } else {
+            tr!("Unfold", "Развернуть")
+        })
 }
 
 /// A built-in preset uses neutral preamp, unlike a manually adjusted curve.
