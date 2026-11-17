@@ -1550,8 +1550,8 @@ fn processing(
             ui,
             tr!("Enhancer", "Улучшение звука"),
             Some(tr!(
-                "What the classic sound improvers did, in four amounts; 0 leaves a part alone.",
-                "То, что делали классические улучшайзеры звука, четырьмя регуляторами; 0 оставляет часть без изменений."
+                "Six independent controls. Boosts reserve up to 6 dB of headroom; compare at matched listening levels.",
+                "Шесть независимых регуляторов. Усиление резервирует до 6 дБ уровня; сравнение — при одинаковой громкости."
             )),
             50.0,
             |ui| switch(ui, &mut dsp.enhancer),
@@ -1561,28 +1561,48 @@ fn processing(
             ui,
             tr!("Bass", "Бас"),
             tr!(
-                "A shelf under 120 Hz and the harmonics of the bass, which small speakers make heard as bass they cannot play.",
-                "Полка ниже 120 Гц и гармоники баса, которые на небольших колонках слышны как бас, недоступный им самим."
+                "Depth below 120 Hz, controlled by the bass itself, with gentle low-mid masking reduction.",
+                "Глубина ниже 120 Гц с управлением по самому басу и мягким уменьшением гула в нижней середине."
             ),
             &mut dsp.bass,
         );
         divider(ui);
         amount(
             ui,
+            tr!("Bass harmonics", "Гармоники баса"),
+            tr!(
+                "Adds audible bass harmonics for small speakers. For full-range headphones, a low amount or zero is usually enough.",
+                "Добавляет слышимые гармоники баса для небольших колонок. Для полноразмерных наушников обычно достаточно малого значения или нуля."
+            ),
+            &mut dsp.bass_harmonics,
+        );
+        divider(ui);
+        amount(
+            ui,
             tr!("Clarity", "Ясность"),
             tr!(
-                "Air over 10 kHz, the harmonics of the top: what an MP3's low-pass took away.",
-                "Воздух выше 10 кГц, гармоники верха: то, что срезал фильтр MP3."
+                "Linked dynamic EQ gently reduces harsh presence and sibilance; no synthesized high frequencies.",
+                "Связанная между каналами динамическая коррекция мягко уменьшает резкость и сибилянты, без синтеза высоких частот."
             ),
             &mut dsp.clarity,
         );
         divider(ui);
         amount(
             ui,
+            tr!("Air", "Воздух"),
+            tr!(
+                "A gentle high shelf at 11 kHz, up to 3 dB. Does not synthesize missing harmonics.",
+                "Мягкая полка на 11 кГц, до 3 дБ. Без синтеза утраченных гармоник."
+            ),
+            &mut dsp.air,
+        );
+        divider(ui);
+        amount(
+            ui,
             tr!("Width", "Ширина"),
             tr!(
-                "The stereo image wider, the bass kept in the middle.",
-                "Шире стереокартина, бас остаётся в центре."
+                "Widens the stereo image above 250 Hz, leaving the original low-frequency stereo unchanged.",
+                "Расширяет стереокартину выше 250 Гц, сохраняя исходное стерео низких частот."
             ),
             &mut dsp.width,
         );
@@ -1603,8 +1623,8 @@ fn processing(
 /// state in the equalizer's window (`ui::eq_window`).
 pub(crate) fn limiter_hint() -> &'static str {
     tr!(
-        "Holds the peaks at -1 dBFS after the processing, so raised bands, preamp or enhancer never clip; a raised preamp then makes a loud track denser rather than louder. Turned off, a raise is heard in full, and what passes full scale is clipped by Windows.",
-        "Держит пики на -1 dBFS после обработки, чтобы поднятые полосы, предусиление или улучшение звука не клиповали; поднятое предусиление тогда делает громкий трек плотнее, а не громче. Если его выключить, подъём слышен целиком, а то, что выходит за полную шкалу, обрезает Windows."
+        "Uses 4x inter-sample peak detection and adaptive release to hold peaks near -1 dBTP after processing, so raised bands, preamp or enhancer never clip; a raised preamp then makes a loud track denser rather than louder. Turned off, a raise is heard in full, and what passes full scale is clipped by Windows.",
+        "Контролирует межсемпловые пики с передискретизацией 4× и адаптивным восстановлением, удерживая их около -1 dBTP после обработки, чтобы поднятые полосы, предусиление или улучшение звука не клиповали; поднятое предусиление тогда делает громкий трек плотнее, а не громче. Если его выключить, подъём слышен целиком, а то, что выходит за полную шкалу, обрезает Windows."
     )
 }
 
@@ -2093,20 +2113,32 @@ pub(crate) fn view_colours(ui: &mut Ui, colour: &mut Option<Accent>) {
     ui.spacing_mut().item_spacing.x = 5.0;
     let (rect, response) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
     let response = response.on_hover_text(tr!("The accent's", "Цвет акцента"));
-    swatch(ui, rect, colour.is_none(), response.hovered(), |p, centre, r| {
-        p.circle_filled(centre, r, palette::accent());
-        // A dot of the ground: it follows the accent.
-        p.circle_filled(centre, r * 0.35, palette::panel_bg());
-    });
+    swatch(
+        ui,
+        rect,
+        colour.is_none(),
+        response.hovered(),
+        |p, centre, r| {
+            p.circle_filled(centre, r, palette::accent());
+            // A dot of the ground: it follows the accent.
+            p.circle_filled(centre, r * 0.35, palette::panel_bg());
+        },
+    );
     if response.clicked() {
         *colour = None;
     }
     for a in Accent::ALL {
         let (rect, response) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
         let response = response.on_hover_text(a.label());
-        swatch(ui, rect, *colour == Some(a), response.hovered(), |p, centre, r| {
-            p.circle_filled(centre, r, a.base());
-        });
+        swatch(
+            ui,
+            rect,
+            *colour == Some(a),
+            response.hovered(),
+            |p, centre, r| {
+                p.circle_filled(centre, r, a.base());
+            },
+        );
         if response.clicked() {
             *colour = Some(a);
         }
@@ -2337,16 +2369,27 @@ fn visual_swatch(
         VisualColours::Own => shades = palette::with_own(shades, visual),
         _ => {}
     }
-    swatch(ui, rect, *colours == c, response.hovered(), |p, centre, r| {
-        gradient_disc(p, centre, r, shades);
-    });
+    swatch(
+        ui,
+        rect,
+        *colours == c,
+        response.hovered(),
+        |p, centre, r| {
+            gradient_disc(p, centre, r, shades);
+        },
+    );
     if response.clicked() {
         *colours = c;
     }
 }
 
 /// A disc of `shades`' colours: the level up, the place across.
-fn gradient_disc(painter: &egui::Painter, centre: egui::Pos2, r: f32, shades: palette::VisualPalette) {
+fn gradient_disc(
+    painter: &egui::Painter,
+    centre: egui::Pos2,
+    r: f32,
+    shades: palette::VisualPalette,
+) {
     let colour = |p: egui::Pos2| {
         let level = (centre.y + r - p.y) / (2.0 * r);
         let place = (p.x - centre.x + r) / (2.0 * r);

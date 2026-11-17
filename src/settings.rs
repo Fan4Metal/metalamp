@@ -936,9 +936,19 @@ impl Settings {
 
     pub fn from_json(bytes: &[u8]) -> Option<Settings> {
         use serde_json::Value;
-        let Ok(Value::Object(file)) = serde_json::from_slice::<Value>(bytes) else {
+        let Ok(Value::Object(mut file)) = serde_json::from_slice::<Value>(bytes) else {
             return None;
         };
+        // The old Clarity control was an air shelf plus an exciter. Keep
+        // its shelf amount when loading an older file; the new dynamic
+        // clarity and bass harmonics start off. Never invent lost highs.
+        if let Some(Value::Object(dsp)) = file.get_mut("dsp")
+            && !dsp.contains_key("air")
+            && let Some(clarity) = dsp.get("clarity").cloned()
+        {
+            dsp.insert("air".into(), clarity);
+            dsp.insert("clarity".into(), Value::from(0));
+        }
         let Ok(Value::Object(mut merged)) = serde_json::to_value(Settings::default()) else {
             return None;
         };
@@ -1007,6 +1017,22 @@ impl Settings {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn legacy_clarity_moves_to_air_and_new_controls_round_trip() {
+        let old =
+            Settings::from_json(br#"{"dsp":{"enhancer":true,"bass":6,"clarity":5}}"#).unwrap();
+        assert_eq!(old.dsp.bass, 6);
+        assert_eq!(old.dsp.air, 5);
+        assert_eq!(old.dsp.clarity, 0);
+        assert_eq!(old.dsp.bass_harmonics, 0);
+        let mut new = old;
+        new.dsp.clarity = 4;
+        new.dsp.bass_harmonics = 3;
+        let json = serde_json::to_vec(&new).unwrap();
+        let again = Settings::from_json(&json).unwrap();
+        assert_eq!(again.dsp, new.dsp);
+    }
+
     #[test]
     fn the_visualization_switch_keeps_the_one_chosen() {
         let mut s = Settings {

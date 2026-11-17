@@ -107,6 +107,14 @@ impl Coeffs {
         )
     }
 
+    /// Constant-peak-gain band pass, used only by dynamic EQ detectors.
+    pub fn band_pass(rate: u32, f0: f32, q: f32) -> Coeffs {
+        let w = Self::omega(rate, f0);
+        let (s, c) = w.sin_cos();
+        let alpha = s / (2.0 * q);
+        Self::from_raw(alpha, 0.0, -alpha, 1.0 + alpha, -2.0 * c, 1.0 - alpha)
+    }
+
     pub fn high_pass(rate: u32, f0: f32, q: f32) -> Coeffs {
         let w = Self::omega(rate, f0);
         let (s, c) = w.sin_cos();

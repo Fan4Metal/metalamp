@@ -42,6 +42,8 @@ pub struct DspSettings {
     /// 0 to 10 each.
     pub bass: u8,
     pub clarity: u8,
+    pub bass_harmonics: u8,
+    pub air: u8,
     pub width: u8,
     pub warmth: u8,
     /// The look-ahead limiter after the rest; on by default.
@@ -62,6 +64,8 @@ impl Default for DspSettings {
             enhancer: false,
             bass: 0,
             clarity: 0,
+            bass_harmonics: 0,
+            air: 0,
             width: 0,
             warmth: 0,
             limiter: true,
@@ -88,6 +92,8 @@ impl DspSettings {
         enhancer::Amounts {
             bass: f(self.bass),
             clarity: f(self.clarity),
+            bass_harmonics: f(self.bass_harmonics),
+            air: f(self.air),
             width: f(self.width),
             warmth: f(self.warmth),
         }

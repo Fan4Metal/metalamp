@@ -8,7 +8,7 @@
 //! - `--bench loudness <file>…`: each file's loudness (EBU R128), peak and
 //!   the gain normalisation would give it, with the time the measuring
 //!   took; `ffmpeg -af ebur128 -f null -` gives the figure to compare.
-//! - `--bench enhancer <file> [from s] [seconds] [bass,clarity,width,warmth]`:
+//! - `--bench enhancer <file> [from s] [seconds] [bass,clarity,width,warmth,harmonics,air]`:
 //!   what each of the enhancer's stages does to a passage of real music,
 //!   by third-octave bands (sines told too little: two faults were found
 //!   only this way), and what the limiter then takes.
@@ -46,7 +46,7 @@ pub fn run(args: &[String]) -> i32 {
         _ => {
             let _ = writeln!(
                 out,
-                "usage: metalamp --bench scan <folder>... | gapless <file>... | loudness <file>... | enhancer <file> [from s] [seconds] [bass,clarity,width,warmth]"
+                "usage: metalamp --bench scan <folder>... | gapless <file>... | loudness <file>... | enhancer <file> [from s] [seconds] [bass,clarity,width,warmth,harmonics,air]"
             );
             2
         }
@@ -307,10 +307,7 @@ fn third_octaves(s: &[f32], rate: u32, ch: usize, side: bool) -> Vec<(f32, f64)>
     (0..28)
         .map(|k| {
             let centre = 31.5 * 2f64.powf(f64::from(k) / 3.0);
-            let (lo, hi) = (
-                centre / 2f64.powf(1.0 / 6.0),
-                centre * 2f64.powf(1.0 / 6.0),
-            );
+            let (lo, hi) = (centre / 2f64.powf(1.0 / 6.0), centre * 2f64.powf(1.0 / 6.0));
             let sum: f64 = power
                 .iter()
                 .enumerate()
@@ -322,11 +319,11 @@ fn third_octaves(s: &[f32], rate: u32, ch: usize, side: bool) -> Vec<(f32, f64)>
         .collect()
 }
 
-/// `--bench enhancer <file> [from s] [seconds] [bass,clarity,width,warmth]`
+/// `--bench enhancer <file> [from s] [seconds] [bass,clarity,width,warmth,harmonics,air]`
 /// (the amounts 0 to 10; the settings' when left out): the passage dry, by
 /// third-octave bands in dBFS, and what each stage adds to each band in dB:
-/// the bass's shelf alone and the whole bass, the clarity's shelf alone and
-/// the whole clarity, warmth, all four, and all four through the limiter.
+/// the bass's shelf alone and the whole bass, the air shelf alone and
+/// the whole clarity, warmth, all six, and all six through the limiter.
 fn bench_enhancer(args: &[String], out: &mut impl Write) {
     use crate::audio::decoder::{Decoder, SECOND};
     use crate::audio::dsp::biquad::{Biquad, Coeffs, db_to_gain, gain_to_db};
@@ -341,19 +338,30 @@ fn bench_enhancer(args: &[String], out: &mut impl Write) {
     let amounts: Vec<f32> = match args.get(3) {
         Some(list) => list
             .split(',')
-            .filter_map(|v| v.parse::<f32>().ok())
+            .map(|v| v.parse::<f32>().unwrap_or(f32::NAN))
             .collect(),
         None => {
             let d = crate::settings::Settings::load().dsp;
-            [d.bass, d.clarity, d.width, d.warmth]
-                .map(f32::from)
-                .to_vec()
+            [
+                d.bass,
+                d.clarity,
+                d.width,
+                d.warmth,
+                d.bass_harmonics,
+                d.air,
+            ]
+            .map(f32::from)
+            .to_vec()
         }
     };
-    if amounts.len() != 4 {
+    if !matches!(amounts.len(), 4 | 6)
+        || amounts
+            .iter()
+            .any(|x| !x.is_finite() || !(0.0..=10.0).contains(x))
+    {
         let _ = writeln!(
             out,
-            "the amounts: bass,clarity,width,warmth, 0 to 10 each"
+            "the amounts: bass,clarity,width,warmth[,harmonics,air], 0 to 10 each"
         );
         return;
     }
@@ -362,6 +370,8 @@ fn bench_enhancer(args: &[String], out: &mut impl Write) {
         clarity: amounts[1] / 10.0,
         width: amounts[2] / 10.0,
         warmth: amounts[3] / 10.0,
+        bass_harmonics: amounts.get(4).copied().unwrap_or(0.0) / 10.0,
+        air: amounts.get(5).copied().unwrap_or(0.0) / 10.0,
     };
     let _com = mf::com_init_mta();
     let _mf = match mf::Mf::start() {
@@ -408,34 +418,71 @@ fn bench_enhancer(args: &[String], out: &mut impl Write) {
     let none = Amounts::default();
     let all = enhanced(a);
     let mut limited = all.clone();
-    Limiter::new(rate, ch, db_to_gain(CEILING_DB)).process(&mut limited);
-    let columns: [(&str, Vec<f32>); 7] = [
+    let mut limiter = Limiter::new(rate, ch, db_to_gain(CEILING_DB));
+    limiter.process(&mut limited);
+    // Compare timbre at matched processing levels. The real output's
+    // reserved level and limiter loss are reported separately below.
+    let matched = |a: Amounts| {
+        let mut s = enhanced(a);
+        let gain = db_to_gain(a.headroom_db());
+        for x in &mut s {
+            *x *= gain;
+        }
+        s
+    };
+    let gain = db_to_gain(a.headroom_db());
+    let columns: [(&str, Vec<f32>); 9] = [
         (
             "b.shelf",
-            shelved(Coeffs::low_shelf(rate, BASS_SHELF_HZ, BASS_SHELF_DB * a.bass)),
+            shelved(Coeffs::low_shelf(
+                rate,
+                BASS_SHELF_HZ,
+                BASS_SHELF_DB * a.bass,
+            )),
         ),
-        ("bass", enhanced(Amounts { bass: a.bass, ..none })),
         (
-            "c.shelf",
-            shelved(Coeffs::high_shelf(rate, AIR_SHELF_HZ, AIR_SHELF_DB * a.clarity)),
+            "bass",
+            matched(Amounts {
+                bass: a.bass,
+                ..none
+            }),
+        ),
+        (
+            "harm",
+            matched(Amounts {
+                bass_harmonics: a.bass_harmonics,
+                ..none
+            }),
         ),
         (
             "clarity",
-            enhanced(Amounts {
+            matched(Amounts {
                 clarity: a.clarity,
                 ..none
             }),
         ),
         (
+            "a.shelf",
+            shelved(Coeffs::high_shelf(rate, AIR_SHELF_HZ, AIR_SHELF_DB * a.air)),
+        ),
+        ("air", matched(Amounts { air: a.air, ..none })),
+        (
             "warmth",
-            enhanced(Amounts {
+            matched(Amounts {
                 warmth: a.warmth,
                 ..none
             }),
         ),
-        ("all", all.clone()),
-        ("limited", limited.clone()),
+        ("all", all.iter().map(|x| x * gain).collect()),
+        ("limited", limited.iter().map(|x| x * gain).collect()),
     ];
+    let _ = writeln!(
+        out,
+        "spectral deltas compensate processing reserve: {:.1} dB; harmonics {}, air {}",
+        a.headroom_db(),
+        a.bass_harmonics * 10.0,
+        a.air * 10.0
+    );
     let db = |p: f64| 10.0 * p.max(1e-20).log10();
     let base = third_octaves(&dry, rate, ch, false);
     let _ = writeln!(
@@ -481,12 +528,7 @@ fn bench_enhancer(args: &[String], out: &mut impl Write) {
             / (s.len() / ch) as f64
     };
     if ch >= 2 {
-        let side = |s: &[f32]| {
-            db(third_octaves(s, rate, ch, true)
-                .iter()
-                .map(|b| b.1)
-                .sum())
-        };
+        let side = |s: &[f32]| db(third_octaves(s, rate, ch, true).iter().map(|b| b.1).sum());
         let _ = writeln!(
             out,
             "side: dry {:.1} dB, all {:+.1} dB",
@@ -500,6 +542,11 @@ fn bench_enhancer(args: &[String], out: &mut impl Write) {
         rms(&dry),
         peak(&dry),
         over(&dry)
+    );
+    let _ = writeln!(
+        out,
+        "limiter current gain reduction: {:.2} dB",
+        limiter.reduction_db()
     );
     let _ = writeln!(
         out,
