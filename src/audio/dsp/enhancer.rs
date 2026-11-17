@@ -96,12 +96,17 @@ struct Bass {
     harm_lp: Biquad,
     shelf: Vec<Biquad>,
     low: Vec<Biquad>,
+    low_part: Vec<Biquad>,
     added: Vec<f32>,
     low_env: f32,
-    added_env: f32,
+    /// The low end with the whole boost.
+    boosted_env: f32,
     given: f32,
     attack: f32,
     give_release: f32,
+    /// The level the low end with its boost may reach: the one the reserve
+    /// brings the peaks to (`Enhancer::step`).
+    limit: f32,
 }
 impl Bass {
     fn new(rate: u32, channels: usize) -> Self {
@@ -113,12 +118,14 @@ impl Bass {
             harm_lp: Biquad::new(Coeffs::low_pass(rate, 350.0, FRAC_1_SQRT_2)),
             shelf: vec![Biquad::default(); channels],
             low: vec![Biquad::new(Coeffs::low_pass(rate, 120.0, FRAC_1_SQRT_2)); channels],
+            low_part: vec![Biquad::new(Coeffs::low_pass(rate, 120.0, FRAC_1_SQRT_2)); channels],
             added: vec![0.0; channels],
             low_env: 0.0,
-            added_env: 0.0,
+            boosted_env: 0.0,
             given: 1.0,
             attack: release(rate, 0.005),
             give_release: release(rate, 0.18),
+            limit: db_to_gain(CEILING_DB),
         }
     }
     fn set_shelf(&mut self, rate: u32, amount: f32) {
@@ -139,32 +146,54 @@ impl Bass {
         let third = BASS_THIRD * 4.0 * low * n * n;
         self.harm_lp.run(self.harm_hp.run(even + third))
     }
-    fn run(&mut self, frame: &mut [f32], harmonics: f32) {
+    /// Adds the boost as far as `limit` lets it; returns how much higher
+    /// the frame's peak would be with the whole boost, which the reserve
+    /// makes room for.
+    fn run(&mut self, frame: &mut [f32], harmonics: f32) -> f32 {
         let front = frame.len().min(2);
         let mono = frame[..front].iter().sum::<f32>() / front as f32;
         let harm = harmonics * self.harmonics(mono);
         let mut low = 0f32;
-        let mut added = 0f32;
+        let mut boosted = 0f32;
         for (ch, &x) in frame.iter().enumerate() {
-            low = low.max(self.low[ch].run(x).abs());
+            let lows = self.low[ch].run(x);
+            low = low.max(lows.abs());
             let part = self.shelf[ch].run(x) - x + if ch < front { harm } else { 0.0 };
             self.added[ch] = part;
-            added = added.max(part.abs());
+            // Through the same low-pass, so its phase is the low end's.
+            boosted = boosted.max((lows + self.low_part[ch].run(part)).abs());
         }
         self.low_env = follow(self.low_env, low, self.release);
-        self.added_env = follow(self.added_env, added, self.release);
-        // Only the LF envelope controls bass gain. The final limiter
-        // catches residual mixed-signal peaks, after the headroom reserve.
-        let target = ((0.7 - self.low_env) / self.added_env.max(1e-6)).clamp(0.0, 1.0);
+        self.boosted_env = follow(self.boosted_env, boosted, self.release);
+        // Only the LF envelope controls bass gain, against the level the
+        // reserve aims at: an absolute level under it held the boost back
+        // where the reserve would have made room (a 60 Hz sine at 0.5 got
+        // +2.7 dB of 5.5, at 0.75 nothing), and the reserve, seeing only
+        // what passed, never did. This catches what the reserve, moving
+        // at 20 dB/s and at most the largest boost, has not yet; the final
+        // limiter the mixed peaks. The low end with the whole boost is
+        // followed as it is: the low end's envelope and the boost's added
+        // up stood over it by their phases, and held the bass 0.4 dB back
+        // where the reserve had made room.
+        let grown = self.boosted_env - self.low_env;
+        let target = if grown <= 1e-6 {
+            1.0
+        } else {
+            ((self.limit - self.low_env) / grown).clamp(0.0, 1.0)
+        };
         let k = if target < self.given {
             self.attack
         } else {
             self.give_release
         };
         self.given += (target - self.given) * k;
+        let (mut given, mut whole) = (0f32, 0f32);
         for (x, part) in frame.iter_mut().zip(&self.added) {
+            whole = whole.max((*x + part).abs());
             *x += self.given * part;
+            given = given.max(x.abs());
         }
+        (whole - given).max(0.0)
     }
 }
 
@@ -552,6 +581,7 @@ impl Enhancer {
         // peaks the sound had: a master already over the ceiling is the
         // limiter's as it was without the enhancer.
         let reference = self.in_peak.max(self.ceiling);
+        self.bass.limit = reference;
         let wanted = if self.out_peak > reference {
             gain_to_db(self.out_peak / reference).min(self.now.most_reserve_db(self.channels))
         } else {
@@ -591,7 +621,7 @@ impl Enhancer {
                     *x *= reserve;
                 }
             }
-            self.bass.run(frame, a.bass_harmonics);
+            let held = self.bass.run(frame, a.bass_harmonics);
             self.tone.run(frame);
             for (x, filter) in frame.iter_mut().zip(&mut self.air) {
                 *x = filter.run(*x);
@@ -609,7 +639,9 @@ impl Enhancer {
                     frame[1] = mid - side;
                 }
             }
-            let peak = frame.iter().fold(0f32, |m, x| m.max(x.abs())) / reserve;
+            // As they would be without the reserve and with the whole
+            // bass boost, so the reserve makes room for what was held back.
+            let peak = (frame.iter().fold(0f32, |m, x| m.max(x.abs())) + held) / reserve;
             self.out_peak = follow(self.out_peak, peak, self.peak_release);
         }
     }
@@ -617,6 +649,12 @@ impl Enhancer {
     /// The reserve taken now, dB.
     pub fn reserve_db(&self) -> f32 {
         self.reserve_db
+    }
+
+    /// The share of the bass's boost its guard lets through now (0 to 1),
+    /// for `--bench enhancer`.
+    pub fn bass_given(&self) -> f32 {
+        self.bass.given
     }
 
     /// The reserve carried into a chain made anew (another track, a seek),
@@ -877,12 +915,52 @@ mod tests {
         );
     }
     #[test]
+    fn loud_bass_is_raised_against_the_rest() {
+        // A loud bass line under a quiet middle: the bass stands out by
+        // nearly the whole shelf, the reserve making room, and the peaks
+        // end at the ceiling. An absolute guard at 0.7 gave the bass at
+        // 0.5 only +2.7 dB and at 0.75 nothing.
+        for amplitude in [0.2, 0.5, 0.75] {
+            let original: Vec<f32> = (0..3 * 48000)
+                .flat_map(|i| {
+                    let t = 2.0 * PI * i as f32 / 48000.0;
+                    let x = amplitude * (60.0 * t).sin() + 0.05 * (1000.0 * t).sin();
+                    [x, x]
+                })
+                .collect();
+            let mut e = Enhancer::new(48000, 2, only(|a| a.bass = 1.0));
+            let mut s = original.clone();
+            e.process(&mut s);
+            let ratio = |s: &[f32]| level(s, 48000, 60.0) / level(s, 48000, 1000.0);
+            let raised = 20.0 * (ratio(&s) / ratio(&original)).log10();
+            assert!(raised > 5.0, "{amplitude}: {raised} dB");
+            let last = peak(&s[s.len() - 48000..]);
+            let ceiling = db_to_gain(CEILING_DB);
+            assert!(last < peak(&original).max(ceiling) * 1.02, "{amplitude}: {last}");
+        }
+    }
+    #[test]
     fn bass_limiter_responds_to_low_frequency_overload() {
+        // A loud bass comes in at once: the guard holds it while the
+        // reserve, at 20 dB a second, is still coming in, then lets the
+        // boost through.
         let mut e = Enhancer::new(48000, 2, only(|a| a.bass = 1.0));
-        let mut s = sine(48000, 60.0, 1.5, 2.0);
+        let loud = sine(48000, 60.0, 0.8, 2.1);
+        let mut s = loud[..2 * 4800].to_vec();
         e.process(&mut s);
-        assert!(e.bass.given < 0.2, "{}", e.bass.given);
-        assert!(s.iter().all(|x| x.is_finite()));
+        assert!(e.bass.given < 0.5, "{}", e.bass.given);
+        // After its first 20 ms: the onset's first quarter period passes
+        // before the envelopes have it (the final limiter's).
+        let held = peak(&s[2 * 960..]);
+        assert!(held < 0.95, "{held}");
+        let mut rest = loud[2 * 4800..].to_vec();
+        e.process(&mut rest);
+        assert!(e.bass.given > 0.95, "{}", e.bass.given);
+        let reserve = e.reserve_db();
+        assert!((4.0..6.0).contains(&reserve), "{reserve}");
+        let mut over = sine(48000, 60.0, 1.5, 2.0);
+        e.process(&mut over);
+        assert!(over.iter().all(|x| x.is_finite()));
     }
     #[test]
     fn air_has_no_sum_tones() {

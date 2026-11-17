@@ -436,6 +436,7 @@ fn bench_enhancer(args: &[String], out: &mut impl Write) {
     // reserve and the dynamic cuts (their bands over the middle and the
     // cut), as the player would see them.
     let mut reserves = Vec::new();
+    let mut given = Vec::new();
     let mut tone: [(Vec<f32>, Vec<f32>); 3] = Default::default();
     {
         let mut s = dry.clone();
@@ -443,6 +444,7 @@ fn bench_enhancer(args: &[String], out: &mut impl Write) {
         for block in s.chunks_mut(1024 * ch) {
             e.process(block);
             reserves.push(e.reserve_db());
+            given.push(e.bass_given());
             let (excess, cut) = e.tone();
             for (i, (x, c)) in tone.iter_mut().enumerate() {
                 x.push(excess[i]);
@@ -522,6 +524,13 @@ fn bench_enhancer(args: &[String], out: &mut impl Write) {
         a.most_reserve_db(ch),
         a.bass_harmonics * 10.0,
         a.air * 10.0
+    );
+    let _ = writeln!(
+        out,
+        "bass boost let through by its guard: mean {:.0} %, under 90 % for {:.0} % of the time, least {:.0} %",
+        100.0 * mean(&given),
+        100.0 * given.iter().filter(|&&g| g < 0.9).count() as f32 / given.len().max(1) as f32,
+        100.0 * given.iter().fold(1f32, |m, &g| m.min(g))
     );
     for (i, name) in ["250 Hz", "4 kHz", "7 kHz"].iter().enumerate() {
         let (excess, cut) = &tone[i];
