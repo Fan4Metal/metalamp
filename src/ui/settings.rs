@@ -1601,8 +1601,8 @@ fn processing(
             ui,
             tr!("Width", "Ширина"),
             tr!(
-                "Widens the stereo image above 250 Hz, leaving the original low-frequency stereo unchanged.",
-                "Расширяет стереокартину выше 250 Гц, сохраняя исходное стерео низких частот."
+                "Widens the mid and high stereo image with a smooth side shelf, preserving deep bass and the mono sum.",
+                "Плавно расширяет стереокартину средних и высоких частот, сохраняя глубокий бас и моносумму."
             ),
             &mut dsp.width,
         );
@@ -1611,8 +1611,8 @@ fn processing(
             ui,
             tr!("Warmth", "Теплота"),
             tr!(
-                "A soft rounding of the peaks, as tape does.",
-                "Мягкое скругление пиков, как у плёнки."
+                "Soft saturation with antialias filtering. A low amount preserves the attack of already distorted instruments.",
+                "Мягкое насыщение с подавлением паразитных частот. Малое значение сохраняет атаку инструментов, уже записанных с дисторшном."
             ),
             &mut dsp.warmth,
         );

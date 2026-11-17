@@ -38,10 +38,14 @@ impl Amounts {
     }
     /// Processing headroom, not output makeup gain. The largest boost
     /// determines the reserve; all-zero controls keep exact unity.
-    pub fn headroom_db(self) -> f32 {
+    pub fn headroom_db(self, channels: usize) -> f32 {
         (BASS_SHELF_DB * self.bass + 2.0 * self.bass_harmonics)
             .max(AIR_SHELF_DB * self.air)
-            .max(6.0 * self.width)
+            .max(if channels == 2 {
+                WIDTH_DB * self.width
+            } else {
+                0.0
+            })
             .min(6.0)
     }
 }
@@ -53,12 +57,15 @@ const BASS_THIRD: f32 = 0.3;
 const BASS_RELEASE_S: f32 = 0.2;
 pub const AIR_SHELF_DB: f32 = 3.0;
 pub const AIR_SHELF_HZ: f32 = 11000.0;
+const WIDTH_DB: f32 = 6.0;
+const WIDTH_HZ: f32 = 600.0;
 const WARMTH_DRIVE: f32 = 2.5;
-const HALF_TAPS: usize = 8;
-pub const LATENCY: usize = 2 * HALF_TAPS - 1;
+const HALF_TAPS: usize = 16;
+// Three 2x stages, up and down: 7/4 of each half-band's delay.
+// The middle decimator's late phase removes the remaining quarter frame.
+pub const LATENCY: usize = (7 * (2 * HALF_TAPS - 1) - 1) / 4;
 const KAISER_BETA: f64 = 7.0;
-const DRY_RING: usize = 32;
-const WET_RING: usize = 64;
+const DRY_RING: usize = 128;
 fn release(rate: u32, seconds: f32) -> f32 {
     1.0 - (-1.0 / (rate.max(1) as f32 * seconds)).exp()
 }
@@ -103,7 +110,11 @@ impl Bass {
         }
     }
     fn set_shelf(&mut self, rate: u32, amount: f32) {
-        let c = Coeffs::low_shelf(rate, BASS_SHELF_HZ, BASS_SHELF_DB * amount);
+        let c = if amount == 0.0 {
+            Coeffs::default()
+        } else {
+            Coeffs::low_shelf(rate, BASS_SHELF_HZ, BASS_SHELF_DB * amount)
+        };
         for f in &mut self.shelf {
             f.set(c);
         }
@@ -200,7 +211,14 @@ impl Tone {
             // coefficients change once per SUB frames, so use the
             // equivalent time constant instead of slowing it by SUB.
             self.db[i] += (target - self.db[i]) * (1.0 - (1.0 - k).powi(SUB as i32));
-            let c = Coeffs::peaking(rate, TONE_HZ[i], TONE_Q[i], self.db[i]);
+            if target == 0.0 && self.db[i].abs() < 1e-4 {
+                self.db[i] = 0.0;
+            }
+            let c = if self.db[i] == 0.0 {
+                Coeffs::default()
+            } else {
+                Coeffs::peaking(rate, TONE_HZ[i], TONE_Q[i], self.db[i])
+            };
             for ch in &mut self.channels {
                 ch.filters[i].set(c);
             }
@@ -257,13 +275,61 @@ fn half_band() -> [f32; HALF_TAPS] {
     s.map(|t| (t * 0.25 / total) as f32)
 }
 
-/// Warmth at twice the rate, and the delay of the dry sound, per channel.
+/// The nonzero polyphases of a 2x half-band interpolator. Keeping only
+/// input-rate history avoids multiplying zero-stuffed samples.
+#[derive(Clone, Default)]
+struct Interpolator {
+    history: [f32; 2 * HALF_TAPS],
+    at: usize,
+}
+impl Interpolator {
+    fn pair(&mut self, x: f32, taps: &[f32; HALF_TAPS]) -> [f32; 2] {
+        self.history[self.at] = x;
+        let back = |n: usize| self.history[self.at.wrapping_sub(n) % self.history.len()];
+        let mut even = 0.0;
+        for (i, &tap) in taps.iter().enumerate() {
+            even += tap * (back(HALF_TAPS - 1 - i) + back(HALF_TAPS + i));
+        }
+        let odd = back(HALF_TAPS - 1);
+        self.at = (self.at + 1) % self.history.len();
+        [2.0 * even, odd]
+    }
+}
+
+/// Both input phases are retained, but the filter is evaluated only for
+/// the phase which is emitted. `late` chooses the second sample's time.
+#[derive(Clone, Default)]
+struct Decimator {
+    even: [f32; 2 * HALF_TAPS],
+    odd: [f32; 2 * HALF_TAPS],
+    at: usize,
+}
+impl Decimator {
+    fn sample(&mut self, pair: [f32; 2], late: bool, taps: &[f32; HALF_TAPS]) -> f32 {
+        self.even[self.at] = pair[0];
+        self.odd[self.at] = pair[1];
+        let back = |h: &[f32; 2 * HALF_TAPS], n: usize| h[self.at.wrapping_sub(n) % h.len()];
+        let mut y = 0.5
+            * if late {
+                back(&self.even, HALF_TAPS - 1)
+            } else {
+                back(&self.odd, HALF_TAPS)
+            };
+        let side = if late { &self.odd } else { &self.even };
+        for (i, &tap) in taps.iter().enumerate() {
+            y += tap * (back(side, HALF_TAPS - 1 - i) + back(side, HALF_TAPS + i));
+        }
+        self.at = (self.at + 1) % self.even.len();
+        y
+    }
+}
+
+/// Warmth at eight times the rate and the aligned dry delay, per channel.
 #[derive(Clone)]
 struct WarmthChannel {
-    /// The input, by frame.
     dry: [f32; DRY_RING],
-    /// The saturation's part at twice the rate, by its time.
-    wet: [f32; WET_RING],
+    up: [Interpolator; 3],
+    down: [Decimator; 3],
 }
 
 struct Warmth {
@@ -282,7 +348,8 @@ impl Warmth {
             channels: vec![
                 WarmthChannel {
                     dry: [0.0; DRY_RING],
-                    wet: [0.0; WET_RING],
+                    up: std::array::from_fn(|_| Interpolator::default()),
+                    down: std::array::from_fn(|_| Decimator::default()),
                 };
                 channels
             ],
@@ -291,10 +358,12 @@ impl Warmth {
         }
     }
 
-    /// The saturation's part dropped (it is of the sound long before).
+    /// Drop inactive resampler history before a new fade in. The dry
+    /// delay always runs, including while warmth is at exact zero.
     fn clear_wet(&mut self) {
         for ch in &mut self.channels {
-            ch.wet = [0.0; WET_RING];
+            ch.up = std::array::from_fn(|_| Interpolator::default());
+            ch.down = std::array::from_fn(|_| Decimator::default());
         }
     }
 
@@ -303,7 +372,6 @@ impl Warmth {
     fn run(&mut self, frame: &mut [f32], amount: f32) {
         let n = self.n;
         self.n = n.wrapping_add(1);
-        let m = HALF_TAPS - 1;
         let s = &self.taps;
         for (x, ch) in frame.iter_mut().zip(&mut self.channels) {
             ch.dry[n % DRY_RING] = *x;
@@ -313,28 +381,24 @@ impl Warmth {
                 *x = out;
                 continue;
             }
-            // Up: the zero-stuffed input through the half-band filter (times
-            // two). The odd phase is the input `m` frames back; the even one
-            // lies half a frame before it.
-            let mut even = 0.0;
-            for (i, &tap) in s.iter().enumerate() {
-                even += tap * (dry(m - i) + dry(m + 1 + i));
+            // Saturate at 8x: at 2x the fifth harmonic of a 15 kHz tone
+            // folds directly into 13.2 kHz at 44.1 kHz. Filtering after
+            // that fold cannot remove it. Process only the nonlinear
+            // residual, so the original sound never traverses these FIRs.
+            let twice = ch.up[0].pair(*x, s);
+            let mut four = [0.0; 4];
+            for (x, pair) in twice.into_iter().zip(four.as_chunks_mut::<2>().0) {
+                pair.copy_from_slice(&ch.up[1].pair(x, s));
             }
-            let even = 2.0 * even;
-            let odd = dry(m);
             let part = |u: f32| (WARMTH_DRIVE * u).tanh() * self.gain - u;
-            let t = 2 * n;
-            ch.wet[t % WET_RING] = part(even);
-            ch.wet[(t + 1) % WET_RING] = part(odd);
-            // Down: the half-band filter at time `t`, which is the frame
-            // `LATENCY` back; its middle tap falls on an odd time, the side
-            // taps on even ones.
-            let wet = |at: usize| ch.wet[at % WET_RING];
-            let middle = t + WET_RING - LATENCY;
-            let mut down = 0.5 * wet(middle);
-            for (i, &tap) in s.iter().enumerate() {
-                down += tap * (wet(middle + 2 * i + 1) + wet(middle - 2 * i - 1));
+            for x in &mut four {
+                let pair = ch.up[2].pair(*x, s).map(part);
+                *x = ch.down[0].sample(pair, false, s);
             }
+            let twice = std::array::from_fn::<_, 2, _>(|i| {
+                ch.down[1].sample([four[2 * i], four[2 * i + 1]], true, s)
+            });
+            let down = ch.down[2].sample(twice, false, s);
             *x = out + amount * down;
         }
     }
@@ -346,11 +410,11 @@ pub struct Enhancer {
     target: Amounts,
     now: Amounts,
     slide: f32,
-    shelves_for: (f32, f32),
+    shelves_for: (f32, f32, f32),
     bass: Bass,
     air: Vec<Biquad>,
     tone: Tone,
-    side_hp: Biquad,
+    side_shelf: Biquad,
     warmth: Warmth,
     sub: usize,
     reserve: f32,
@@ -366,14 +430,14 @@ impl Enhancer {
             target: a,
             now: a,
             slide: 1.0 - (-(SUB as f32) / (rate as f32 * SLIDE_S)).exp(),
-            shelves_for: (-1.0, -1.0),
+            shelves_for: (-1.0, -1.0, -1.0),
             bass: Bass::new(rate, channels),
             air: vec![Biquad::default(); channels],
             tone: Tone::new(rate, channels),
-            side_hp: Biquad::new(Coeffs::high_pass(rate, 250.0, FRAC_1_SQRT_2)),
+            side_shelf: Biquad::default(),
             warmth: Warmth::new(channels),
             sub: 0,
-            reserve: db_to_gain(-a.headroom_db()),
+            reserve: db_to_gain(-a.headroom_db(channels)),
         };
         e.set_shelves();
         e
@@ -381,17 +445,33 @@ impl Enhancer {
     pub fn configure(&mut self, a: Amounts) {
         self.target = a.clamped();
     }
+    /// Also true while controls are fading out after bypass. The final
+    /// limiter must keep protecting boosts until this transition ends.
+    pub fn active(&self) -> bool {
+        self.now != Amounts::default()
+    }
     fn set_shelves(&mut self) {
-        if (self.now.bass - self.shelves_for.0).abs() > 1e-4 {
+        if self.now.bass != self.shelves_for.0 {
             self.bass.set_shelf(self.rate, self.now.bass);
         }
-        if (self.now.air - self.shelves_for.1).abs() > 1e-4 {
-            let c = Coeffs::high_shelf(self.rate, AIR_SHELF_HZ, AIR_SHELF_DB * self.now.air);
+        if self.now.air != self.shelves_for.1 {
+            let c = if self.now.air == 0.0 {
+                Coeffs::default()
+            } else {
+                Coeffs::high_shelf(self.rate, AIR_SHELF_HZ, AIR_SHELF_DB * self.now.air)
+            };
             for f in &mut self.air {
                 f.set(c);
             }
         }
-        self.shelves_for = (self.now.bass, self.now.air);
+        if self.now.width != self.shelves_for.2 {
+            self.side_shelf.set(if self.now.width == 0.0 {
+                Coeffs::default()
+            } else {
+                Coeffs::high_shelf(self.rate, WIDTH_HZ, WIDTH_DB * self.now.width)
+            });
+        }
+        self.shelves_for = (self.now.bass, self.now.air, self.now.width);
     }
     fn step(&mut self) {
         let slid = |now: f32, to: f32| {
@@ -414,7 +494,7 @@ impl Enhancer {
             self.warmth.clear_wet();
         }
         self.set_shelves();
-        self.reserve = db_to_gain(-self.now.headroom_db());
+        self.reserve = db_to_gain(-self.now.headroom_db(self.channels));
         self.tone
             .coefficients(self.rate, self.now.bass, self.now.clarity);
     }
@@ -437,15 +517,18 @@ impl Enhancer {
             for (x, filter) in frame.iter_mut().zip(&mut self.air) {
                 *x = filter.run(*x);
             }
-            if a.width > 0.0 && self.channels == 2 {
+            if self.channels == 2 {
                 let (l, r) = (frame[0], frame[1]);
                 let mid = (l + r) / 2.0;
                 let side = (l - r) / 2.0;
-                let side = side + a.width * self.side_hp.run(side);
-                frame[0] = mid + side;
-                frame[1] = mid - side;
-            } else if self.channels == 2 {
-                self.side_hp.run((frame[0] - frame[1]) / 2.0);
+                // A monotonic side shelf avoids the LF cancellation of
+                // adding a phase-shifted high-pass to the original side.
+                // The mid is untouched: the width cancels in a mono sum.
+                let side = self.side_shelf.run(side);
+                if a.width > 0.0 {
+                    frame[0] = mid + side;
+                    frame[1] = mid - side;
+                }
             }
         }
     }
@@ -513,36 +596,63 @@ mod tests {
 
     #[test]
     fn warmth_lines_up_with_the_sound_it_comes_from() {
-        // A quiet 10 kHz tone: warmth is its small-signal gain then, so
+        // Quiet tones: warmth is its small-signal gain then, so
         // the output is the input `LATENCY` back times that gain; the
         // saturation's part a frame off would be out by about its whole
         // size (0.006).
-        let rate = 48000;
-        let mut e = Enhancer::new(rate, 2, only(|a| a.warmth = 1.0));
-        let original = sine(rate, 10000.0, 0.05, 0.2);
-        let mut s = original.clone();
-        e.process(&mut s);
-        let d = 0.25 * WARMTH_DRIVE;
-        let g = d / d.tanh();
-        let error = s[2 * (LATENCY + 64)..]
-            .iter()
-            .zip(&original[2 * 64..])
-            .map(|(&y, &x)| (y - g * x).abs())
-            .fold(0.0f32, f32::max);
-        assert!(error < 0.0015, "{error}");
+        for rate in [44100, 48000] {
+            for frequency in [60.0, 1000.0, 10000.0, 19000.0] {
+                let mut e = Enhancer::new(rate, 2, only(|a| a.warmth = 1.0));
+                let original = sine(rate, frequency, 0.05, 0.2);
+                let mut s = original.clone();
+                e.process(&mut s);
+                let d = 0.25 * WARMTH_DRIVE;
+                let g = d / d.tanh();
+                let error = s[2 * (LATENCY + 128)..]
+                    .iter()
+                    .zip(&original[2 * 128..])
+                    .map(|(&y, &x)| (y - g * x).abs())
+                    .fold(0.0f32, f32::max);
+                assert!(error < 0.0015, "{rate}, {frequency}: {error}");
+            }
+        }
     }
 
     #[test]
     fn warmth_folds_nothing_back() {
-        // 15 kHz at 44.1 kHz: its third harmonic, 45 kHz, came back at
-        // 900 Hz without the twice the rate.
-        let rate = 44100;
-        let mut e = Enhancer::new(rate, 2, only(|a| a.warmth = 1.0));
-        let mut s = sine(rate, 15000.0, 0.9, 2.0);
-        e.process(&mut s);
-        let folded = level(&s, rate, 900.0);
-        // Under -60 dB of the tone.
-        assert!(folded < 0.9 * 0.001, "{folded}");
+        // At 2x the third harmonic was suppressed, but the fifth and
+        // seventh folded back as loud as -26 dBc. Check every odd order,
+        // including those which already alias within the oversampler.
+        for rate in [44100, 48000] {
+            for frequency in [10000.0, 15000.0, 19000.0] {
+                let mut e = Enhancer::new(rate, 2, only(|a| a.warmth = 1.0));
+                // Double-precision phase keeps the generator's own noise
+                // below the alias rejection being measured.
+                let mut s: Vec<f32> = (0..2 * rate)
+                    .flat_map(|i| {
+                        let phase = std::f64::consts::TAU * f64::from(frequency) * f64::from(i)
+                            / f64::from(rate);
+                        let x = (0.9 * phase.sin()) as f32;
+                        [x, x]
+                    })
+                    .collect();
+                e.process(&mut s);
+                let fundamental = level(&s, rate, frequency);
+                for harmonic in (3..=31).step_by(2) {
+                    let alias = (frequency * harmonic as f32) % rate as f32;
+                    let alias = alias.min(rate as f32 - alias);
+                    if alias == 0.0 || (alias - frequency).abs() < 1.0 {
+                        continue;
+                    }
+                    let folded = level(&s, rate, alias);
+                    assert!(
+                        folded < fundamental * 0.001,
+                        "{rate}, {frequency}, order {harmonic}, alias {alias}: {} dBc",
+                        20.0 * (folded / fundamental).log10()
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -566,7 +676,7 @@ mod tests {
         let mut s = original.to_vec();
         Enhancer::new(48000, 2, a).process(&mut s);
         for x in &mut s {
-            *x *= db_to_gain(a.headroom_db());
+            *x *= db_to_gain(a.headroom_db(2));
         }
         s
     }
@@ -641,6 +751,57 @@ mod tests {
         let low = sine(48000, 1000.0, 0.1, 2.0);
         let s = matched(only(|a| a.clarity = 1.0), &low);
         assert!((level(&s, 48000, 1000.0) / 0.1 - 1.0).abs() < 0.02);
+    }
+    #[test]
+    fn width_has_no_low_frequency_dip_and_keeps_the_mono_sum() {
+        let a = only(|a| a.width = 1.0);
+        // An isolated side signal exposes cancellation that a mono
+        // sine cannot: dry + a Butterworth HP lost ~1 dB near 100 Hz.
+        for hz in [40.0, 80.0, 100.0, 160.0, 250.0, 600.0, 2000.0, 10000.0] {
+            let mut original = sine(48000, hz, 0.1, 2.0);
+            for frame in original.as_chunks_mut::<2>().0 {
+                frame[1] = -frame[0];
+            }
+            let s = matched(a, &original);
+            let db = 20.0 * (level(&s, 48000, hz) / 0.1).log10();
+            assert!((-0.03..=6.03).contains(&db), "{hz} Hz: {db} dB");
+            if hz <= 100.0 {
+                assert!(db < 0.03, "LF stereo changed: {hz} Hz, {db} dB");
+            }
+            if hz >= 10000.0 {
+                assert!(db > 5.9, "HF widening missing: {db} dB");
+            }
+        }
+        let original: Vec<f32> = (0..48000)
+            .flat_map(|i| {
+                let t = 2.0 * PI * i as f32 / 48000.0;
+                [(431.0 * t).sin() * 0.2, (977.0 * t).cos() * 0.1]
+            })
+            .collect();
+        let s = matched(a, &original);
+        for (out, dry) in s[2 * LATENCY..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .zip(original.as_chunks::<2>().0)
+        {
+            assert!(((out[0] + out[1]) - (dry[0] + dry[1])).abs() < 2e-7);
+        }
+    }
+    #[test]
+    fn width_cannot_turn_down_mono_or_multichannel_sound() {
+        for channels in [1, 6] {
+            let a = only(|a| a.width = 1.0);
+            assert_eq!(a.headroom_db(channels), 0.0);
+            let original: Vec<f32> = (0..10000).map(|i| (i as f32 * 0.1).sin() * 0.1).collect();
+            let mut processed = original.clone();
+            Enhancer::new(48000, channels, a).process(&mut processed);
+            let n = processed.len() / channels * channels;
+            assert_eq!(
+                processed[channels * LATENCY..n],
+                original[..n - channels * LATENCY]
+            );
+        }
     }
     #[test]
     fn processing_is_independent_of_block_boundaries() {

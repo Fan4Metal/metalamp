@@ -8,6 +8,8 @@
 //! the players of old, and a raised preamp is heard). `DspSettings` is
 //! what the settings window edits (`settings.dsp`); the engine gets a
 //! copy with `Cmd::Dsp` and keeps the filters' state across changes.
+//! Dry and processed sound share a fixed delay, including in bypass:
+//! toggling processing never drops or repeats part of the waveform.
 
 pub mod biquad;
 pub mod channels;
@@ -83,7 +85,7 @@ impl DspSettings {
     }
 
     /// The enhancer's amounts, all 0 while it is off (so turning it off
-    /// slides it out, and on again in, with empty filters).
+    /// slides it out, and on again in, with continuously warm filters).
     fn amounts(&self) -> enhancer::Amounts {
         if !self.enhancer {
             return enhancer::Amounts::default();
@@ -125,12 +127,16 @@ pub struct Chain {
     limiter: limiter::Limiter,
     channels_stage: channels::Channels,
     /// The track gain applied now; it slides to the one asked for.
-    gain: f32,
-    slide: f32,
+    gain: f64,
+    slide: f64,
+    eq_mix: f64,
+    eq_slide: f64,
+    eq_dry: Vec<f32>,
 }
 
 impl Chain {
     pub fn new(rate: u32, channels: u16, settings: &DspSettings) -> Chain {
+        let rate = rate.max(1);
         let channels = usize::from(channels.max(1));
         Chain {
             settings: settings.clone(),
@@ -146,7 +152,10 @@ impl Chain {
             },
             gain: 1.0,
             // A gain change takes about 300 ms.
-            slide: 1.0 - (-1.0 / (rate as f32 * 0.3)).exp(),
+            slide: 1.0 - (-1.0 / (f64::from(rate) * 0.3)).exp(),
+            eq_mix: if settings.eq { 1.0 } else { 0.0 },
+            eq_slide: 1.0 - (-1.0 / (f64::from(rate) * 0.05)).exp(),
+            eq_dry: vec![0.0; channels],
         }
     }
 
@@ -158,33 +167,28 @@ impl Chain {
         self.gain = gain;
     }
 
-    /// New settings; the filters' state is kept, but for a chain turned on
-    /// from a wire, whose state is of the sound long before.
+    /// New settings; every stage's history and delay are kept. Only a
+    /// seek or an explicitly started stream resets the sample timeline.
     pub fn configure(&mut self, settings: &DspSettings) {
-        if !self.settings.active() && settings.active() {
-            self.settings = settings.clone();
-            self.reset();
-            return;
-        }
         if settings.preamp != self.settings.preamp || settings.bands != self.settings.bands {
             self.eq.configure(settings.preamp, &settings.bands);
         }
         if settings.amounts() != self.settings.amounts() {
             self.enhancer.configure(settings.amounts());
         }
-        // A limiter turned on again starts empty, not with the sound of
-        // when it was turned off.
-        if settings.limiter && !self.settings.limiter {
-            self.limiter = limiter::Limiter::new(self.rate, self.channels, db_to_gain(CEILING_DB));
-        }
         self.settings = settings.clone();
+    }
+
+    /// Fixed processing delay in the output format, including bypass.
+    pub fn latency_frames(&self) -> usize {
+        enhancer::LATENCY + self.limiter.latency_frames()
     }
 
     /// A track (or a crossfade into one) begins: its gain applies at once,
     /// not slid from the track's before; a gain arriving later slides.
     pub fn begin_track(&mut self, track_gain: f32) {
         self.gain = if self.settings.active() && self.settings.normalize {
-            track_gain
+            f64::from(track_gain)
         } else {
             1.0
         };
@@ -194,36 +198,47 @@ impl Chain {
     /// `track_gain` (1 when not known).
     pub fn process(&mut self, samples: &mut [f32], track_gain: f32) {
         let s = &self.settings;
-        if !s.active() {
-            self.channels_stage.process(samples, s.balance, s.mono);
-            return;
-        }
-        if s.normalize {
-            let target = track_gain;
-            for frame in samples.chunks_exact_mut(self.channels) {
-                if (self.gain - target).abs() > 1e-4 {
-                    self.gain += (target - self.gain) * self.slide;
-                } else {
-                    self.gain = target;
-                }
-                for x in frame {
-                    *x *= self.gain;
-                }
-            }
+        // Controls can still be fading out after their switches were
+        // cleared. Keep protecting those boosted frames for this entire
+        // block, even if the controls settle before its end.
+        let limiting = s.limiter
+            && (s.active() || self.gain > 1.0 || self.eq_mix > 0.0 || self.enhancer.active());
+        let target = if s.normalize {
+            f64::from(track_gain)
         } else {
-            self.gain = 1.0;
-        }
-        if s.eq {
-            self.eq.process(samples);
+            1.0
+        };
+        let eq_target = if s.eq { 1.0 } else { 0.0 };
+        for frame in samples.chunks_exact_mut(self.channels) {
+            if (self.gain - target).abs() > 1e-7 {
+                self.gain += (target - self.gain) * self.slide;
+            } else {
+                self.gain = target;
+            }
+            for x in frame.iter_mut() {
+                *x *= self.gain as f32;
+            }
+            if (self.eq_mix - eq_target).abs() > 1e-7 {
+                self.eq_mix += (eq_target - self.eq_mix) * self.eq_slide;
+            } else {
+                self.eq_mix = eq_target;
+            }
+            self.eq_dry.copy_from_slice(frame);
+            self.eq.process(frame);
+            for (x, &dry) in frame.iter_mut().zip(&self.eq_dry) {
+                *x = if self.eq_mix == 0.0 {
+                    dry
+                } else {
+                    dry + self.eq_mix as f32 * (*x - dry)
+                };
+            }
         }
         // Also after it was turned off, while its amounts slide out; and
         // off, it still delays the sound by its `LATENCY`, so turning it
         // on or off does not shift it.
         self.enhancer.process(samples);
         self.channels_stage.process(samples, s.balance, s.mono);
-        if s.limiter {
-            self.limiter.process(samples);
-        }
+        self.limiter.process_enabled(samples, limiting);
     }
 }
 
@@ -243,11 +258,13 @@ mod tests {
     }
 
     #[test]
-    fn an_idle_chain_is_a_wire_and_a_gain_slides() {
+    fn an_idle_chain_is_a_delayed_wire_and_a_gain_slides() {
         let mut c = Chain::new(48000, 2, &DspSettings::default());
-        let mut s = vec![0.5; 200];
+        let latency = c.latency_frames();
+        let mut s = vec![0.5; 2 * (latency + 100)];
         c.process(&mut s, 0.5);
-        assert!(s.iter().all(|&x| x == 0.5));
+        assert!(s[..2 * latency].iter().all(|&x| x == 0.0));
+        assert!(s[2 * latency..].iter().all(|&x| x == 0.5));
         let mut c = Chain::new(
             48000,
             2,
@@ -260,7 +277,8 @@ mod tests {
         c.process(&mut s, 0.5);
         // Early on (past the limiter's 5 ms delay) the gain is still near
         // 1, after a second it is 0.5.
-        assert!(s[2 * 300] > 0.49, "{}", s[2 * 300]);
+        let early = 2 * (c.latency_frames() + 20);
+        assert!(s[early] > 0.49, "{}", s[early]);
         assert!((s[2 * 48000 - 1] - 0.25).abs() < 0.01);
     }
 
@@ -275,14 +293,105 @@ mod tests {
         };
         assert!(!settings.active());
         let mut c = Chain::new(48000, 2, &settings);
-        let mut s: Vec<f32> = (0..100).flat_map(|_| [1.0, 0.9]).collect();
+        let latency = c.latency_frames();
+        let mut s: Vec<f32> = (0..latency + 100).flat_map(|_| [1.0, 0.9]).collect();
         c.process(&mut s, 1.0);
         // The mean 0.95 on both, the right halved.
         assert!(
-            (s[0] - 0.95).abs() < 1e-6 && (s[1] - 0.475).abs() < 1e-6,
+            (s[2 * latency] - 0.95).abs() < 1e-6 && (s[2 * latency + 1] - 0.475).abs() < 1e-6,
             "{:?}",
-            &s[..2]
+            &s[2 * latency..2 * latency + 2]
         );
+    }
+
+    #[test]
+    fn zero_enhancement_and_limiter_switches_keep_the_sample_timeline() {
+        let mut settings = DspSettings::default();
+        let mut c = Chain::new(48000, 2, &settings);
+        let latency = c.latency_frames();
+        let original: Vec<f32> = (0..12000).map(|i| 0.2 * (i as f32 * 0.31).sin()).collect();
+        let mut s = original.clone();
+        s.extend(std::iter::repeat_n(0.0, latency * 2));
+        for (i, part) in s.chunks_mut(200).enumerate() {
+            settings.enhancer = i % 4 >= 2;
+            settings.limiter = i % 3 != 0;
+            c.configure(&settings);
+            c.process(part, 1.0);
+        }
+        assert!(s[..latency * 2].iter().all(|&x| x == 0.0));
+        assert_eq!(&s[latency * 2..], &original);
+    }
+
+    #[test]
+    fn turning_processing_off_releases_gains_without_a_step() {
+        let mut settings = DspSettings {
+            eq: true,
+            preamp: -12.0,
+            normalize: true,
+            enhancer: true,
+            bass: 5,
+            ..Default::default()
+        };
+        let mut c = Chain::new(48000, 2, &settings);
+        let mut s = vec![0.1; 48000 * 4];
+        c.process(&mut s[..48000], 0.5);
+        settings.eq = false;
+        settings.normalize = false;
+        settings.enhancer = false;
+        c.configure(&settings);
+        c.process(&mut s[48000..], 0.5);
+        let jump = s[47000..]
+            .windows(3)
+            .step_by(2)
+            .map(|w| (w[2] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(jump < 0.0001, "{jump}");
+        assert!((s[s.len() - 1] - 0.1).abs() < 0.001);
+    }
+
+    #[test]
+    fn bypass_settles_to_exact_unity_at_high_sample_rates() {
+        for rate in [48000, 192000] {
+            let mut settings = DspSettings {
+                normalize: true,
+                eq: true,
+                preamp: -6.0,
+                enhancer: true,
+                bass: 5,
+                ..Default::default()
+            };
+            let mut c = Chain::new(rate, 2, &settings);
+            c.begin_track(0.5);
+            c.process(&mut vec![0.1; rate as usize], 0.5);
+            settings.normalize = false;
+            settings.eq = false;
+            settings.enhancer = false;
+            c.configure(&settings);
+            let mut s = vec![0.1; 2 * rate as usize * 6];
+            c.process(&mut s, 0.5);
+            assert_eq!(c.gain, 1.0, "{rate}");
+            assert_eq!(c.eq_mix, 0.0, "{rate}");
+            assert!(s[s.len() - 1000..].iter().all(|&x| x == 0.1), "{rate}");
+        }
+    }
+
+    #[test]
+    fn normalization_fading_out_keeps_limiter_protection() {
+        let mut settings = DspSettings {
+            normalize: true,
+            ..Default::default()
+        };
+        let mut c = Chain::new(48000, 2, &settings);
+        c.begin_track(4.0);
+        c.process(&mut vec![0.5; 48000], 4.0);
+        settings.normalize = false;
+        c.configure(&settings);
+        // A single long block also must retain protection at its start.
+        let mut s = vec![0.5; 48000 * 12];
+        c.process(&mut s, 4.0);
+        let peak = s.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
+        assert!(peak <= db_to_gain(CEILING_DB) + 1e-6, "{peak}");
+        assert_eq!(s[s.len() - 1], 0.5);
     }
 
     /// The peak in dBFS of a stereo 1 kHz sine at `level` dBFS through a

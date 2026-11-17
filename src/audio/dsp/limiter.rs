@@ -89,12 +89,12 @@ pub struct Limiter {
     lookahead: usize,
     needs: VecDeque<(u64, f32)>,
     index: u64,
-    gain: f32,
-    attack_step: f32,
-    fast_release: f32,
-    slow_release: f32,
-    sustained: f32,
-    mean: f32,
+    gain: f64,
+    attack_step: f64,
+    fast_release: f64,
+    slow_release: f64,
+    sustained: f64,
+    mean: f64,
     detector: TruePeak,
 }
 impl Limiter {
@@ -113,18 +113,27 @@ impl Limiter {
             needs: VecDeque::with_capacity(lookahead + 3),
             index: 0,
             gain: 1.0,
-            attack_step: 1.0 / lookahead as f32,
-            fast_release: 1.0 - (-1.0 / (rate as f32 * 0.06)).exp(),
-            slow_release: 1.0 - (-1.0 / (rate as f32 * 0.24)).exp(),
+            attack_step: 1.0 / lookahead as f64,
+            fast_release: 1.0 - (-1.0 / (f64::from(rate) * 0.06)).exp(),
+            slow_release: 1.0 - (-1.0 / (f64::from(rate) * 0.24)).exp(),
             sustained: 0.0,
-            mean: 1.0 - (-1.0 / (rate as f32 * 0.1)).exp(),
+            mean: 1.0 - (-1.0 / (f64::from(rate) * 0.1)).exp(),
             detector: TruePeak::new(channels),
         }
     }
     pub fn reduction_db(&self) -> f32 {
-        -20.0 * self.gain.max(1e-9).log10()
+        (-20.0 * self.gain.max(1e-9).log10()) as f32
+    }
+    /// The audio delay stays in place while limiting is bypassed.
+    pub(crate) fn latency_frames(&self) -> usize {
+        self.frames
     }
     pub fn process(&mut self, samples: &mut [f32]) {
+        self.process_enabled(samples, true);
+    }
+    /// Keep the detector and delay warm while bypassed. Switching the
+    /// limiter changes only its gain, never the stream's time or history.
+    pub(crate) fn process_enabled(&mut self, samples: &mut [f32], enabled: bool) {
         for frame in samples.chunks_exact_mut(self.channels) {
             for x in frame.iter_mut() {
                 if !x.is_finite() {
@@ -143,7 +152,11 @@ impl Limiter {
             while self.needs.front().is_some_and(|&(i, _)| i < oldest) {
                 self.needs.pop_front();
             }
-            let target = self.needs.front().map_or(1.0, |&(_, g)| g);
+            let target = if enabled {
+                f64::from(self.needs.front().map_or(1.0, |&(_, g)| g))
+            } else {
+                1.0
+            };
             self.sustained += ((1.0 - target) - self.sustained) * self.mean;
             if target < self.gain {
                 self.gain = (self.gain - self.attack_step).max(target);
@@ -151,14 +164,21 @@ impl Limiter {
                 let mix = (4.0 * self.sustained).min(1.0);
                 let k = self.fast_release + (self.slow_release - self.fast_release) * mix;
                 self.gain += (target - self.gain) * k;
+                if (target - self.gain).abs() < 1e-7 {
+                    self.gain = target;
+                }
             }
             let slot = &mut self.delay[self.at * self.channels..(self.at + 1) * self.channels];
             // Sample-peak guard is a gain decision shared by all channels;
             // normally the interpolated detector has already covered it.
             let out_peak = slot.iter().fold(0f32, |m, x| m.max(x.abs()));
-            self.gain = self.gain.min((self.ceiling / out_peak.max(1e-12)).min(1.0));
+            if enabled {
+                self.gain = self
+                    .gain
+                    .min(f64::from((self.ceiling / out_peak.max(1e-12)).min(1.0)));
+            }
             for (x, d) in frame.iter_mut().zip(slot) {
-                let out = *d * self.gain;
+                let out = *d * self.gain as f32;
                 *d = *x;
                 *x = out;
             }
@@ -287,5 +307,32 @@ mod tests {
             l.process(part);
         }
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn bypass_releases_attenuation_without_dropping_the_delay() {
+        for rate in [48000, 192000] {
+            let mut l = Limiter::new(rate, 2, 0.9);
+            let delay = l.latency_frames();
+            let mut loud = vec![1.2; rate as usize / 2];
+            l.process(&mut loud);
+            let held = loud[loud.len() - 1];
+            assert!(held < 0.9 && held > 0.85, "{held}");
+            let mut bypassed = vec![1.2; rate as usize * 6];
+            l.process_enabled(&mut bypassed, false);
+            assert!((bypassed[0] - held).abs() < 0.001);
+            assert_eq!(bypassed[bypassed.len() - 1], 1.2, "{rate}");
+            assert!(bypassed.iter().all(|&x| x >= held));
+
+            // A quiet non-repeating signal crosses another switch with every
+            // frame intact. The history includes the bypassed interval.
+            let original: Vec<f32> = (0..4000).map(|i| i as f32 / 20000.0).collect();
+            let mut s = original.clone();
+            s.extend(std::iter::repeat_n(0.0, delay * 2));
+            let mut l = Limiter::new(rate, 2, 0.9);
+            l.process_enabled(&mut s[..400], false);
+            l.process_enabled(&mut s[400..], true);
+            assert_eq!(&s[delay * 2..], &original);
+        }
     }
 }

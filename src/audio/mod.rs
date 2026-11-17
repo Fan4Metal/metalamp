@@ -534,6 +534,9 @@ struct Player<'a> {
     eos: bool,
     /// The next track needs another format: drain first.
     format_change: bool,
+    /// Zeros still needed to emit the fixed DSP delay at the final end.
+    /// None until draining begins; Some(0) prevents a second flush.
+    tail_remaining: Option<usize>,
     drained_since: Option<Instant>,
     checked_device: Instant,
     /// The device wanted (its id; empty: the default).
@@ -630,6 +633,7 @@ fn run_player(
         started: false,
         eos: false,
         format_change: false,
+        tail_remaining: None,
         drained_since: None,
         checked_device: Instant::now(),
         device,
@@ -1015,15 +1019,25 @@ impl Player<'_> {
         (self.format.0 as f32 * FADE_S) as u64
     }
 
-    /// `block` (raw samples from the ring) written to the device after
-    /// the fade in under way, the processing and its gains; told to the
-    /// visualizations.
-    fn write_block(&mut self, mut block: Vec<f32>) -> windows::core::Result<()> {
+    /// `block` (raw samples from the ring) processed, faded if needed,
+    /// written to the device, then told to the visualizations.
+    fn write_block(&mut self, block: Vec<f32>) -> windows::core::Result<()> {
+        self.write_faded_block(block, false)
+    }
+
+    /// Playback fades act after DSP: applying a fade to its input would
+    /// leave the last delayed frames unfaded when the device is stopped.
+    fn write_faded_block(
+        &mut self,
+        mut block: Vec<f32>,
+        fade_out: bool,
+    ) -> windows::core::Result<()> {
         let channels = usize::from(self.format.1.max(1));
         let frames = block.len() / channels;
         if frames == 0 {
             return Ok(());
         }
+        self.process(&mut block, frames);
         if let Some(done) = self.fade_in {
             let len = self.fade_frames().max(1);
             for (i, frame) in block.chunks_exact_mut(channels).enumerate() {
@@ -1037,7 +1051,12 @@ impl Player<'_> {
             let done = done + frames as u64;
             self.fade_in = (done < len).then_some(done);
         }
-        self.process(&mut block, frames);
+        if fade_out {
+            for (i, frame) in block.chunks_exact_mut(channels).enumerate() {
+                let g = fade_shape(1.0 - (i + 1) as f32 / frames as f32);
+                frame.iter_mut().for_each(|x| *x *= g);
+            }
+        }
         let Some(out) = self.out.as_mut() else {
             return Ok(());
         };
@@ -1064,12 +1083,8 @@ impl Player<'_> {
         let channels = usize::from(self.format.1.max(1));
         let len = (self.fade_frames() as usize).min(self.ring.len() / channels);
         if len > 0 {
-            let mut block: Vec<f32> = self.ring.drain(..len * channels).collect();
-            for (i, frame) in block.chunks_exact_mut(channels).enumerate() {
-                let g = fade_shape(1.0 - (i + 1) as f32 / len as f32);
-                frame.iter_mut().for_each(|x| *x *= g);
-            }
-            if self.write_block(block).is_err() {
+            let block: Vec<f32> = self.ring.drain(..len * channels).collect();
+            if self.write_faded_block(block, true).is_err() {
                 return;
             }
         }
@@ -1095,6 +1110,7 @@ impl Player<'_> {
         self.heard_id = None;
         self.eos = false;
         self.format_change = false;
+        self.tail_remaining = None;
         self.paused = false;
         self.started = false;
         self.written = 0;
@@ -1167,6 +1183,7 @@ impl Player<'_> {
         self.decoding = Some(open);
         self.eos = false;
         self.format_change = false;
+        self.tail_remaining = None;
         self.started = false;
         // A track begun plays: a pause left on would keep the ring empty
         // and the output stopped, the UI saying "playing" (a track chosen
@@ -1307,12 +1324,23 @@ impl Player<'_> {
         } else {
             (self.format.0 as f32 * WRITE_AHEAD) as usize
         };
-        let frames = room
-            .min(ahead.saturating_sub(held))
-            .min(self.ring.len() / channels);
+        let available = room.min(ahead.saturating_sub(held));
+        let mut frames = available.min(self.ring.len() / channels);
         if frames > 0 {
             let block: Vec<f32> = self.ring.drain(..frames * channels).collect();
             self.write_block(block)?;
+        }
+        // Only the final end (or a format change) needs zeros. Between
+        // gapless tracks the next track itself carries the delay out.
+        if self.ring.is_empty() && (self.eos || self.format_change) {
+            let delay = self.chain.as_ref().map_or(0, |c| c.latency_frames());
+            let remaining = self.tail_remaining.get_or_insert(delay);
+            let tail = (*remaining).min(available - frames);
+            *remaining -= tail;
+            if tail > 0 {
+                self.write_block(vec![0.0; tail * channels])?;
+                frames += tail;
+            }
         }
         if !self.started && self.written > 0 && (last || held + frames >= ahead) {
             self.out.as_mut().expect("written to").start()?;
@@ -1323,7 +1351,7 @@ impl Player<'_> {
 
     /// Decode, write, follow the clock; the next track at the end.
     fn step(&mut self) -> windows::core::Result<()> {
-        if self.decoding.is_none() && self.ring.is_empty() {
+        if self.decoding.is_none() && self.ring.is_empty() && !self.eos && !self.format_change {
             return Ok(());
         }
         let Some(out) = self.out.as_ref() else {
@@ -1370,8 +1398,10 @@ impl Player<'_> {
         }
 
         let out = self.out.as_mut().expect("checked above");
-        let heard = out.heard()?;
-        self.vis().set_heard(heard, self.format.0);
+        let output_heard = out.heard()?;
+        self.vis().set_heard(output_heard, self.format.0);
+        let delay = self.chain.as_ref().map_or(0, |c| c.latency_frames()) as u64;
+        let heard = output_heard.min(self.written).saturating_sub(delay);
         while self.segments.len() > 1 && self.segments[1].start <= heard {
             self.segments.pop_front();
         }
@@ -1393,7 +1423,7 @@ impl Player<'_> {
                 .unwrap_or_else(|| seg.origin_ms + heard.saturating_sub(seg.start) * 1000 / rate);
             self.shared.position_ms.store(position, Relaxed);
             self.shared.duration_ms.store(seg.duration_ms, Relaxed);
-            if self.heard_id != Some(seg.id) {
+            if output_heard >= delay && self.heard_id != Some(seg.id) {
                 self.heard_id = Some(seg.id);
                 let id = seg.id;
                 self.send(Event::Started { id });
@@ -1402,9 +1432,13 @@ impl Player<'_> {
 
         // The end: everything written has been heard (or the clock stopped
         // short of it for a while).
-        if (self.eos || self.format_change) && self.ring.is_empty() && !self.paused {
+        if (self.eos || self.format_change)
+            && self.ring.is_empty()
+            && self.tail_remaining == Some(0)
+            && !self.paused
+        {
             let since = *self.drained_since.get_or_insert_with(Instant::now);
-            if heard >= self.written || since.elapsed() > Duration::from_millis(500) {
+            if output_heard >= self.written || since.elapsed() > Duration::from_millis(500) {
                 self.drained_since = None;
                 if self.format_change
                     && let Some(next) = self.next.take()
@@ -1418,6 +1452,8 @@ impl Player<'_> {
                     self.segments.clear();
                     self.heard_id = None;
                     self.eos = false;
+                    self.format_change = false;
+                    self.tail_remaining = None;
                     self.started = false;
                     if let Some(out) = &mut self.out {
                         let _ = out.reset();
@@ -1558,6 +1594,7 @@ impl Player<'_> {
         }
         self.eos = false;
         self.format_change = false;
+        self.tail_remaining = None;
         self.drained_since = None;
         None
     }
@@ -1721,6 +1758,7 @@ impl Player<'_> {
         self.segments.pop_back();
         self.decoding = None;
         self.eos = false;
+        self.tail_remaining = None;
         self.drained_since = None;
         true
     }
@@ -1731,6 +1769,7 @@ impl Player<'_> {
         let channels = u64::from(self.format.1.max(1));
         match self.next.take() {
             Some(next) if (next.decoder.rate, next.decoder.channels) == self.format => {
+                self.tail_remaining = None;
                 self.segments.push_back(Segment {
                     start: self.written + self.ring.len() as u64 / channels,
                     id: next.id,
@@ -1765,6 +1804,144 @@ impl Player<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A clock controlled by the test, with no audio device or COM.
+    struct RecordedOutput {
+        samples: Arc<Mutex<Vec<f32>>>,
+        clock: Arc<AtomicU64>,
+    }
+    impl Output for RecordedOutput {
+        fn room(&mut self) -> windows::core::Result<u32> {
+            Ok(8192)
+        }
+        fn write(&mut self, samples: &[f32]) -> windows::core::Result<()> {
+            self.samples.lock().unwrap().extend_from_slice(samples);
+            Ok(())
+        }
+        fn set_gain(&mut self, _gain: f32) -> windows::core::Result<()> {
+            Ok(())
+        }
+        fn start(&mut self) -> windows::core::Result<()> {
+            Ok(())
+        }
+        fn stop(&mut self) -> windows::core::Result<()> {
+            Ok(())
+        }
+        fn reset(&mut self) -> windows::core::Result<()> {
+            self.clock.store(0, Relaxed);
+            Ok(())
+        }
+        fn heard(&mut self) -> windows::core::Result<u64> {
+            Ok(self.clock.load(Relaxed))
+        }
+        fn buffer_frames(&self) -> u32 {
+            8192
+        }
+        fn device_changed(&mut self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn final_dsp_tail_and_gapless_segment_clock_are_preserved() {
+        for format_change in [false, true] {
+            let (events, seen) = channel();
+            let (opener, _) = channel();
+            let shared = Shared::default();
+            let ctx = egui::Context::default();
+            let samples = Arc::new(Mutex::new(Vec::new()));
+            let clock = Arc::new(AtomicU64::new(0));
+            let dsp = dsp::DspSettings::default();
+            let chain = dsp::Chain::new(48000, 2, &dsp);
+            let delay = chain.latency_frames();
+            let original: Vec<f32> = (0..2000).map(|i| 0.2 * (i as f32 * 0.17).sin()).collect();
+            let mut p = Player {
+                events: &events,
+                shared: &shared,
+                ctx: &ctx,
+                out: Some(Box::new(RecordedOutput {
+                    samples: Arc::clone(&samples),
+                    clock: Arc::clone(&clock),
+                })),
+                format: (48000, 2),
+                decoding: None,
+                next: None,
+                fade: None,
+                ring: original.iter().copied().collect(),
+                written: 0,
+                segments: [1, 2]
+                    .into_iter()
+                    .map(|id| Segment {
+                        start: (id - 1) * 500,
+                        id,
+                        path: PathBuf::new(),
+                        origin_ms: 0,
+                        duration_ms: 10,
+                        gain: 1.0,
+                        sought: false,
+                    })
+                    .collect(),
+                heard_id: None,
+                paused: false,
+                started: false,
+                eos: !format_change,
+                format_change,
+                tail_remaining: None,
+                drained_since: None,
+                checked_device: Instant::now(),
+                device: String::new(),
+                dsp,
+                chain: Some(chain),
+                holding: false,
+                seek_fade_ms: 0,
+                opener,
+                ticket: 0,
+                play_asked: None,
+                preload_asked: None,
+                seek_asked: None,
+                deferred: VecDeque::new(),
+                fade_in: None,
+            };
+            p.step().unwrap();
+            let captured = samples.lock().unwrap().clone();
+            assert_eq!(captured.len(), original.len() + delay * 2);
+            assert!(captured[..delay * 2].iter().all(|&x| x == 0.0));
+            assert_eq!(&captured[delay * 2..], &original);
+            assert_eq!(p.tail_remaining, Some(0));
+            assert!(seen.try_recv().is_err());
+
+            // Segment two is announced when its delayed first frame is
+            // heard, and no flush is inserted at the shared boundary.
+            clock.store(delay as u64 + 499, Relaxed);
+            p.step().unwrap();
+            assert!(matches!(seen.try_recv(), Ok(Event::Started { id: 1 })));
+            clock.store(delay as u64 + 500, Relaxed);
+            p.step().unwrap();
+            assert!(matches!(seen.try_recv(), Ok(Event::Started { id: 2 })));
+            assert_eq!(shared.position_ms.load(Relaxed), 0);
+            assert_eq!(samples.lock().unwrap().len(), captured.len());
+            clock.store(p.written, Relaxed);
+            p.step().unwrap();
+            assert!(matches!(seen.try_recv(), Ok(Event::Ended { id: 2 })));
+            assert_eq!(samples.lock().unwrap().len(), captured.len());
+            p.step().unwrap();
+            p.step().unwrap();
+            assert!(seen.try_recv().is_err());
+            assert_eq!(samples.lock().unwrap().len(), captured.len());
+
+            // Pause and resume fades reach silence at the device side even
+            // while the chain holds nonzero samples in its fixed delay.
+            p.write_block(vec![0.2; delay * 2]).unwrap();
+            p.write_faded_block(vec![0.2; 2880], true).unwrap();
+            let before_resume = samples.lock().unwrap().len();
+            assert_eq!(samples.lock().unwrap()[before_resume - 1], 0.0);
+            p.fade_in = Some(0);
+            p.write_block(vec![0.2; 2880]).unwrap();
+            let output = samples.lock().unwrap();
+            assert_eq!(output[before_resume], 0.0);
+            assert!((output[output.len() - 1] - 0.2).abs() < 1e-6);
+        }
+    }
 
     #[test]
     fn fade_gains_keep_the_power() {

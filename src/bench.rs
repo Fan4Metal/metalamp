@@ -328,7 +328,7 @@ fn bench_enhancer(args: &[String], out: &mut impl Write) {
     use crate::audio::decoder::{Decoder, SECOND};
     use crate::audio::dsp::biquad::{Biquad, Coeffs, db_to_gain, gain_to_db};
     use crate::audio::dsp::enhancer::{
-        AIR_SHELF_DB, AIR_SHELF_HZ, Amounts, BASS_SHELF_DB, BASS_SHELF_HZ, Enhancer,
+        AIR_SHELF_DB, AIR_SHELF_HZ, Amounts, BASS_SHELF_DB, BASS_SHELF_HZ, Enhancer, LATENCY,
     };
     use crate::audio::dsp::{CEILING_DB, limiter::Limiter};
     use crate::audio::mf;
@@ -405,7 +405,11 @@ fn bench_enhancer(args: &[String], out: &mut impl Write) {
     }
     let enhanced = |a: Amounts| {
         let mut s = dry.clone();
+        s.resize(s.len() + LATENCY * ch, 0.0);
         Enhancer::new(rate, ch, a).process(&mut s);
+        // Analyse the same musical interval. Keeping the initial delay
+        // and dropping the end can masquerade as a change in timbre.
+        s.drain(..LATENCY * ch);
         s
     };
     let shelved = |c: Coeffs| {
@@ -416,21 +420,26 @@ fn bench_enhancer(args: &[String], out: &mut impl Write) {
             .collect::<Vec<f32>>()
     };
     let none = Amounts::default();
+    let processing = Instant::now();
     let all = enhanced(a);
+    let processing = processing.elapsed();
     let mut limited = all.clone();
     let mut limiter = Limiter::new(rate, ch, db_to_gain(CEILING_DB));
+    let delay = limiter.latency_frames() * ch;
+    limited.resize(limited.len() + delay, 0.0);
     limiter.process(&mut limited);
+    limited.drain(..delay);
     // Compare timbre at matched processing levels. The real output's
     // reserved level and limiter loss are reported separately below.
     let matched = |a: Amounts| {
         let mut s = enhanced(a);
-        let gain = db_to_gain(a.headroom_db());
+        let gain = db_to_gain(a.headroom_db(ch));
         for x in &mut s {
             *x *= gain;
         }
         s
     };
-    let gain = db_to_gain(a.headroom_db());
+    let gain = db_to_gain(a.headroom_db(ch));
     let columns: [(&str, Vec<f32>); 9] = [
         (
             "b.shelf",
@@ -479,7 +488,7 @@ fn bench_enhancer(args: &[String], out: &mut impl Write) {
     let _ = writeln!(
         out,
         "spectral deltas compensate processing reserve: {:.1} dB; harmonics {}, air {}",
-        a.headroom_db(),
+        a.headroom_db(ch),
         a.bass_harmonics * 10.0,
         a.air * 10.0
     );
@@ -531,10 +540,28 @@ fn bench_enhancer(args: &[String], out: &mut impl Write) {
         let side = |s: &[f32]| db(third_octaves(s, rate, ch, true).iter().map(|b| b.1).sum());
         let _ = writeln!(
             out,
-            "side: dry {:.1} dB, all {:+.1} dB",
+            "side: dry {:.1} dB, all {:+.1} dB (headroom compensated)",
             side(&dry),
-            side(&all) - side(&dry)
+            side(&all) - side(&dry) + f64::from(a.headroom_db(ch))
         );
+        let width = matched(Amounts {
+            width: a.width,
+            ..none
+        });
+        let before = third_octaves(&dry, rate, ch, true);
+        let after = third_octaves(&width, rate, ch, true);
+        let _ = write!(out, "width-only side deltas:");
+        for target in [63.0f32, 126.0, 252.0, 1008.0, 4032.0] {
+            if let Some(i) = before.iter().position(|(hz, _)| (*hz - target).abs() < 2.0) {
+                let _ = write!(
+                    out,
+                    " {:.0} Hz {:+.2} dB;",
+                    before[i].0,
+                    db(after[i].1) - db(before[i].1)
+                );
+            }
+        }
+        let _ = writeln!(out);
     }
     let _ = writeln!(
         out,
@@ -555,5 +582,13 @@ fn bench_enhancer(args: &[String], out: &mut impl Write) {
         peak(&all),
         over(&all),
         rms(&all) - rms(&limited)
+    );
+    let _ = writeln!(
+        out,
+        "crest factor: dry {:.1} dB, enhanced {:.1} dB, limited {:.1} dB; enhancer CPU {:.2}% of real time",
+        peak(&dry) - rms(&dry),
+        peak(&all) - rms(&all),
+        peak(&limited) - rms(&limited),
+        100.0 * processing.as_secs_f64() / (dry.len() as f64 / ch as f64 / f64::from(rate))
     );
 }
