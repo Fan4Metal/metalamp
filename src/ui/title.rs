@@ -246,7 +246,7 @@ fn menu(ui: &mut Ui, ticks: Ticks, cmd: &mut Option<TitleCmd>) {
     for (on, label, what) in [
         (ticks.library, tr!("Library", "Библиотека"), Cmd::WindowLayout),
         (ticks.playlist, tr!("Playlist", "Плейлист"), Cmd::Playlist),
-        (ticks.equalizer, tr!("Equalizer", "Эквалайзер"), Cmd::Equalizer),
+        (ticks.equalizer, tr!("Sound tuning", "Настройка звука"), Cmd::Equalizer),
     ] {
         let mut on = on;
         if ui.checkbox(&mut on, with_key(label, what)).changed() {

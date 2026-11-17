@@ -1480,7 +1480,7 @@ fn processing(
     });
     section(ui, tr!("Equalizer", "Эквалайзер"), |ui| {
         ui.add_space(8.0);
-        equalizer(ui, dsp, presets, naming);
+        equalizer(ui, dsp, presets, naming, None);
     });
     section(
         ui,
@@ -1635,34 +1635,19 @@ const ENHANCER_GAP: f32 = 28.0;
 /// head over it, so the two switches and the two pairs of tools stand in
 /// columns: the switch and the name on the left (a click on the name folds
 /// or unfolds it), on the right, folded, the amounts not at 0, a round
-/// arrow putting every amount back to 0 under the equalizer's plus and the
-/// fold's arrow (`fold_button`) under its bin; unfolded, the six amounts
+/// arrow putting every amount back to 0 under the equalizer's bin and the
+/// fold's chevron (`fold_button`) under its chevron; unfolded, the six amounts
 /// two a row (`enhancer_cell`), greyed while it is off.
 pub(crate) fn enhancer(ui: &mut Ui, dsp: &mut DspSettings, open: &mut bool) {
-    use egui::collapsing_header::CollapsingState;
     let amounts = enhancer_amounts();
-    let mut fold =
-        CollapsingState::load_with_default_open(ui.ctx(), egui::Id::new("eq_enhancer"), *open);
-    fold.set_open(*open);
+    let mut fold = fold_of(ui, "eq_enhancer", *open);
     let openness = fold.openness(ui.ctx());
     let heading = ui
         .horizontal(|ui| {
-            // As `eq_head`: the switch, 4 points, then the name where the
-            // presets' list starts.
+            // As `eq_head`: the switch, 4 points, then the name.
             switch(ui, &mut dsp.enhancer).on_hover_text(enhancer_hint());
             ui.add_space(4.0);
-            let title = ui
-                .add(
-                    egui::Label::new(
-                        RichText::new(tr!("Enhancer", "Улучшение звука"))
-                            .size(15.0)
-                            .strong()
-                            .color(palette::text_bright()),
-                    )
-                    .sense(Sense::click()),
-                )
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
-            let mut toggled = title.clicked();
+            let mut toggled = fold_title(ui, tr!("Enhancer", "Улучшение звука")).clicked();
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // `eq_head`'s tools end a spacing short of the edge.
                 ui.add_space(ui.spacing().item_spacing.x);
@@ -1867,6 +1852,32 @@ pub(crate) fn tool(ui: &mut Ui, tip: &str, enabled: bool, icon: Icon) -> Respons
     response.on_hover_text(tip)
 }
 
+/// A folding section's state, kept by the caller in `open` (the settings),
+/// egui's under `id` only for the animation.
+fn fold_of(ui: &Ui, id: &str, open: bool) -> egui::collapsing_header::CollapsingState {
+    let mut fold = egui::collapsing_header::CollapsingState::load_with_default_open(
+        ui.ctx(),
+        egui::Id::new(id),
+        open,
+    );
+    fold.set_open(open);
+    fold
+}
+
+/// A folding section's name in its head; a click on it folds or unfolds.
+fn fold_title(ui: &mut Ui, title: &str) -> Response {
+    ui.add(
+        egui::Label::new(
+            RichText::new(title)
+                .size(15.0)
+                .strong()
+                .color(palette::text_bright()),
+        )
+        .sense(Sense::click()),
+    )
+    .on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 /// The fold's button of a section, a `tool` of its own: a chevron in the
 /// icons' lines, pointing right while folded and turning down as it opens
 /// (`openness`, 0 to 1, egui's animation of the fold).
@@ -1912,13 +1923,18 @@ fn built_in_preset(dsp: &DspSettings) -> Option<usize> {
 /// The equalizer's switch, the built-in presets and the user's own in one
 /// list (the one the sliders stand at named; "Custom" otherwise), and
 /// beside it saving the sliders as one's own and deleting one's own; the
-/// name is typed in a row under it (metalmpv's equalizer head).
+/// name is typed in a row under it (metalmpv's equalizer head). With
+/// `fold` (the bands' openness, in the equalizer's window), the name
+/// follows the switch and the fold's chevron the tools; whether the name or
+/// the chevron was clicked.
 fn eq_head(
     ui: &mut Ui,
     dsp: &mut DspSettings,
     presets: &mut Vec<EqPreset>,
     naming: &mut Option<String>,
-) {
+    fold: Option<f32>,
+) -> bool {
+    let mut toggled = false;
     // The one of mine chosen last while the sliders still stand at it,
     // else the first that does: two of the same values are two presets.
     let same = |p: &EqPreset| p.bands == dsp.bands && p.preamp == dsp.preamp;
@@ -1938,12 +1954,17 @@ fn eq_head(
             "Десять полос и ручное предусиление. Встроенные пресеты используют предусиление 0 дБ; включённый лимитер удерживает пики. Линия учитывает полосы и предусиление при 48 кГц."
         ));
         ui.add_space(4.0);
+        if fold.is_some() {
+            toggled |= fold_title(ui, tr!("Equalizer", "Эквалайзер")).clicked();
+            ui.add_space(8.0);
+        }
         let name = match (mine, built_in) {
             (Some(i), _) => presets[i].name.clone(),
             (None, Some(p)) => p.to_owned(),
             (None, None) => tr!("Custom", "Другой").to_owned(),
         };
-        let width = ui.available_width() - 2.0 * TOOL - 3.0 * ui.spacing().item_spacing.x;
+        let tools = if fold.is_some() { 3.0 } else { 2.0 };
+        let width = ui.available_width() - tools * TOOL - (tools + 1.0) * ui.spacing().item_spacing.x;
         egui::ComboBox::from_id_salt("eq_preset")
             .selected_text(name)
             .width(width)
@@ -2000,6 +2021,9 @@ fn eq_head(
             presets.remove(i);
             ui.data_mut(|d| d.remove::<usize>(chosen_id));
         }
+        if let Some(openness) = fold {
+            toggled |= fold_button(ui, openness).clicked();
+        }
     });
     // A name in any case is the same name ("Rock" is "rock").
     let same_name = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
@@ -2035,19 +2059,33 @@ fn eq_head(
         };
         ui.data_mut(|d| d.insert_temp(chosen_id, at));
     }
+    toggled
 }
 
 /// The equalizer: the switch, the presets and the sliders, here and in
 /// the window of the player bar's button (`ui::eq_window`), on a ground
-/// of `palette::card_bg`.
+/// of `palette::card_bg`. With `open` (that window), a section that folds
+/// as the enhancer's under it: its name in the head, the sliders folded
+/// away, the head (the presets) and the name being typed left.
 pub(crate) fn equalizer(
     ui: &mut Ui,
     dsp: &mut DspSettings,
     presets: &mut Vec<EqPreset>,
     naming: &mut Option<String>,
+    open: Option<&mut bool>,
 ) {
-    eq_head(ui, dsp, presets, naming);
-    bands(ui, dsp);
+    let Some(open) = open else {
+        eq_head(ui, dsp, presets, naming, None);
+        bands(ui, dsp);
+        return;
+    };
+    let mut fold = fold_of(ui, "eq_bands", *open);
+    let openness = fold.openness(ui.ctx());
+    if eq_head(ui, dsp, presets, naming, Some(openness)) {
+        fold.toggle(ui);
+    }
+    *open = fold.is_open();
+    fold.show_body_unindented(ui, |ui| bands(ui, dsp));
 }
 
 /// The longest name of a preset of one's own, in letters.
@@ -3028,11 +3066,26 @@ mod eq_tests {
         };
         let mut out = ctx.run_ui(input.clone(), |ui| {
             ui.set_width(560.0);
-            equalizer(ui, &mut dsp, &mut own, &mut naming);
+            equalizer(ui, &mut dsp, &mut own, &mut naming, None);
         });
         out.textures_delta.clear();
         assert_eq!(dsp, saved);
         assert!(!ctx.tessellate(out.shapes, out.pixels_per_point).is_empty());
+
+        // The sound tuning window's way: both sections folding, folded or
+        // not, left as they are by a frame without a click.
+        for open in [true, false] {
+            let (mut bands_open, mut enhancer_open) = (open, open);
+            let mut out = ctx.run_ui(input.clone(), |ui| {
+                ui.set_width(560.0);
+                equalizer(ui, &mut dsp, &mut own, &mut naming, Some(&mut bands_open));
+                enhancer(ui, &mut dsp, &mut enhancer_open);
+            });
+            out.textures_delta.clear();
+            assert_eq!((bands_open, enhancer_open), (open, open));
+            assert_eq!(dsp, saved);
+            assert!(!ctx.tessellate(out.shapes, out.pixels_per_point).is_empty());
+        }
 
         let knobs: Vec<_> = (0..10).map(|i| pos2(40.0 * i as f32, 200.0)).collect();
         let mut out = ctx.run_ui(input, |ui| {

@@ -466,7 +466,7 @@ impl Action {
             Action::VolumeUp => tr!("Volume up", "Громче"),
             Action::VolumeDown => tr!("Volume down", "Тише"),
             Action::Mute => tr!("Mute", "Без звука"),
-            Action::Equalizer => tr!("Equalizer window", "Окно эквалайзера"),
+            Action::Equalizer => tr!("Sound tuning window", "Окно настройки звука"),
             Action::EqualizerOnOff => tr!("Equalizer on / off", "Эквалайзер вкл. / выкл."),
             Action::Normalize => tr!(
                 "Loudness normalisation on / off",

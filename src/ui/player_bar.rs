@@ -101,8 +101,10 @@ pub struct NowPlaying<'a> {
     pub visual_click: bool,
     /// The look in use, for the colours' swatches in the display's menu.
     pub look: crate::palette::Look,
-    /// The equalizer is on.
+    /// The equalizer and the enhancer are on (the sound tuning button is
+    /// lit while either is).
     pub eq: bool,
+    pub enhancer: bool,
     /// Playing stops after the track heard (Shift+V): Stop is lit.
     pub stop_after: bool,
     /// In the player and playlist layout, whether the playlist shows: the
@@ -980,12 +982,23 @@ fn toggles(
             cmds.push(BarCmd::Playlist);
         }
     }
-    let tip = if now.eq {
-        tr!("Equalizer: on", "Эквалайзер: вкл.")
-    } else {
-        tr!("Equalizer: off", "Эквалайзер: выкл.")
+    // The window's name, then what of it is on.
+    let state = |on| {
+        if on {
+            tr!("on", "вкл.")
+        } else {
+            tr!("off", "выкл.")
+        }
     };
-    if let Some(r) = toggle(ui, Icon::Equalizer, now.eq, tip) {
+    let tip = format!(
+        "{}\n{} {} · {} {}",
+        with_key(tr!("Sound tuning", "Настройка звука"), Cmd::Equalizer),
+        tr!("Equalizer:", "Эквалайзер:"),
+        state(now.eq),
+        tr!("enhancer:", "улучшение:"),
+        state(now.enhancer),
+    );
+    if let Some(r) = toggle(ui, Icon::Equalizer, now.eq || now.enhancer, &tip) {
         cmds.push(BarCmd::Equalizer(r));
     }
     let (icon, tip) = match now.repeat {

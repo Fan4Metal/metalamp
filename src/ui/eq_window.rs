@@ -1,7 +1,8 @@
-//! The equalizer's window, opened by the player bar's button under it:
+//! The sound tuning window, opened by the player bar's button under it:
 //! the same equalizer as the settings window's Sound page (the switch,
 //! the presets, one's own presets, the sliders) and under it the
-//! enhancer (its switch and six amounts two a row), on a card of its own,
+//! enhancer (its switch and six amounts two a row), each a section whose
+//! sliders fold away (kept in the settings), on a card of its own,
 //! the limiter's state beside the cross (a click switches it).
 //! Not modal: the player and its keys go on. The cross, Esc or the bar's
 //! button close it; it can be dragged by its free space. When the
@@ -47,6 +48,9 @@ pub struct EqWindow {
     /// The enhancer's section unfolded: the setting `eq_enhancer_open`,
     /// set by the app before `show` and taken back after it.
     pub enhancer_open: bool,
+    /// The equalizer's sliders unfolded: the setting `eq_bands_open`, as
+    /// `enhancer_open`.
+    pub bands_open: bool,
 }
 
 /// The limiter's state, "Limiter: on" (the state in the accent) or "off",
@@ -82,7 +86,7 @@ fn limiter_state(ui: &mut egui::Ui, on: &mut bool) {
 
 /// The window of its own's title, by which it is found.
 fn window_title() -> &'static str {
-    tr!("Equalizer", "Эквалайзер")
+    tr!("Sound tuning", "Настройка звука")
 }
 
 impl EqWindow {
@@ -141,7 +145,7 @@ impl EqWindow {
             }
             return;
         }
-        let mut window = egui::Window::new(tr!("Equalizer", "Эквалайзер"))
+        let mut window = egui::Window::new(window_title())
             .id(egui::Id::new("eq_window"))
             .title_bar(false)
             .resizable(false)
@@ -194,7 +198,7 @@ impl EqWindow {
         ui.set_width(WIDTH);
         ui.horizontal(|ui| {
             ui.label(
-                RichText::new(tr!("Equalizer", "Эквалайзер"))
+                RichText::new(window_title())
                     .size(17.0)
                     .strong()
                     .color(palette::text_bright()),
@@ -206,7 +210,13 @@ impl EqWindow {
             });
         });
         ui.add_space(6.0);
-        crate::ui::settings::equalizer(ui, dsp, presets, &mut self.naming);
+        crate::ui::settings::equalizer(
+            ui,
+            dsp,
+            presets,
+            &mut self.naming,
+            Some(&mut self.bands_open),
+        );
         ui.add_space(6.0);
         crate::ui::settings::divider(ui);
         ui.add_space(10.0);
