@@ -2,7 +2,7 @@
 //! controls each frequency region. Gain is real, preserving channel phase.
 //! The dry delay plus overlap-added gain *difference* makes bypass exact.
 
-use super::{enhancer, fft::fft};
+use super::fft::fft;
 use std::f32::consts::TAU;
 
 // Lower/upper edges in Hz and the sensitivity of the six energy detectors
@@ -210,7 +210,7 @@ impl PowerFx {
                 self.env.fill(0.);
                 self.gain = MOST_DB;
             } else {
-                self.tail = self.latency_frames() + enhancer::LATENCY;
+                self.tail = self.latency_frames();
             }
             self.enabled = enabled;
         }

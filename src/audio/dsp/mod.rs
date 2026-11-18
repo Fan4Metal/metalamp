@@ -50,13 +50,9 @@ pub struct DspSettings {
     /// 0 to 10 each.
     pub bass: u8,
     pub adaptive_bass: u8,
-    pub clarity: u8,
-    pub bass_harmonics: u8,
     /// The treble raised as far as it is dull against the middle.
     pub brilliance: u8,
-    pub air: u8,
     pub width: u8,
-    pub warmth: u8,
     /// The automatic gain control lifting quiet passages towards a
     /// loudness (`drive.rs`); with the enhancer's switch, after it.
     pub drive: u8,
@@ -80,12 +76,8 @@ impl Default for DspSettings {
             powerfx: false,
             bass: 0,
             adaptive_bass: 0,
-            clarity: 0,
-            bass_harmonics: 0,
             brilliance: 0,
-            air: 0,
             width: 0,
-            warmth: 0,
             drive: 0,
             limiter: true,
             balance: 0,
@@ -111,12 +103,8 @@ impl DspSettings {
         enhancer::Amounts {
             bass: f(self.bass),
             adaptive_bass: f(self.adaptive_bass),
-            clarity: f(self.clarity),
-            bass_harmonics: f(self.bass_harmonics),
             brilliance: f(self.brilliance),
-            air: f(self.air),
             width: f(self.width),
-            warmth: f(self.warmth),
         }
     }
 
@@ -234,7 +222,7 @@ impl Chain {
 
     /// Fixed processing delay in the output format, including bypass.
     pub fn latency_frames(&self) -> usize {
-        self.powerfx.latency_frames() + enhancer::LATENCY + self.limiter.latency_frames()
+        self.powerfx.latency_frames() + self.limiter.latency_frames()
     }
 
     /// A track (or a crossfade into one) begins: its gain applies at once,
@@ -292,9 +280,8 @@ impl Chain {
             }
         }
         self.powerfx.process(samples);
-        // Also after it was turned off, while its amounts slide out; and
-        // off, it still delays the sound by its `LATENCY`, so turning it
-        // on or off does not shift it.
+        // Also after it was turned off, while its amounts slide out (it
+        // has no delay, so turning it on or off shifts nothing).
         for frame in samples.chunks_exact_mut(self.channels) {
             let activity = self.enhancer.process_frame(frame);
             self.drive.process_frame(frame, activity);

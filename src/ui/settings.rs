@@ -1599,7 +1599,7 @@ fn enhancer_hint() -> &'static str {
 type EnhancerAmount = (&'static str, &'static str, fn(&mut DspSettings) -> &mut u8);
 
 /// The enhancer's amounts in display order, two per row in the tuning window.
-fn enhancer_amounts() -> [EnhancerAmount; 9] {
+fn enhancer_amounts() -> [EnhancerAmount; 5] {
     [
         (
             tr!("Bass", "Бас"),
@@ -1618,14 +1618,6 @@ fn enhancer_amounts() -> [EnhancerAmount; 9] {
             |d| &mut d.adaptive_bass,
         ),
         (
-            tr!("Bass harmonics", "Гармоники баса"),
-            tr!(
-                "Adds audible bass harmonics for small speakers. For full-range headphones, a low amount or zero is usually enough.",
-                "Добавляет слышимые гармоники баса для небольших колонок. Для полноразмерных наушников обычно достаточно малого значения или нуля."
-            ),
-            |d| &mut d.bass_harmonics,
-        ),
-        (
             tr!("Brilliance", "Блеск"),
             tr!(
                 "Raises the treble from 8 kHz as far as it is dull against the middle, up to 12 dB: a dull recording gets more, a bright one nothing. Comes up over a fraction of a second and goes back at once when the treble returns.",
@@ -1634,36 +1626,12 @@ fn enhancer_amounts() -> [EnhancerAmount; 9] {
             |d| &mut d.brilliance,
         ),
         (
-            tr!("Air", "Воздух"),
-            tr!(
-                "A gentle high shelf at 11 kHz, up to 3 dB. Does not synthesize missing harmonics.",
-                "Мягкая полка на 11 кГц, до 3 дБ. Без синтеза утраченных гармоник."
-            ),
-            |d| &mut d.air,
-        ),
-        (
-            tr!("Clarity", "Ясность"),
-            tr!(
-                "Gently turns down the presence and sibilance when they stand out against the middle; linked dynamic EQ, no synthesized high frequencies.",
-                "Мягко приглушает присутствие и сибилянты, когда они выделяются на фоне середины; динамическая коррекция, связанная между каналами, без синтеза высоких частот."
-            ),
-            |d| &mut d.clarity,
-        ),
-        (
             tr!("Width", "Ширина"),
             tr!(
                 "Widens the mid and high stereo image with a smooth side shelf, preserving deep bass and the mono sum.",
                 "Плавно расширяет стереокартину средних и высоких частот, сохраняя глубокий бас и моносумму."
             ),
             |d| &mut d.width,
-        ),
-        (
-            tr!("Warmth", "Теплота"),
-            tr!(
-                "Soft saturation with antialias filtering. A low amount preserves the attack of already distorted instruments.",
-                "Мягкое насыщение с подавлением паразитных частот. Малое значение сохраняет атаку инструментов, уже записанных с дисторшном."
-            ),
-            |d| &mut d.warmth,
         ),
         (
             tr!("Drive", "Драйв"),

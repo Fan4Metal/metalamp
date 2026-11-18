@@ -942,19 +942,9 @@ impl Settings {
 
     pub fn from_json(bytes: &[u8]) -> Option<Settings> {
         use serde_json::Value;
-        let Ok(Value::Object(mut file)) = serde_json::from_slice::<Value>(bytes) else {
+        let Ok(Value::Object(file)) = serde_json::from_slice::<Value>(bytes) else {
             return None;
         };
-        // The old Clarity control was an air shelf plus an exciter. Keep
-        // its shelf amount when loading an older file; the new dynamic
-        // clarity and bass harmonics start off. Never invent lost highs.
-        if let Some(Value::Object(dsp)) = file.get_mut("dsp")
-            && !dsp.contains_key("air")
-            && let Some(clarity) = dsp.get("clarity").cloned()
-        {
-            dsp.insert("air".into(), clarity);
-            dsp.insert("clarity".into(), Value::from(0));
-        }
         let Ok(Value::Object(mut merged)) = serde_json::to_value(Settings::default()) else {
             return None;
         };
@@ -1024,21 +1014,22 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn legacy_clarity_moves_to_air_and_new_controls_round_trip() {
-        let old =
-            Settings::from_json(br#"{"dsp":{"enhancer":true,"bass":6,"clarity":5}}"#).unwrap();
+    fn removed_enhancer_controls_are_ignored_and_the_rest_round_trip() {
+        // Clarity, air, bass harmonics and warmth were removed: an older
+        // file's amounts of them cost nothing else.
+        let old = Settings::from_json(
+            br#"{"dsp":{"enhancer":true,"bass":6,"clarity":5,"air":3,"bass_harmonics":2,"warmth":4,"width":7}}"#,
+        )
+        .unwrap();
+        assert!(old.dsp.enhancer);
         assert_eq!(old.dsp.bass, 6);
+        assert_eq!(old.dsp.width, 7);
         assert_eq!(old.dsp.adaptive_bass, 0);
         assert!(!old.dsp.powerfx);
-        assert_eq!(old.dsp.air, 5);
-        assert_eq!(old.dsp.clarity, 0);
-        assert_eq!(old.dsp.bass_harmonics, 0);
         assert_eq!(old.dsp.brilliance, 0);
         let mut new = old;
-        new.dsp.clarity = 4;
         new.dsp.adaptive_bass = 8;
         new.dsp.powerfx = true;
-        new.dsp.bass_harmonics = 3;
         new.dsp.brilliance = 6;
         let json = serde_json::to_vec(&new).unwrap();
         let again = Settings::from_json(&json).unwrap();

@@ -8,7 +8,7 @@
 //! - `--bench loudness <file>…`: each file's loudness (EBU R128), peak and
 //!   the gain normalisation would give it, with the time the measuring
 //!   took; `ffmpeg -af ebur128 -f null -` gives the figure to compare.
-//! - `--bench enhancer <file> [from s] [seconds] [bass,clarity,width,warmth,harmonics,air,brilliance,adaptive_bass] [gain dB]`:
+//! - `--bench enhancer <file> [from s] [seconds] [bass,width,brilliance,adaptive_bass] [gain dB]`:
 //!   what each of the enhancer's stages does to a passage of real music,
 //!   by third-octave bands (sines told too little: two faults were found
 //!   only this way), and what the limiter then takes.
@@ -60,7 +60,7 @@ pub fn run(args: &[String]) -> i32 {
         _ => {
             let _ = writeln!(
                 out,
-                "usage: metalamp --bench scan <folder>... | gapless <file>... | loudness <file>... | enhancer <file> [from s] [seconds] [bass,clarity,width,warmth,harmonics,air,brilliance,adaptive_bass] [gain dB] | drive <file> [from s] [seconds] [amount] [gain dB] | render <file> <out.wav> [from s] [seconds] [gain dB] [raw]"
+                "usage: metalamp --bench scan <folder>... | gapless <file>... | loudness <file>... | enhancer <file> [from s] [seconds] [bass,width,brilliance,adaptive_bass] [gain dB] | drive <file> [from s] [seconds] [amount] [gain dB] | render <file> <out.wav> [from s] [seconds] [gain dB] [raw]"
             );
             2
         }
@@ -560,21 +560,19 @@ fn third_octaves(s: &[f32], rate: u32, ch: usize, side: bool) -> Vec<(f32, f64)>
         .collect()
 }
 
-/// `--bench enhancer <file> [from s] [seconds] [bass,clarity,width,warmth,harmonics,air,brilliance,adaptive_bass] [gain dB]`
-/// (the amounts 0 to 10; the settings' when left out): the passage dry, by
-/// third-octave bands in dBFS, and what each stage adds to each band in dB:
-/// the bass's shelf alone and the whole bass, the air shelf alone and
-/// the whole clarity, brilliance, warmth, all eight, and all eight through
-/// the limiter;
-/// the reserve taken, the dynamic cuts and brilliance's raise. `gain` (dB, 0 when left out)
-/// is applied to the passage first, as loudness normalisation would
-/// (`--bench loudness` tells a file's).
+/// `--bench enhancer <file> [from s] [seconds] [bass,width,brilliance,adaptive_bass] [gain dB]`
+/// (the amounts 0 to 10, those left out 0; the settings' when the list is
+/// left out): the passage dry, by third-octave bands in dBFS, and what each
+/// stage adds to each band in dB: the bass's shelf alone and the whole
+/// bass, the adaptive bass, brilliance, all of them, and all of them
+/// through the limiter; the reserve taken, the masking cut and
+/// brilliance's raise. `gain` (dB, 0 when left out) is applied to the
+/// passage first, as loudness normalisation would (`--bench loudness`
+/// tells a file's).
 fn bench_enhancer(args: &[String], out: &mut impl Write) {
     use crate::audio::decoder::{Decoder, SECOND};
     use crate::audio::dsp::biquad::{Biquad, Coeffs, db_to_gain, gain_to_db};
-    use crate::audio::dsp::enhancer::{
-        AIR_SHELF_DB, AIR_SHELF_HZ, Amounts, BASS_SHELF_DB, BASS_SHELF_HZ, Enhancer, LATENCY,
-    };
+    use crate::audio::dsp::enhancer::{Amounts, BASS_SHELF_DB, BASS_SHELF_HZ, Enhancer};
     use crate::audio::dsp::{CEILING_DB, limiter::Limiter};
     use crate::audio::mf;
     let file = PathBuf::from(&args[0]);
@@ -587,40 +585,28 @@ fn bench_enhancer(args: &[String], out: &mut impl Write) {
             .collect(),
         None => {
             let d = crate::settings::Settings::load().dsp;
-            [
-                d.bass,
-                d.clarity,
-                d.width,
-                d.warmth,
-                d.bass_harmonics,
-                d.air,
-                d.brilliance,
-                d.adaptive_bass,
-            ]
-            .map(f32::from)
-            .to_vec()
+            [d.bass, d.width, d.brilliance, d.adaptive_bass]
+                .map(f32::from)
+                .to_vec()
         }
     };
-    if !matches!(amounts.len(), 4 | 6 | 7 | 8)
+    if !(1..=4).contains(&amounts.len())
         || amounts
             .iter()
             .any(|x| !x.is_finite() || !(0.0..=10.0).contains(x))
     {
         let _ = writeln!(
             out,
-            "the amounts: bass,clarity,width,warmth[,harmonics,air[,brilliance[,adaptive_bass]]], 0 to 10 each"
+            "the amounts: bass[,width[,brilliance[,adaptive_bass]]], 0 to 10 each"
         );
         return;
     }
+    let amount = |i: usize| amounts.get(i).copied().unwrap_or(0.0);
     let a = Amounts {
-        bass: amounts[0] / 10.0,
-        adaptive_bass: amounts.get(7).copied().unwrap_or(0.0) / 10.0,
-        clarity: amounts[1] / 10.0,
-        width: amounts[2] / 10.0,
-        warmth: amounts[3] / 10.0,
-        bass_harmonics: amounts.get(4).copied().unwrap_or(0.0) / 10.0,
-        air: amounts.get(5).copied().unwrap_or(0.0) / 10.0,
-        brilliance: amounts.get(6).copied().unwrap_or(0.0) / 10.0,
+        bass: amount(0) / 10.0,
+        width: amount(1) / 10.0,
+        brilliance: amount(2) / 10.0,
+        adaptive_bass: amount(3) / 10.0,
     };
     let _com = mf::com_init_mta();
     let _mf = match mf::Mf::start() {
@@ -660,11 +646,7 @@ fn bench_enhancer(args: &[String], out: &mut impl Write) {
     }
     let enhanced = |a: Amounts| {
         let mut s = dry.clone();
-        s.resize(s.len() + LATENCY * ch, 0.0);
         Enhancer::new(rate, ch, a).process(&mut s);
-        // Analyse the same musical interval. Keeping the initial delay
-        // and dropping the end can masquerade as a change in timbre.
-        s.drain(..LATENCY * ch);
         s
     };
     let shelved = |c: Coeffs| {
@@ -679,12 +661,12 @@ fn bench_enhancer(args: &[String], out: &mut impl Write) {
     let all = enhanced(a);
     let processing = processing.elapsed();
     // The same again in blocks of 1024 frames, noting after each the
-    // reserve and the dynamic cuts (their bands over the middle and the
-    // cut), as the player would see them.
+    // reserve and the masking cut (its band over the middle and the cut),
+    // as the player would see them.
     let mut reserves = Vec::new();
     let mut given = Vec::new();
     let mut bass_shelf = Vec::new();
-    let mut tone: [(Vec<f32>, Vec<f32>); 3] = Default::default();
+    let mut masking: (Vec<f32>, Vec<f32>) = Default::default();
     let mut bright: (Vec<f32>, Vec<f32>) = Default::default();
     {
         let mut s = dry.clone();
@@ -694,11 +676,9 @@ fn bench_enhancer(args: &[String], out: &mut impl Write) {
             reserves.push(e.reserve_db());
             given.push(e.bass_given());
             bass_shelf.push(e.bass_shelf_db());
-            let (excess, cut) = e.tone();
-            for (i, (x, c)) in tone.iter_mut().enumerate() {
-                x.push(excess[i]);
-                c.push(cut[i]);
-            }
+            let (excess, cut) = e.masking();
+            masking.0.push(excess);
+            masking.1.push(cut);
             let (excess, raise) = e.brilliance();
             bright.0.push(excess);
             bright.1.push(raise);
@@ -712,7 +692,7 @@ fn bench_enhancer(args: &[String], out: &mut impl Write) {
     limited.drain(..delay);
     // What is heard: the deltas include the reserve the boosts take.
     let matched = enhanced;
-    let columns: [(&str, Vec<f32>); 11] = [
+    let columns: [(&str, Vec<f32>); 6] = [
         (
             "b.shelf",
             shelved(Coeffs::low_shelf(
@@ -736,35 +716,9 @@ fn bench_enhancer(args: &[String], out: &mut impl Write) {
             }),
         ),
         (
-            "harm",
-            matched(Amounts {
-                bass_harmonics: a.bass_harmonics,
-                ..none
-            }),
-        ),
-        (
-            "clarity",
-            matched(Amounts {
-                clarity: a.clarity,
-                ..none
-            }),
-        ),
-        (
-            "a.shelf",
-            shelved(Coeffs::high_shelf(rate, AIR_SHELF_HZ, AIR_SHELF_DB * a.air)),
-        ),
-        ("air", matched(Amounts { air: a.air, ..none })),
-        (
             "bright",
             matched(Amounts {
                 brilliance: a.brilliance,
-                ..none
-            }),
-        ),
-        (
-            "warmth",
-            matched(Amounts {
-                warmth: a.warmth,
                 ..none
             }),
         ),
@@ -785,12 +739,10 @@ fn bench_enhancer(args: &[String], out: &mut impl Write) {
     };
     let _ = writeln!(
         out,
-        "reserve (all, the deltas include it): mean {:.2} dB, most {:.2} dB of at most {:.1}; harmonics {}, air {}",
+        "reserve (all, the deltas include it): mean {:.2} dB, most {:.2} dB of at most {:.1}",
         mean(&reserves),
         most(&reserves),
         a.most_reserve_db(ch),
-        a.bass_harmonics * 10.0,
-        a.air * 10.0
     );
     let _ = writeln!(
         out,
@@ -807,19 +759,17 @@ fn bench_enhancer(args: &[String], out: &mut impl Write) {
         100.0 * given.iter().filter(|&&g| g < 0.9).count() as f32 / given.len().max(1) as f32,
         100.0 * given.iter().fold(1f32, |m, &g| m.min(g))
     );
-    for (i, name) in ["250 Hz", "4 kHz", "7 kHz"].iter().enumerate() {
-        let (excess, cut) = &tone[i];
-        let _ = writeln!(
-            out,
-            "{name:>6} over the middle: median {:+.1} dB, 90 % {:+.1} dB, most {:+.1} dB; cut {:.0} % of the time, mean {:.2} dB, deepest {:.2} dB",
-            percentile(excess, 0.5),
-            percentile(excess, 0.9),
-            most(excess),
-            share(cut),
-            mean(cut),
-            least(cut)
-        );
-    }
+    let (excess, cut) = &masking;
+    let _ = writeln!(
+        out,
+        "250 Hz over the middle: median {:+.1} dB, 90 % {:+.1} dB, most {:+.1} dB; cut {:.0} % of the time, mean {:.2} dB, deepest {:.2} dB",
+        percentile(excess, 0.5),
+        percentile(excess, 0.9),
+        most(excess),
+        share(cut),
+        mean(cut),
+        least(cut)
+    );
     let _ = writeln!(
         out,
         "treble (9 kHz) over the middle: median {:+.1} dB, 10 % {:+.1} dB, 90 % {:+.1} dB; brilliance {}: raised by a mean {:.2} dB, median {:.2} dB, most {:.2} dB",
@@ -835,12 +785,12 @@ fn bench_enhancer(args: &[String], out: &mut impl Write) {
     let base = third_octaves(&dry, rate, ch, false);
     let _ = writeln!(
         out,
-        "{}: {from} s + {seconds} s, {rate} Hz, {ch} ch; bass {}, clarity {}, width {}, warmth {}",
+        "{}: {from} s + {seconds} s, {rate} Hz, {ch} ch; bass {}, width {}, brilliance {}, adaptive bass {}",
         file.display(),
-        amounts[0],
-        amounts[1],
-        amounts[2],
-        amounts[3]
+        amount(0),
+        amount(1),
+        amount(2),
+        amount(3)
     );
     let _ = write!(out, "{:>7} {:>7}", "Hz", "dry dB");
     for (name, _) in &columns {

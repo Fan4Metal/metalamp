@@ -1,15 +1,13 @@
-//! Bass depth, adaptive bass, bass harmonics, brilliance,
-//! clarity, air, stereo width and warmth. The bass detector only sees low
-//! frequencies; treble transients cannot duck its gain. Clarity uses
-//! linked dynamic EQ instead of synthesizing high-frequency sum tones;
-//! brilliance is its mirror, a treble shelf raised as far as the treble is
-//! dull against the middle (what AudioBurst PowerFX's bands do, measured
+//! Bass depth, adaptive bass, brilliance and stereo width. The bass
+//! detector only sees low frequencies; treble transients cannot duck its
+//! gain. Brilliance is a treble shelf raised as far as the treble is dull
+//! against the middle (what AudioBurst PowerFX's bands do, measured
 //! through a virtual cable: `BRIGHT_*`). The boosts turn the
 //! whole sound down only as far as they would push its peaks over the
 //! ceiling and over the peaks it had (an adaptive reserve, at most the
 //! largest boost): with headroom, as after loudness normalisation, a boost
-//! is heard as a boost and nothing else gets quieter.
-//! Warmth's oversampled residual and the dry signal share a fixed delay.
+//! is heard as a boost and nothing else gets quieter. No delay: every
+//! stage is a filter on the sample it is given.
 
 use super::CEILING_DB;
 use super::activity::{Activity, Detector, STEP as SUB};
@@ -21,12 +19,8 @@ pub struct Amounts {
     /// 0 to 1 each.
     pub bass: f32,
     pub adaptive_bass: f32,
-    pub bass_harmonics: f32,
     pub brilliance: f32,
-    pub clarity: f32,
-    pub air: f32,
     pub width: f32,
-    pub warmth: f32,
 }
 impl Amounts {
     fn clamped(self) -> Self {
@@ -40,21 +34,16 @@ impl Amounts {
         Self {
             bass: finite(self.bass),
             adaptive_bass: finite(self.adaptive_bass),
-            bass_harmonics: finite(self.bass_harmonics),
             brilliance: finite(self.brilliance),
-            clarity: finite(self.clarity),
-            air: finite(self.air),
             width: finite(self.width),
-            warmth: finite(self.warmth),
         }
     }
     /// The most the reserve may take (dB): the largest boost. The reserve
     /// itself is only what the peaks need (`Enhancer::step`); all-zero
     /// controls keep exact unity.
     pub fn most_reserve_db(self, channels: usize) -> f32 {
-        ((BASS_SHELF_DB * self.bass).max(ADAPTIVE_BASS_MAX_DB * self.adaptive_bass)
-            + 2.0 * self.bass_harmonics)
-            .max(AIR_SHELF_DB * self.air)
+        (BASS_SHELF_DB * self.bass)
+            .max(ADAPTIVE_BASS_MAX_DB * self.adaptive_bass)
             .max(BRIGHT_MOST_DB * self.brilliance)
             .max(if channels == 2 {
                 WIDTH_DB * self.width
@@ -71,19 +60,9 @@ const ADAPTIVE_BASS_MAX_DB: f32 = 13.0;
 // Pink-noise RMS power of the 40–120 Hz detector relative to the
 // 1.25 kHz reference (about -1.5 dB at 44.1–192 kHz).
 const BASS_PINK_DB: f32 = -1.5;
-const BASS_THIRD: f32 = 0.3;
 const BASS_RELEASE_S: f32 = 0.2;
-pub const AIR_SHELF_DB: f32 = 3.0;
-pub const AIR_SHELF_HZ: f32 = 11000.0;
 const WIDTH_DB: f32 = 6.0;
 const WIDTH_HZ: f32 = 600.0;
-const WARMTH_DRIVE: f32 = 2.5;
-const HALF_TAPS: usize = 16;
-// Three 2x stages, up and down: 7/4 of each half-band's delay.
-// The middle decimator's late phase removes the remaining quarter frame.
-pub const LATENCY: usize = (7 * (2 * HALF_TAPS - 1) - 1) / 4;
-const KAISER_BETA: f64 = 7.0;
-const DRY_RING: usize = 128;
 /// The peaks before and after the enhancer are followed at once up and
 /// over this time constant down.
 const PEAK_RELEASE_S: f32 = 1.5;
@@ -102,11 +81,7 @@ fn follow(env: f32, mag: f32, release: f32) -> f32 {
     }
 }
 struct Bass {
-    band: Biquad,
-    env: f32,
     release: f32,
-    harm_hp: Biquad,
-    harm_lp: Biquad,
     shelf: Vec<Biquad>,
     low: Vec<Biquad>,
     // High-pass after the existing 120 Hz low-pass, and a mid reference.
@@ -131,11 +106,7 @@ struct Bass {
 impl Bass {
     fn new(rate: u32, channels: usize) -> Self {
         Self {
-            band: Biquad::new(Coeffs::low_pass(rate, 120.0, FRAC_1_SQRT_2)),
-            env: 0.0,
             release: release(rate, BASS_RELEASE_S),
-            harm_hp: Biquad::new(Coeffs::high_pass(rate, 90.0, FRAC_1_SQRT_2)),
-            harm_lp: Biquad::new(Coeffs::low_pass(rate, 350.0, FRAC_1_SQRT_2)),
             shelf: vec![Biquad::default(); channels],
             low: vec![Biquad::new(Coeffs::low_pass(rate, 120.0, FRAC_1_SQRT_2)); channels],
             detectors: vec![
@@ -184,21 +155,10 @@ impl Bass {
             f.set(c);
         }
     }
-    fn harmonics(&mut self, mono: f32) -> f32 {
-        let low = self.band.run(mono);
-        self.env = follow(self.env, low.abs(), self.release);
-        let n = low / self.env.max(1e-6);
-        let even = low.abs();
-        let third = BASS_THIRD * 4.0 * low * n * n;
-        self.harm_lp.run(self.harm_hp.run(even + third))
-    }
     /// Adds the boost as far as `limit` lets it; returns how much higher
     /// the frame's peak would be with the whole boost, which the reserve
     /// makes room for.
-    fn run(&mut self, frame: &mut [f32], harmonics: f32) -> f32 {
-        let front = frame.len().min(2);
-        let mono = frame[..front].iter().sum::<f32>() / front as f32;
-        let harm = harmonics * self.harmonics(mono);
+    fn run(&mut self, frame: &mut [f32]) -> f32 {
         let mut low = 0f32;
         let mut boosted = 0f32;
         let (mut low_power, mut mid_power) = (0.0, 0.0);
@@ -210,7 +170,7 @@ impl Bass {
                 mid_power += reference.run(x).powi(2);
             }
             low = low.max(lows.abs());
-            let part = self.shelf[ch].run(x) - x + if ch < front { harm } else { 0.0 };
+            let part = self.shelf[ch].run(x) - x;
             self.added[ch] = part;
             // Through the same low-pass, so its phase is the low end's.
             boosted = boosted.max((lows + self.low_part[ch].run(part)).abs());
@@ -251,31 +211,26 @@ impl Bass {
     }
 }
 
-/// Linked dynamic cuts: low-mid masking, harsh presence, sibilance.
-/// Each band is judged against the middle (`REFERENCE_HZ`), not against
-/// the whole sound: the bass holds most of music's power, and against it
-/// the presence never stood out (a cut of 0.0 dB on dense rock). A
-/// band's power is weighed by its Q, so pink noise reads 0 dB in every
-/// band; music falls faster than pink, so the presence normally sits a
-/// few dB under the middle and the sibilance further.
-const TONE_HZ: [f32; 3] = [250.0, 4000.0, 7000.0];
-const TONE_Q: [f32; 3] = [0.8, 0.9, 1.2];
+/// The bass's linked dynamic cut of the low-mid masking. The band is
+/// judged against the middle (`REFERENCE_HZ`), not against the whole
+/// sound, which the bass dominates. Its power is weighed by its Q, so pink
+/// noise reads 0 dB.
+const MASK_HZ: f32 = 250.0;
+const MASK_Q: f32 = 0.8;
 const REFERENCE_HZ: f32 = 1250.0;
 const REFERENCE_Q: f32 = 0.7;
-/// The level over the middle (dB) where each cut starts, and how many dB
-/// more take it whole (`TONE_CUT_DB`, times the control's amount). Measured
+/// The level over the middle (dB) where the cut starts, and how many dB
+/// more take it whole (`MASK_CUT_DB`, times the bass's amount). Measured
 /// with `--bench enhancer` on ten tracks from pop to metal and orchestral:
-/// over the middle, 250 Hz has a median of +3 to +5 dB (+9 orchestral),
-/// 4 kHz -5 dB (about -1 at the 90th percentile; bright metal +1), 7 kHz
-/// -8 dB (-3), its sibilants +5 to +12; each starts about where the
-/// loudest tenth of an ordinary mix begins.
-const TONE_START_DB: [f32; 3] = [5.0, -1.0, -2.0];
-const TONE_SPAN_DB: [f32; 3] = [6.0, 6.0, 6.0];
-const TONE_CUT_DB: [f32; 3] = [1.5, 3.0, 3.0];
+/// over the middle, 250 Hz has a median of +3 to +5 dB (+9 orchestral);
+/// the cut starts about where the loudest tenth of an ordinary mix begins.
+const MASK_START_DB: f32 = 5.0;
+const MASK_SPAN_DB: f32 = 6.0;
+const MASK_CUT_DB: f32 = 1.5;
 /// Band powers under this (about -100 dBFS) are not judged.
 const TONE_FLOOR: f32 = 1e-10;
 /// Brilliance: the treble (7 to 13 kHz) judged against the
-/// middle as clarity's bands are, pink noise reading 0 dB, and a shelf at
+/// middle as the masking band is, pink noise reading 0 dB, and a shelf at
 /// `BRIGHT_SHELF_HZ` raised by `BRIGHT_RATIO` of how far it is under
 /// `BRIGHT_TARGET_DB`, at most `BRIGHT_MOST_DB`, times the control's
 /// amount. PowerFX (Winamp), measured with tilted pink noise: its treble
@@ -289,8 +244,8 @@ const TONE_FLOOR: f32 = 1e-10;
 /// pink itself, +4.6 at 10 kHz. The shelf drops where cymbals come, so the
 /// spectrum's mean raise is under the shelf's mean.
 /// The treble band: two high-passes at `BRIGHT_FROM_HZ` (24 dB an octave)
-/// and a low-pass at `BRIGHT_TO_HZ`. A band-pass of the second order, as
-/// clarity's, let so much of the middle through its skirts that a treble
+/// and a low-pass at `BRIGHT_TO_HZ`. A band-pass of the second order let
+/// so much of the middle through its skirts that a treble
 /// low-passed at 3 kHz read only 11 dB under pink.
 const BRIGHT_FROM_HZ: f32 = 7000.0;
 const BRIGHT_TO_HZ: f32 = 13000.0;
@@ -302,7 +257,7 @@ const BRIGHT_TARGET_DB: f32 = 3.0;
 const BRIGHT_RATIO: f32 = 0.6;
 pub const BRIGHT_MOST_DB: f32 = 12.0;
 /// The treble and the middle are followed over this (power, one pole):
-/// longer than clarity's 20 ms, so a hi-hat's stroke does not make the
+/// longer than the masking cut's 20 ms, so a hi-hat's stroke does not make the
 /// shelf breathe between strokes.
 const BAND_MEAN_S: f32 = 0.06;
 /// The shelf comes up slowly and goes down fast when the treble is back
@@ -339,19 +294,20 @@ impl ShelfGain {
 /// brilliance.
 const BRIGHT_LEAST_RATE: u32 = 32000;
 struct ToneChannel {
-    detect: [Biquad; 3],
+    detect: Biquad,
     reference: Biquad,
-    filters: [Biquad; 3],
+    filter: Biquad,
     bright_detect: [Biquad; 3],
     bright: Biquad,
 }
 struct Tone {
     channels: Vec<ToneChannel>,
-    power: [f32; 3],
+    power: f32,
     reference: f32,
-    /// Each band's level over the middle, dB (for `--bench enhancer`).
-    excess: [f32; 3],
-    db: [f32; 3],
+    /// The masking band's level over the middle, dB (for `--bench
+    /// enhancer`), and its cut now.
+    excess: f32,
+    db: f32,
     mean: f32,
     attack: f32,
     release: f32,
@@ -369,11 +325,9 @@ impl Tone {
         Self {
             channels: (0..channels)
                 .map(|_| ToneChannel {
-                    detect: std::array::from_fn(|i| {
-                        Biquad::new(Coeffs::band_pass(rate, TONE_HZ[i], TONE_Q[i]))
-                    }),
+                    detect: Biquad::new(Coeffs::band_pass(rate, MASK_HZ, MASK_Q)),
                     reference: Biquad::new(Coeffs::band_pass(rate, REFERENCE_HZ, REFERENCE_Q)),
-                    filters: [Biquad::default(); 3],
+                    filter: Biquad::default(),
                     bright_detect: [
                         Biquad::new(Coeffs::high_pass(rate, BRIGHT_FROM_HZ, FRAC_1_SQRT_2)),
                         Biquad::new(Coeffs::high_pass(rate, BRIGHT_FROM_HZ, FRAC_1_SQRT_2)),
@@ -382,10 +336,10 @@ impl Tone {
                     bright: Biquad::default(),
                 })
                 .collect(),
-            power: [0.0; 3],
+            power: 0.0,
             reference: 0.0,
-            excess: [-100.0; 3],
-            db: [0.0; 3],
+            excess: -100.0,
+            db: 0.0,
             mean: release(rate, 0.02),
             attack: release(rate, 0.01),
             release: release(rate, 0.12),
@@ -432,223 +386,54 @@ impl Tone {
             ch.bright.set(c);
         }
     }
-    fn coefficients(&mut self, rate: u32, bass: f32, clarity: f32) {
+    /// The masking cut for the band heard: `bass` 0 to 1.
+    fn coefficients(&mut self, rate: u32, bass: f32) {
         let reference = (self.reference * REFERENCE_Q).max(TONE_FLOOR);
-        for (i, amount) in [bass, clarity, clarity].into_iter().enumerate() {
-            let band = self.power[i] * TONE_Q[i];
-            self.excess[i] = if band < TONE_FLOOR {
-                -100.0
-            } else {
-                10.0 * (band / reference).log10()
-            };
-            let target = -TONE_CUT_DB[i]
-                * amount
-                * ((self.excess[i] - TONE_START_DB[i]) / TONE_SPAN_DB[i]).clamp(0.0, 1.0);
-            let k = if target < self.db[i] {
-                self.attack
-            } else {
-                self.release
-            };
-            // coefficients change once per SUB frames, so use the
-            // equivalent time constant instead of slowing it by SUB.
-            self.db[i] += (target - self.db[i]) * (1.0 - (1.0 - k).powi(SUB as i32));
-            if target == 0.0 && self.db[i].abs() < 1e-4 {
-                self.db[i] = 0.0;
-            }
-            let c = if self.db[i] == 0.0 {
-                Coeffs::default()
-            } else {
-                Coeffs::peaking(rate, TONE_HZ[i], TONE_Q[i], self.db[i])
-            };
-            for ch in &mut self.channels {
-                ch.filters[i].set(c);
-            }
+        let band = self.power * MASK_Q;
+        self.excess = if band < TONE_FLOOR {
+            -100.0
+        } else {
+            10.0 * (band / reference).log10()
+        };
+        let target =
+            -MASK_CUT_DB * bass * ((self.excess - MASK_START_DB) / MASK_SPAN_DB).clamp(0.0, 1.0);
+        let k = if target < self.db {
+            self.attack
+        } else {
+            self.release
+        };
+        // coefficients change once per SUB frames, so use the
+        // equivalent time constant instead of slowing it by SUB.
+        self.db += (target - self.db) * (1.0 - (1.0 - k).powi(SUB as i32));
+        if target == 0.0 && self.db.abs() < 1e-4 {
+            self.db = 0.0;
+        }
+        let c = if self.db == 0.0 {
+            Coeffs::default()
+        } else {
+            Coeffs::peaking(rate, MASK_HZ, MASK_Q, self.db)
+        };
+        for ch in &mut self.channels {
+            ch.filter.set(c);
         }
     }
     fn run(&mut self, frame: &mut [f32]) {
         let mut reference = 0.0;
-        let mut power = [0.0; 3];
+        let mut power = 0.0;
         let mut treble = 0.0;
         for (x, ch) in frame.iter_mut().zip(&mut self.channels) {
             let middle = ch.reference.run(*x);
             reference += middle * middle;
-            for (i, detector) in ch.detect.iter_mut().enumerate() {
-                let band = detector.run(*x);
-                power[i] += band * band;
-            }
+            let band = ch.detect.run(*x);
+            power += band * band;
             let band = ch.bright_detect.iter_mut().fold(*x, |y, f| f.run(y));
             treble += band * band;
-            for filter in &mut ch.filters {
-                *x = filter.run(*x);
-            }
-            *x = ch.bright.run(*x);
+            *x = ch.bright.run(ch.filter.run(*x));
         }
         self.reference += (reference - self.reference) * self.mean;
-        for (env, p) in self.power.iter_mut().zip(power) {
-            *env += (p - *env) * self.mean;
-        }
+        self.power += (power - self.power) * self.mean;
         self.bright_reference += (reference - self.bright_reference) * self.bright_mean;
         self.bright_power += (treble - self.bright_power) * self.bright_mean;
-    }
-}
-
-/// The modified Bessel function of the first kind, order 0 (Kaiser's
-/// window).
-fn bessel_i0(x: f64) -> f64 {
-    let (mut sum, mut term) = (1.0, 1.0);
-    for k in 1..50 {
-        term *= (x / 2.0) / k as f64;
-        sum += term * term;
-        if term * term < sum * 1e-17 {
-            break;
-        }
-    }
-    sum
-}
-
-/// The half-band filter's side taps `s[i]`, at `±(2i + 1)` from the
-/// middle tap (0.5); scaled so that they add up to 0.25 on each side, so
-/// the filter passes DC whole.
-fn half_band() -> [f32; HALF_TAPS] {
-    let edge = (2 * HALF_TAPS) as f64;
-    let mut s = [0f64; HALF_TAPS];
-    for (i, tap) in s.iter_mut().enumerate() {
-        let j = (2 * i + 1) as f64;
-        let ideal = (std::f64::consts::FRAC_PI_2 * j).sin() / (std::f64::consts::PI * j);
-        let r = j / edge;
-        let window = bessel_i0(KAISER_BETA * (1.0 - r * r).sqrt()) / bessel_i0(KAISER_BETA);
-        *tap = ideal * window;
-    }
-    let total: f64 = s.iter().sum();
-    s.map(|t| (t * 0.25 / total) as f32)
-}
-
-/// The nonzero polyphases of a 2x half-band interpolator. Keeping only
-/// input-rate history avoids multiplying zero-stuffed samples.
-#[derive(Clone, Default)]
-struct Interpolator {
-    history: [f32; 2 * HALF_TAPS],
-    at: usize,
-}
-impl Interpolator {
-    fn pair(&mut self, x: f32, taps: &[f32; HALF_TAPS]) -> [f32; 2] {
-        self.history[self.at] = x;
-        let back = |n: usize| self.history[self.at.wrapping_sub(n) % self.history.len()];
-        let mut even = 0.0;
-        for (i, &tap) in taps.iter().enumerate() {
-            even += tap * (back(HALF_TAPS - 1 - i) + back(HALF_TAPS + i));
-        }
-        let odd = back(HALF_TAPS - 1);
-        self.at = (self.at + 1) % self.history.len();
-        [2.0 * even, odd]
-    }
-}
-
-/// Both input phases are retained, but the filter is evaluated only for
-/// the phase which is emitted. `late` chooses the second sample's time.
-#[derive(Clone, Default)]
-struct Decimator {
-    even: [f32; 2 * HALF_TAPS],
-    odd: [f32; 2 * HALF_TAPS],
-    at: usize,
-}
-impl Decimator {
-    fn sample(&mut self, pair: [f32; 2], late: bool, taps: &[f32; HALF_TAPS]) -> f32 {
-        self.even[self.at] = pair[0];
-        self.odd[self.at] = pair[1];
-        let back = |h: &[f32; 2 * HALF_TAPS], n: usize| h[self.at.wrapping_sub(n) % h.len()];
-        let mut y = 0.5
-            * if late {
-                back(&self.even, HALF_TAPS - 1)
-            } else {
-                back(&self.odd, HALF_TAPS)
-            };
-        let side = if late { &self.odd } else { &self.even };
-        for (i, &tap) in taps.iter().enumerate() {
-            y += tap * (back(side, HALF_TAPS - 1 - i) + back(side, HALF_TAPS + i));
-        }
-        self.at = (self.at + 1) % self.even.len();
-        y
-    }
-}
-
-/// Warmth at eight times the rate and the aligned dry delay, per channel.
-#[derive(Clone)]
-struct WarmthChannel {
-    dry: [f32; DRY_RING],
-    up: [Interpolator; 3],
-    down: [Decimator; 3],
-}
-
-struct Warmth {
-    taps: [f32; HALF_TAPS],
-    channels: Vec<WarmthChannel>,
-    /// The frames gone through.
-    n: usize,
-    /// `tanh`'s gain making it unity at -12 dBFS.
-    gain: f32,
-}
-
-impl Warmth {
-    fn new(channels: usize) -> Warmth {
-        Warmth {
-            taps: half_band(),
-            channels: vec![
-                WarmthChannel {
-                    dry: [0.0; DRY_RING],
-                    up: std::array::from_fn(|_| Interpolator::default()),
-                    down: std::array::from_fn(|_| Decimator::default()),
-                };
-                channels
-            ],
-            n: 0,
-            gain: 0.25 * WARMTH_DRIVE / (0.25 * WARMTH_DRIVE).tanh() / WARMTH_DRIVE,
-        }
-    }
-
-    /// Drop inactive resampler history before a new fade in. The dry
-    /// delay always runs, including while warmth is at exact zero.
-    fn clear_wet(&mut self) {
-        for ch in &mut self.channels {
-            ch.up = std::array::from_fn(|_| Interpolator::default());
-            ch.down = std::array::from_fn(|_| Decimator::default());
-        }
-    }
-
-    /// One frame: each sample `LATENCY` frames back, with `amount` of the
-    /// saturation's part blended in.
-    fn run(&mut self, frame: &mut [f32], amount: f32) {
-        let n = self.n;
-        self.n = n.wrapping_add(1);
-        let s = &self.taps;
-        for (x, ch) in frame.iter_mut().zip(&mut self.channels) {
-            ch.dry[n % DRY_RING] = *x;
-            let dry = |back: usize| ch.dry[n.wrapping_sub(back) % DRY_RING];
-            let out = dry(LATENCY);
-            if amount <= 0.0 {
-                *x = out;
-                continue;
-            }
-            // Saturate at 8x: at 2x the fifth harmonic of a 15 kHz tone
-            // folds directly into 13.2 kHz at 44.1 kHz. Filtering after
-            // that fold cannot remove it. Process only the nonlinear
-            // residual, so the original sound never traverses these FIRs.
-            let twice = ch.up[0].pair(*x, s);
-            let mut four = [0.0; 4];
-            for (x, pair) in twice.into_iter().zip(four.as_chunks_mut::<2>().0) {
-                pair.copy_from_slice(&ch.up[1].pair(x, s));
-            }
-            let part = |u: f32| (WARMTH_DRIVE * u).tanh() * self.gain - u;
-            for x in &mut four {
-                let pair = ch.up[2].pair(*x, s).map(part);
-                *x = ch.down[0].sample(pair, false, s);
-            }
-            let twice = std::array::from_fn::<_, 2, _>(|i| {
-                ch.down[1].sample([four[2 * i], four[2 * i + 1]], true, s)
-            });
-            let down = ch.down[2].sample(twice, false, s);
-            *x = out + amount * down;
-        }
     }
 }
 
@@ -658,13 +443,12 @@ pub struct Enhancer {
     target: Amounts,
     now: Amounts,
     slide: f32,
-    shelves_for: (f32, f32),
+    /// The width the side shelf was set for.
+    width_for: f32,
     activity: Detector,
     bass: Bass,
-    air: Vec<Biquad>,
     tone: Tone,
     side_shelf: Biquad,
-    warmth: Warmth,
     sub: usize,
     /// The peaks coming in, and going out as they would without the
     /// reserve; `peak_release` their coefficient.
@@ -689,13 +473,11 @@ impl Enhancer {
             target: a,
             now: a,
             slide: 1.0 - (-(SUB as f32) / (rate as f32 * SLIDE_S)).exp(),
-            shelves_for: (-1.0, -1.0),
+            width_for: -1.0,
             activity: Detector::new(rate),
             bass: Bass::new(rate, channels),
-            air: vec![Biquad::default(); channels],
             tone: Tone::new(rate, channels),
             side_shelf: Biquad::default(),
-            warmth: Warmth::new(channels),
             sub: 0,
             in_peak: 0.0,
             out_peak: 0.0,
@@ -705,7 +487,7 @@ impl Enhancer {
             reserve_from: 1.0,
             reserve_to: 1.0,
         };
-        e.set_shelves();
+        e.set_width();
         e
     }
     pub fn configure(&mut self, a: Amounts) {
@@ -718,25 +500,15 @@ impl Enhancer {
             || self.bass.adaptive.db > 0.0
             || self.tone.bright_gain.db > 0.0
     }
-    fn set_shelves(&mut self) {
-        if self.now.air != self.shelves_for.0 {
-            let c = if self.now.air == 0.0 {
-                Coeffs::default()
-            } else {
-                Coeffs::high_shelf(self.rate, AIR_SHELF_HZ, AIR_SHELF_DB * self.now.air)
-            };
-            for f in &mut self.air {
-                f.set(c);
-            }
-        }
-        if self.now.width != self.shelves_for.1 {
+    fn set_width(&mut self) {
+        if self.now.width != self.width_for {
             self.side_shelf.set(if self.now.width == 0.0 {
                 Coeffs::default()
             } else {
                 Coeffs::high_shelf(self.rate, WIDTH_HZ, WIDTH_DB * self.now.width)
             });
+            self.width_for = self.now.width;
         }
-        self.shelves_for = (self.now.air, self.now.width);
     }
     fn step(&mut self, activity: Activity) {
         let slid = |now: f32, to: f32| {
@@ -750,17 +522,10 @@ impl Enhancer {
         self.now = Amounts {
             bass: slid(was.bass, to.bass),
             adaptive_bass: slid(was.adaptive_bass, to.adaptive_bass),
-            bass_harmonics: slid(was.bass_harmonics, to.bass_harmonics),
             brilliance: slid(was.brilliance, to.brilliance),
-            clarity: slid(was.clarity, to.clarity),
-            air: slid(was.air, to.air),
             width: slid(was.width, to.width),
-            warmth: slid(was.warmth, to.warmth),
         };
-        if was.warmth <= 0.0 && self.now.warmth > 0.0 {
-            self.warmth.clear_wet();
-        }
-        self.set_shelves();
+        self.set_width();
         self.bass.set_shelf(self.rate, self.now, activity);
         // What the boosts add to the peaks over both the ceiling and the
         // peaks the sound had: a master already over the ceiling is the
@@ -784,13 +549,13 @@ impl Enhancer {
         } else {
             db_to_gain(-self.reserve_db)
         };
-        self.tone
-            .coefficients(self.rate, self.now.bass, self.now.clarity);
+        self.tone.coefficients(self.rate, self.now.bass);
         self.tone
             .brilliance(self.rate, self.now.brilliance, activity);
     }
-    /// Fixed latency even at zero. State keeps running while a stage is
-    /// off, avoiding stale tails and allocations when a control moves.
+    /// No delay, and an exact wire at zero. State keeps running while a
+    /// stage is off, avoiding stale tails and allocations when a control
+    /// moves.
     pub fn process(&mut self, samples: &mut [f32]) {
         for frame in samples.chunks_exact_mut(self.channels) {
             self.process_frame(frame);
@@ -808,17 +573,13 @@ impl Enhancer {
         let a = self.now;
         let peak = frame.iter().fold(0f32, |m, x| m.max(x.abs()));
         self.in_peak = follow(self.in_peak, peak, self.peak_release);
-        self.warmth.run(frame, a.warmth);
         if reserve != 1.0 {
             for x in frame.iter_mut() {
                 *x *= reserve;
             }
         }
-        let held = self.bass.run(frame, a.bass_harmonics);
+        let held = self.bass.run(frame);
         self.tone.run(frame);
-        for (x, filter) in frame.iter_mut().zip(&mut self.air) {
-            *x = filter.run(*x);
-        }
         if self.channels == 2 {
             let (l, r) = (frame[0], frame[1]);
             let mid = (l + r) / 2.0;
@@ -869,9 +630,9 @@ impl Enhancer {
         self.reserve_to = gain;
     }
 
-    /// Each dynamic cut's band over the middle and its cut now, dB (250 Hz,
-    /// 4 kHz, 7 kHz), for `--bench enhancer`.
-    pub fn tone(&self) -> ([f32; 3], [f32; 3]) {
+    /// The masking band (250 Hz) over the middle and its cut now, dB, for
+    /// `--bench enhancer`.
+    pub fn masking(&self) -> (f32, f32) {
         (self.tone.excess, self.tone.db)
     }
 
@@ -925,98 +686,13 @@ mod tests {
     }
 
     #[test]
-    fn zero_amounts_only_delay() {
+    fn zero_amounts_are_a_wire() {
         let rate = 48000;
         let mut e = Enhancer::new(rate, 2, Amounts::default());
         let original = sine(rate, 440.0, 0.5, 0.5);
         let mut s = original.clone();
         e.process(&mut s);
-        assert!(s[..2 * LATENCY].iter().all(|&x| x == 0.0));
-        assert_eq!(s[2 * LATENCY..], original[..original.len() - 2 * LATENCY]);
-    }
-
-    #[test]
-    fn half_band_passes_dc_whole() {
-        let s = half_band();
-        assert!((0.5 + 2.0 * s.iter().sum::<f32>() - 1.0).abs() < 1e-6);
-        assert!((2.0 * 2.0 * s.iter().sum::<f32>() - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn warmth_lines_up_with_the_sound_it_comes_from() {
-        // Quiet tones: warmth is its small-signal gain then, so
-        // the output is the input `LATENCY` back times that gain; the
-        // saturation's part a frame off would be out by about its whole
-        // size (0.006).
-        for rate in [44100, 48000] {
-            for frequency in [60.0, 1000.0, 10000.0, 19000.0] {
-                let mut e = Enhancer::new(rate, 2, only(|a| a.warmth = 1.0));
-                let original = sine(rate, frequency, 0.05, 0.2);
-                let mut s = original.clone();
-                e.process(&mut s);
-                let d = 0.25 * WARMTH_DRIVE;
-                let g = d / d.tanh();
-                let error = s[2 * (LATENCY + 128)..]
-                    .iter()
-                    .zip(&original[2 * 128..])
-                    .map(|(&y, &x)| (y - g * x).abs())
-                    .fold(0.0f32, f32::max);
-                assert!(error < 0.0015, "{rate}, {frequency}: {error}");
-            }
-        }
-    }
-
-    #[test]
-    fn warmth_folds_nothing_back() {
-        // At 2x the third harmonic was suppressed, but the fifth and
-        // seventh folded back as loud as -26 dBc. Check every odd order,
-        // including those which already alias within the oversampler.
-        for rate in [44100, 48000] {
-            for frequency in [10000.0, 15000.0, 19000.0] {
-                let mut e = Enhancer::new(rate, 2, only(|a| a.warmth = 1.0));
-                // Double-precision phase keeps the generator's own noise
-                // below the alias rejection being measured.
-                let mut s: Vec<f32> = (0..2 * rate)
-                    .flat_map(|i| {
-                        let phase = std::f64::consts::TAU * f64::from(frequency) * f64::from(i)
-                            / f64::from(rate);
-                        let x = (0.9 * phase.sin()) as f32;
-                        [x, x]
-                    })
-                    .collect();
-                e.process(&mut s);
-                let fundamental = level(&s, rate, frequency);
-                for harmonic in (3..=31).step_by(2) {
-                    let alias = (frequency * harmonic as f32) % rate as f32;
-                    let alias = alias.min(rate as f32 - alias);
-                    if alias == 0.0 || (alias - frequency).abs() < 1.0 {
-                        continue;
-                    }
-                    let folded = level(&s, rate, alias);
-                    assert!(
-                        folded < fundamental * 0.001,
-                        "{rate}, {frequency}, order {harmonic}, alias {alias}: {} dBc",
-                        20.0 * (folded / fundamental).log10()
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn warmth_rounds_peaks_and_keeps_quiet_levels() {
-        let rate = 48000;
-        let mut e = Enhancer::new(rate, 2, only(|a| a.warmth = 1.0));
-        let mut loud = sine(rate, 440.0, 1.0, 0.5);
-        e.process(&mut loud);
-        let peak = loud.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
-        assert!(peak < 0.8, "{peak}");
-        let mut quiet = sine(rate, 440.0, 0.1, 0.5);
-        e.process(&mut quiet);
-        // Within about 1 dB of its level (the saturation's small-signal
-        // gain is a little over 1).
-        let r = rms(&quiet[rate as usize / 2..]);
-        assert!((r / (0.1 / 2f32.sqrt()) - 1.0).abs() < 0.15, "{r}");
+        assert_eq!(s, original);
     }
 
     /// `original` through an enhancer of `a` at 48 kHz. The test signals
@@ -1070,16 +746,13 @@ mod tests {
         let mut rest = original[..2 * 48000 * 3].to_vec();
         e.process(&mut rest);
         assert_eq!(e.reserve_db(), 0.0);
-        assert_eq!(
-            rest[rest.len() - 1],
-            original[2 * 48000 * 3 - 1 - 2 * LATENCY]
-        );
+        assert_eq!(rest[rest.len() - 1], original[2 * 48000 * 3 - 1]);
     }
     #[test]
     fn a_reserve_is_carried_into_a_chain_made_anew() {
-        // The air's shelf leaves 1 kHz alone; the reserve, not needed,
-        // goes out at 3 dB a second: 2.9 dB are left after 30 ms.
-        let mut e = Enhancer::new(48000, 2, only(|a| a.air = 1.0));
+        // The width leaves a sound without a side alone; the reserve, not
+        // needed, goes out at 3 dB a second: 2.9 dB are left after 30 ms.
+        let mut e = Enhancer::new(48000, 2, only(|a| a.width = 1.0));
         e.keep_reserve(3.0);
         let mut s = sine(48000, 1000.0, 0.1, 0.03);
         e.process(&mut s);
@@ -1092,9 +765,26 @@ mod tests {
         let s = matched(only(|a| a.bass = 1.0), &original);
         assert!(level(&s, 48000, 60.0) > 0.18);
         assert!(level(&s, 48000, 120.0) < 1e-4);
-        let harmonics = matched(only(|a| a.bass_harmonics = 1.0), &original);
-        assert!(level(&harmonics, 48000, 120.0) > 0.01);
-        assert!(level(&harmonics, 48000, 180.0) > 0.005);
+    }
+    #[test]
+    fn bass_cuts_the_low_mids_only_when_they_mask_the_middle() {
+        // 250 Hz well over 1 kHz: the whole masking cut at Bass 10; level
+        // with it: none.
+        let with = |low_mid: f32| -> Vec<f32> {
+            (0..96000)
+                .flat_map(|i| {
+                    let t = 2.0 * PI * i as f32 / 48000.0;
+                    let x = low_mid * (250.0 * t).sin() + 0.05 * (1000.0 * t).sin();
+                    [x, x]
+                })
+                .collect()
+        };
+        for (low_mid, cut) in [(0.5, -MASK_CUT_DB), (0.05, 0.0)] {
+            let mut e = Enhancer::new(48000, 2, only(|a| a.bass = 1.0));
+            e.process(&mut with(low_mid));
+            let (_, db) = e.masking();
+            assert!((db - cut).abs() < 0.05, "{low_mid}: {db} dB");
+        }
     }
     #[test]
     fn a_midrange_transient_cannot_duck_the_bass() {
@@ -1173,61 +863,6 @@ mod tests {
         assert!(over.iter().all(|x| x.is_finite()));
     }
     #[test]
-    fn air_has_no_sum_tones() {
-        let original: Vec<f32> = (0..96000)
-            .flat_map(|i| {
-                let t = 2.0 * PI * i as f32 / 48000.0;
-                let x = 0.15 * (5000.0 * t).sin() + 0.15 * (6500.0 * t).sin();
-                [x, x]
-            })
-            .collect();
-        let s = matched(only(|a| a.air = 1.0), &original);
-        assert!(level(&s, 48000, 11500.0) < 1e-4);
-        assert!(level(&s, 48000, 10000.0) < 1e-4);
-        let bright = sine(48000, 16000.0, 0.1, 2.0);
-        let s = matched(only(|a| a.air = 1.0), &bright);
-        assert!(level(&s, 48000, 16000.0) > 0.12);
-    }
-    #[test]
-    fn clarity_tames_presence_and_preserves_the_stereo_ratio() {
-        let mut original = sine(48000, 4000.0, 0.1, 2.0);
-        for frame in original.as_chunks_mut::<2>().0 {
-            frame[1] *= 0.5;
-        }
-        let s = matched(only(|a| a.clarity = 1.0), &original);
-        assert!(level(&s, 48000, 4000.0) < 0.085);
-        for f in s.as_chunks::<2>().0 {
-            assert!((f[0] * 0.5 - f[1]).abs() < 1e-6);
-        }
-        let low = sine(48000, 1000.0, 0.1, 2.0);
-        let s = matched(only(|a| a.clarity = 1.0), &low);
-        assert!((level(&s, 48000, 1000.0) / 0.1 - 1.0).abs() < 0.02);
-    }
-    #[test]
-    fn clarity_judges_the_presence_against_the_middle() {
-        // The presence 6 dB under the middle is left alone, whatever the
-        // bass under them; 3.5 dB over it is cut by about 2 dB.
-        let with = |presence: f32, bass: f32| -> Vec<f32> {
-            (0..96000)
-                .flat_map(|i| {
-                    let t = 2.0 * PI * i as f32 / 48000.0;
-                    let x = bass * (50.0 * t).sin()
-                        + 0.1 * (1000.0 * t).sin()
-                        + presence * (4000.0 * t).sin();
-                    [x, x]
-                })
-                .collect()
-        };
-        for bass in [0.0, 0.4] {
-            let s = matched(only(|a| a.clarity = 1.0), &with(0.05, bass));
-            let db = 20.0 * (level(&s, 48000, 4000.0) / 0.05).log10();
-            assert!(db.abs() < 0.05, "{bass}: {db} dB");
-            let s = matched(only(|a| a.clarity = 1.0), &with(0.15, bass));
-            let db = 20.0 * (level(&s, 48000, 4000.0) / 0.15).log10();
-            assert!((-3.0..-1.5).contains(&db), "{bass}: {db} dB");
-        }
-    }
-    #[test]
     fn width_has_no_low_frequency_dip_and_keeps_the_mono_sum() {
         let a = only(|a| a.width = 1.0);
         // An isolated side signal exposes cancellation that a mono
@@ -1254,12 +889,7 @@ mod tests {
             })
             .collect();
         let s = matched(a, &original);
-        for (out, dry) in s[2 * LATENCY..]
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .zip(original.as_chunks::<2>().0)
-        {
+        for (out, dry) in s.as_chunks::<2>().0.iter().zip(original.as_chunks::<2>().0) {
             assert!(((out[0] + out[1]) - (dry[0] + dry[1])).abs() < 2e-7);
         }
     }
@@ -1271,11 +901,7 @@ mod tests {
             let original: Vec<f32> = (0..10000).map(|i| (i as f32 * 0.1).sin() * 0.1).collect();
             let mut processed = original.clone();
             Enhancer::new(48000, channels, a).process(&mut processed);
-            let n = processed.len() / channels * channels;
-            assert_eq!(
-                processed[channels * LATENCY..n],
-                original[..n - channels * LATENCY]
-            );
+            assert_eq!(processed, original);
         }
     }
     #[test]
@@ -1283,12 +909,8 @@ mod tests {
         let a = Amounts {
             bass: 0.8,
             adaptive_bass: 0.6,
-            bass_harmonics: 0.4,
             brilliance: 0.5,
-            clarity: 0.7,
-            air: 0.6,
             width: 0.2,
-            warmth: 0.2,
         };
         let original = sine(48000, 63.0, 0.3, 0.2);
         let mut whole = original.clone();
@@ -1310,7 +932,7 @@ mod tests {
         e.process(&mut s[..96000]);
         e.configure(Amounts {
             bass: 1.0,
-            air: 1.0,
+            brilliance: 1.0,
             ..Default::default()
         });
         e.process(&mut s[96000..]);
@@ -1425,7 +1047,7 @@ mod tests {
         let mut e = Enhancer::new(rate, 2, only(|a| a.brilliance = 1.0));
         e.process(&mut s);
         assert_eq!(e.brilliance().1, 0.0);
-        assert_eq!(s[2 * LATENCY..], bright[..bright.len() - 2 * LATENCY]);
+        assert_eq!(s, bright);
     }
 
     #[test]
@@ -1487,12 +1109,8 @@ mod tests {
                 let a = Amounts {
                     bass: 1.0,
                     adaptive_bass: 1.0,
-                    bass_harmonics: 1.0,
                     brilliance: 1.0,
-                    clarity: 1.0,
-                    air: 1.0,
                     width: 1.0,
-                    warmth: 1.0,
                 };
                 let mut e = Enhancer::new(rate, channels, a);
                 let mut s: Vec<f32> = (0..rate as usize / 5)
