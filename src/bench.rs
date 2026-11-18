@@ -421,7 +421,7 @@ fn third_octaves(s: &[f32], rate: u32, ch: usize, side: bool) -> Vec<(f32, f64)>
             .map(|(x, w)| x * w)
             .collect();
         let mut im = vec![0f32; n];
-        crate::ui::spectrum::fft(&mut re, &mut im, &twiddles);
+        crate::audio::dsp::fft::fft(&mut re, &mut im, &twiddles);
         for (p, (r, i)) in power.iter_mut().zip(re.iter().zip(&im)) {
             *p += f64::from(r * r + i * i);
         }

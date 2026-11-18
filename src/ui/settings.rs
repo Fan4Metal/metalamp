@@ -1447,12 +1447,12 @@ fn processing(
             |ui| switch(ui, &mut dsp.normalize),
         );
         divider(ui);
-        let forced = dsp.drive_enabled();
+        let forced = dsp.limiter_required();
         row(
             ui,
             tr!("Limiter", "Лимитер"),
             Some(if forced {
-                drive_limiter_hint()
+                required_limiter_hint(dsp.powerfx)
             } else {
                 limiter_hint()
             }),
@@ -1565,6 +1565,11 @@ fn processing(
             50.0,
             |ui| switch(ui, &mut dsp.enhancer),
         );
+        divider(ui);
+        powerfx_profile(ui, dsp);
+        if dsp.powerfx {
+            return;
+        }
         for (title, hint, value) in enhancer_amounts() {
             divider(ui);
             amount(ui, title, hint, value(dsp));
@@ -1572,12 +1577,21 @@ fn processing(
     });
 }
 
+const POWERFX_PROFILE: &str = "PowerFX 135% · Modern";
+
+fn powerfx_profile(ui: &mut Ui, dsp: &mut DspSettings) {
+    ui.checkbox(&mut dsp.powerfx, POWERFX_PROFILE).on_hover_text(tr!(
+        "Uses the measured Modern profile with linked multiband compression. Clear to use the manual controls.",
+        "Включает профиль Modern с многополосной компрессией, настроенный по замерам PowerFX. Снимите флажок для ручной настройки."
+    ));
+}
+
 /// What the enhancer's switch does: the Sound page's row and the tip of
 /// the switch in the equalizer's window.
 fn enhancer_hint() -> &'static str {
     tr!(
-        "Each control runs from 0 to 10. At 0 its effect is off.",
-        "Каждый регулятор имеет диапазон от 0 до 10. На нуле его эффект выключен."
+        "Select the PowerFX profile or adjust the manual controls from 0 to 10.",
+        "Выберите профиль PowerFX или настройте ручные регуляторы от 0 до 10."
     )
 }
 
@@ -1687,7 +1701,7 @@ pub(crate) fn enhancer(ui: &mut Ui, dsp: &mut DspSettings, open: &mut bool) {
                 // `eq_head`'s tools end a spacing short of the edge.
                 ui.add_space(ui.spacing().item_spacing.x);
                 toggled |= fold_button(ui, openness).clicked();
-                let any = amounts.iter().any(|(_, _, value)| *value(dsp) != 0);
+                let any = !dsp.powerfx && amounts.iter().any(|(_, _, value)| *value(dsp) != 0);
                 if tool(
                     ui,
                     tr!("All back to 0", "Вернуть все к 0"),
@@ -1702,13 +1716,18 @@ pub(crate) fn enhancer(ui: &mut Ui, dsp: &mut DspSettings, open: &mut bool) {
                 }
                 if !fold.is_open() {
                     // What is set, so a folded section still tells it.
-                    let set: Vec<String> = amounts
-                        .iter()
-                        .filter_map(|(title, _, value)| {
-                            let v = *value(dsp);
-                            (v != 0).then(|| format!("{title} {v}"))
-                        })
-                        .collect();
+                    let summary = if dsp.powerfx {
+                        POWERFX_PROFILE.to_owned()
+                    } else {
+                        amounts
+                            .iter()
+                            .filter_map(|(title, _, value)| {
+                                let v = *value(dsp);
+                                (v != 0).then(|| format!("{title} {v}"))
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" · ")
+                    };
                     let color = if dsp.enhancer {
                         palette::text_weak()
                     } else {
@@ -1716,7 +1735,7 @@ pub(crate) fn enhancer(ui: &mut Ui, dsp: &mut DspSettings, open: &mut bool) {
                     };
                     ui.add_space(4.0);
                     ui.add(
-                        egui::Label::new(RichText::new(set.join(" · ")).size(12.5).color(color))
+                        egui::Label::new(RichText::new(summary).size(12.5).color(color))
                             .truncate(),
                     );
                 }
@@ -1731,7 +1750,10 @@ pub(crate) fn enhancer(ui: &mut Ui, dsp: &mut DspSettings, open: &mut bool) {
     let on = dsp.enhancer;
     fold.show_body_unindented(ui, |ui| {
         ui.add_space(8.0);
-        enhancer_grid(ui, dsp, &amounts, on);
+        powerfx_profile(ui, dsp);
+        if !dsp.powerfx {
+            enhancer_grid(ui, dsp, &amounts, on);
+        }
     });
 }
 
@@ -1806,7 +1828,13 @@ pub(crate) fn limiter_hint() -> &'static str {
     )
 }
 
-pub(crate) fn drive_limiter_hint() -> &'static str {
+pub(crate) fn required_limiter_hint(powerfx: bool) -> &'static str {
+    if powerfx {
+        return tr!(
+            "The PowerFX profile uses the limiter to catch peaks.",
+            "Профиль PowerFX включает лимитер для защиты от пиков."
+        );
+    }
     tr!(
         "Drive uses the limiter to catch peaks. When Drive is turned off, the manual limiter setting applies again.",
         "Драйв включает лимитер для защиты от пиков. После выключения драйва снова действует ручная настройка лимитера."

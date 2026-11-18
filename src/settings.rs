@@ -1029,6 +1029,7 @@ mod tests {
             Settings::from_json(br#"{"dsp":{"enhancer":true,"bass":6,"clarity":5}}"#).unwrap();
         assert_eq!(old.dsp.bass, 6);
         assert_eq!(old.dsp.adaptive_bass, 0);
+        assert!(!old.dsp.powerfx);
         assert_eq!(old.dsp.air, 5);
         assert_eq!(old.dsp.clarity, 0);
         assert_eq!(old.dsp.bass_harmonics, 0);
@@ -1036,6 +1037,7 @@ mod tests {
         let mut new = old;
         new.dsp.clarity = 4;
         new.dsp.adaptive_bass = 8;
+        new.dsp.powerfx = true;
         new.dsp.bass_harmonics = 3;
         new.dsp.brilliance = 6;
         let json = serde_json::to_vec(&new).unwrap();

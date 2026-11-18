@@ -118,7 +118,7 @@ impl Notes {
             *re = s * w;
             *im = 0.0;
         }
-        super::spectrum::fft(&mut self.re, &mut self.im, &self.twiddles);
+        crate::audio::dsp::fft::fft(&mut self.re, &mut self.im, &self.twiddles);
         let bin_hz = rate as f32 / N as f32;
         let nyquist = rate as f32 / 2.0;
         let magnitude = |k: usize| (self.re[k] * self.re[k] + self.im[k] * self.im[k]).sqrt();

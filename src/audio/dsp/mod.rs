@@ -17,8 +17,10 @@ pub mod channels;
 pub mod drive;
 pub mod enhancer;
 pub mod eq;
+pub(crate) mod fft;
 pub mod limiter;
 pub mod loudness;
+mod powerfx;
 
 use serde::{Deserialize, Serialize};
 
@@ -43,6 +45,8 @@ pub struct DspSettings {
     pub preamp: f32,
     pub bands: [f32; 10],
     pub enhancer: bool,
+    /// Measured 135% Modern profile, selected in place of the manual amounts.
+    pub powerfx: bool,
     /// 0 to 10 each.
     pub bass: u8,
     pub adaptive_bass: u8,
@@ -73,6 +77,7 @@ impl Default for DspSettings {
             preamp: 0.0,
             bands: [0.0; 10],
             enhancer: false,
+            powerfx: false,
             bass: 0,
             adaptive_bass: 0,
             clarity: 0,
@@ -99,7 +104,7 @@ impl DspSettings {
     /// The enhancer's amounts, all 0 while it is off (so turning it off
     /// slides it out, and on again in, with continuously warm filters).
     fn amounts(&self) -> enhancer::Amounts {
-        if !self.enhancer {
+        if !self.enhancer || self.powerfx {
             return enhancer::Amounts::default();
         }
         let f = |v: u8| f32::from(v.min(10)) / 10.0;
@@ -117,19 +122,19 @@ impl DspSettings {
 
     /// The drive's amount, 0 while the enhancer is off.
     fn drive_amount(&self) -> f32 {
-        if self.enhancer {
+        if self.enhancer && !self.powerfx {
             f32::from(self.drive.min(10)) / 10.0
         } else {
             0.0
         }
     }
 
-    pub fn drive_enabled(&self) -> bool {
-        self.enhancer && self.drive > 0
+    pub fn limiter_enabled(&self) -> bool {
+        self.limiter || self.limiter_required()
     }
 
-    pub fn limiter_enabled(&self) -> bool {
-        self.limiter || self.drive_enabled()
+    pub fn limiter_required(&self) -> bool {
+        self.enhancer && (self.powerfx || self.drive > 0)
     }
 }
 
@@ -154,6 +159,7 @@ pub struct Chain {
     rate: u32,
     channels: usize,
     eq: eq::Equalizer,
+    powerfx: powerfx::PowerFx,
     enhancer: enhancer::Enhancer,
     drive: drive::Drive,
     limiter: limiter::Limiter,
@@ -175,6 +181,7 @@ impl Chain {
             rate,
             channels,
             eq: eq::Equalizer::new(rate, channels, settings.preamp, &settings.bands),
+            powerfx: powerfx::PowerFx::new(rate, channels, settings.enhancer && settings.powerfx),
             enhancer: enhancer::Enhancer::new(rate, channels, settings.amounts()),
             drive: drive::Drive::new(rate, channels, settings.drive_amount()),
             limiter: limiter::Limiter::new(rate, channels, db_to_gain(CEILING_DB)),
@@ -213,6 +220,8 @@ impl Chain {
         if settings.amounts() != self.settings.amounts() {
             self.enhancer.configure(settings.amounts());
         }
+        self.powerfx
+            .configure(settings.enhancer && settings.powerfx);
         self.drive.configure(settings.drive_amount());
         self.settings = settings.clone();
     }
@@ -225,7 +234,7 @@ impl Chain {
 
     /// Fixed processing delay in the output format, including bypass.
     pub fn latency_frames(&self) -> usize {
-        enhancer::LATENCY + self.limiter.latency_frames()
+        self.powerfx.latency_frames() + enhancer::LATENCY + self.limiter.latency_frames()
     }
 
     /// A track (or a crossfade into one) begins: its gain applies at once,
@@ -248,7 +257,8 @@ impl Chain {
         // The drive raises quiet passages and has no look-ahead: the
         // limiter works with it even when switched off.
         let driving = self.drive.active();
-        let limiting = driving
+        let limiting = self.powerfx.active()
+            || driving
             || s.limiter
                 && (s.active() || self.gain > 1.0 || self.eq_mix > 0.0 || self.enhancer.active());
         let target = if s.normalize {
@@ -281,6 +291,7 @@ impl Chain {
                 };
             }
         }
+        self.powerfx.process(samples);
         // Also after it was turned off, while its amounts slide out; and
         // off, it still delays the sound by its `LATENCY`, so turning it
         // on or off does not shift it.
@@ -306,6 +317,34 @@ mod tests {
         assert!((biquad::gain_to_db(track_gain(-30.0, 0.5, true)) - 8.02).abs() < 0.05);
         // Without the limiter, up to full scale: +6.
         assert!((biquad::gain_to_db(track_gain(-30.0, 0.5, false)) - 6.02).abs() < 0.05);
+    }
+
+    #[test]
+    fn measured_profile_replaces_manual_amounts_and_protects_peaks() {
+        let mut s = DspSettings {
+            enhancer: true,
+            powerfx: true,
+            drive: 9,
+            bass: 10,
+            limiter: false,
+            ..Default::default()
+        };
+        assert_eq!(s.amounts(), enhancer::Amounts::default());
+        assert!(s.limiter_enabled());
+        assert_eq!(s.drive_amount(), 0.);
+        let mut chain = Chain::new(44100, 2, &s);
+        let mut samples: Vec<_> = (0..44100)
+            .flat_map(|i| {
+                let x = 0.9 * (i as f32 * 0.17).sin();
+                [x, -x]
+            })
+            .collect();
+        chain.process(&mut samples, 1.);
+        let peak = samples.iter().map(|s| s.abs()).fold(0., f32::max);
+        assert!(peak <= db_to_gain(CEILING_DB) + 1e-4 && peak > 0.1);
+        s.powerfx = false;
+        assert_eq!(s.amounts().bass, 1.);
+        assert_eq!(s.drive_amount(), 0.9);
     }
 
     #[test]
@@ -504,7 +543,7 @@ mod tests {
             limiter: false,
             ..Default::default()
         };
-        assert!(settings.drive_enabled() && settings.limiter_enabled());
+        assert!(settings.limiter_required() && settings.limiter_enabled());
         let mut c = Chain::new(48000, 2, &settings);
         let sine = |amplitude: f32, seconds: usize| -> Vec<f32> {
             (0..48000 * seconds)

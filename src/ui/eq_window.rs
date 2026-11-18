@@ -65,8 +65,10 @@ fn limiter_state(ui: &mut egui::Ui, dsp: &mut DspSettings) {
         0.0,
         format(palette::text_weak()),
     );
-    let forced = dsp.drive_enabled();
-    let (state, color) = if forced {
+    let forced = dsp.limiter_required();
+    let (state, color) = if forced && dsp.powerfx {
+        (tr!("on (PowerFX)", "вкл. (PowerFX)"), palette::accent())
+    } else if forced {
         (tr!("on (Drive)", "вкл. (Драйв)"), palette::accent())
     } else if dsp.limiter {
         (tr!("on", "вкл."), palette::accent())
@@ -76,7 +78,7 @@ fn limiter_state(ui: &mut egui::Ui, dsp: &mut DspSettings) {
     job.append(state, 0.0, format(color));
     if forced {
         ui.label(job)
-            .on_hover_text(crate::ui::settings::drive_limiter_hint());
+            .on_hover_text(crate::ui::settings::required_limiter_hint(dsp.powerfx));
         return;
     }
     let response = ui
