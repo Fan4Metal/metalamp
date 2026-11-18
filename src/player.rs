@@ -123,7 +123,7 @@ impl Player {
             return 1.0;
         }
         match self.loudness.get(path) {
-            Some(m) => dsp::track_gain(m.lufs, m.peak, self.dsp.limiter),
+            Some(m) => dsp::track_gain(m.lufs, m.peak, self.dsp.limiter_enabled()),
             None => {
                 self.loudness.measure(path);
                 1.0
@@ -143,7 +143,8 @@ impl Player {
     pub fn set_dsp(&mut self, dsp: &DspSettings) {
         // The tracks' gains anew: normalisation turned on, or the limiter
         // switched (it sets how far a quiet track is raised).
-        let regain = dsp.normalize && (!self.dsp.normalize || dsp.limiter != self.dsp.limiter);
+        let regain = dsp.normalize
+            && (!self.dsp.normalize || dsp.limiter_enabled() != self.dsp.limiter_enabled());
         self.dsp = dsp.clone();
         self.engine.send(Cmd::Dsp(dsp.clone()));
         if regain {
@@ -503,7 +504,7 @@ impl Player {
             if !self.dsp.normalize {
                 continue;
             }
-            let gain = dsp::track_gain(m.lufs, m.peak, self.dsp.limiter);
+            let gain = dsp::track_gain(m.lufs, m.peak, self.dsp.limiter_enabled());
             let tokens: Vec<u64> = self
                 .tokens
                 .keys()

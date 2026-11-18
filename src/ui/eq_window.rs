@@ -1,7 +1,7 @@
 //! The sound tuning window, opened by the player bar's button under it:
 //! the same equalizer as the settings window's Sound page (the switch,
 //! the presets, one's own presets, the sliders) and under it the
-//! enhancer (its switch and eight amounts two a row, the drive among them), each a section whose
+//! enhancer (its switch and amounts two a row), each a section whose
 //! sliders fold away (kept in the settings), on a card of its own,
 //! the limiter's state beside the cross (a click switches it).
 //! Not modal: the player and its keys go on. The cross, Esc or the bar's
@@ -56,7 +56,7 @@ pub struct EqWindow {
 /// The limiter's state, "Limiter: on" (the state in the accent) or "off",
 /// small beside the cross: a raised band is heard with it or without it.
 /// A click turns it on or off, as the Sound page's switch.
-fn limiter_state(ui: &mut egui::Ui, on: &mut bool) {
+fn limiter_state(ui: &mut egui::Ui, dsp: &mut DspSettings) {
     let font = egui::FontId::proportional(13.0);
     let mut job = egui::text::LayoutJob::default();
     let format = |color| egui::TextFormat::simple(font.clone(), color);
@@ -65,12 +65,20 @@ fn limiter_state(ui: &mut egui::Ui, on: &mut bool) {
         0.0,
         format(palette::text_weak()),
     );
-    let (state, color) = if *on {
+    let forced = dsp.drive_enabled();
+    let (state, color) = if forced {
+        (tr!("on (Drive)", "вкл. (Драйв)"), palette::accent())
+    } else if dsp.limiter {
         (tr!("on", "вкл."), palette::accent())
     } else {
         (tr!("off", "выкл."), palette::text_weak())
     };
     job.append(state, 0.0, format(color));
+    if forced {
+        ui.label(job)
+            .on_hover_text(crate::ui::settings::drive_limiter_hint());
+        return;
+    }
     let response = ui
         .add(egui::Label::new(job).sense(egui::Sense::click()))
         .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -80,7 +88,7 @@ fn limiter_state(ui: &mut egui::Ui, on: &mut bool) {
             tr!("A click turns it on or off.", "Щелчок включает или выключает его.")
         ));
     if response.clicked() {
-        *on = !*on;
+        dsp.limiter = !dsp.limiter;
     }
 }
 
@@ -206,7 +214,7 @@ impl EqWindow {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 close |= super::close_cross(ui);
                 ui.add_space(10.0);
-                limiter_state(ui, &mut dsp.limiter);
+                limiter_state(ui, dsp);
             });
         });
         ui.add_space(6.0);

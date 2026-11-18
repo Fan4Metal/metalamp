@@ -1447,12 +1447,24 @@ fn processing(
             |ui| switch(ui, &mut dsp.normalize),
         );
         divider(ui);
+        let forced = dsp.drive_enabled();
         row(
             ui,
             tr!("Limiter", "Лимитер"),
-            Some(limiter_hint()),
+            Some(if forced {
+                drive_limiter_hint()
+            } else {
+                limiter_hint()
+            }),
             50.0,
-            |ui| switch(ui, &mut dsp.limiter),
+            |ui| {
+                let mut on = dsp.limiter_enabled();
+                ui.add_enabled_ui(!forced, |ui| {
+                    if switch(ui, &mut on).changed() {
+                        dsp.limiter = on;
+                    }
+                });
+            },
         );
     });
     section(ui, tr!("Channels", "Каналы"), |ui| {
@@ -1564,18 +1576,16 @@ fn processing(
 /// the switch in the equalizer's window.
 fn enhancer_hint() -> &'static str {
     tr!(
-        "Eight independent controls; 0 leaves a part alone. A boost turns the rest down only as far as the peaks need: with loudness normalisation, hardly ever.",
-        "Восемь независимых регуляторов; 0 оставляет часть без изменений. Усиление приглушает остальное лишь настолько, насколько этого требуют пики: при нормализации громкости почти никогда."
+        "Each control runs from 0 to 10. At 0 its effect is off.",
+        "Каждый регулятор имеет диапазон от 0 до 10. На нуле его эффект выключен."
     )
 }
 
 /// One of the enhancer's amounts: its name, what it does, where it is kept.
 type EnhancerAmount = (&'static str, &'static str, fn(&mut DspSettings) -> &mut u8);
 
-/// The enhancer's eight amounts in the order shown (the window's grid takes
-/// them two a row: the bass's two, the two raising the treble, clarity and
-/// width, warmth and the drive, which works after the enhancer).
-fn enhancer_amounts() -> [EnhancerAmount; 8] {
+/// The enhancer's amounts in display order, two per row in the tuning window.
+fn enhancer_amounts() -> [EnhancerAmount; 9] {
     [
         (
             tr!("Bass", "Бас"),
@@ -1584,6 +1594,14 @@ fn enhancer_amounts() -> [EnhancerAmount; 8] {
                 "Глубина ниже 120 Гц с управлением по самому басу и мягким уменьшением гула в нижней середине."
             ),
             |d| &mut d.bass,
+        ),
+        (
+            tr!("Adaptive bass", "Адаптивный бас"),
+            tr!(
+                "Compares bass at 40–120 Hz with the midrange. A thin passage gets up to 13 dB of bass boost. The manual Bass control sets the minimum boost.",
+                "Сравнивает низ на 40–120 Гц с серединой. В местах со слабым басом подъём достигает 13 дБ. Ручной регулятор «Бас» задаёт минимальный подъём."
+            ),
+            |d| &mut d.adaptive_bass,
         ),
         (
             tr!("Bass harmonics", "Гармоники баса"),
@@ -1636,8 +1654,8 @@ fn enhancer_amounts() -> [EnhancerAmount; 8] {
         (
             tr!("Drive", "Драйв"),
             tr!(
-                "Automatic gain control: brings quiet passages up towards a loudness, up to 4:1 and -10 LUFS at 10, never turning loud ones down; held in pauses, so silence and hiss are not raised. The limiter works with it even when switched off.",
-                "Автоматическая регулировка усиления: подтягивает тихие места к целевой громкости, на 10 — до 4:1 и −10 LUFS, громкие никогда не убавляет; в паузах усиление замирает, поэтому тишина и шипение не поднимаются. Лимитер работает вместе с ним, даже если выключен."
+                "Raises quiet passages. At 10 the ratio is 4:1 below −10 LUFS, with up to 18 dB of boost. In pauses the boost returns smoothly to 0 dB. Drive enables the limiter.",
+                "Подтягивает тихие места. На 10 отношение составляет 4:1 ниже −10 LUFS, максимальный подъём — 18 дБ. В паузах усиление плавно возвращается к 0 дБ. Драйв включает лимитер."
             ),
             |d| &mut d.drive,
         ),
@@ -1653,7 +1671,7 @@ const ENHANCER_GAP: f32 = 28.0;
 /// columns: the switch and the name on the left (a click on the name folds
 /// or unfolds it), on the right, folded, the amounts not at 0, a round
 /// arrow putting every amount back to 0 under the equalizer's bin and the
-/// fold's chevron (`fold_button`) under its chevron; unfolded, the eight
+/// fold's chevron (`fold_button`) under its chevron; unfolded, the
 /// amounts two a row (`enhancer_cell`), greyed while it is off.
 pub(crate) fn enhancer(ui: &mut Ui, dsp: &mut DspSettings, open: &mut bool) {
     let amounts = enhancer_amounts();
@@ -1785,6 +1803,13 @@ pub(crate) fn limiter_hint() -> &'static str {
     tr!(
         "Uses 4x inter-sample peak detection and adaptive release to hold peaks near -1 dBTP after processing, so raised bands, preamp or enhancer never clip; a raised preamp then makes a loud track denser rather than louder. Turned off, a raise is heard in full, and what passes full scale is clipped by Windows.",
         "Контролирует межсемпловые пики с передискретизацией 4× и адаптивным восстановлением, удерживая их около -1 dBTP после обработки, чтобы поднятые полосы, предусиление или улучшение звука не клиповали; поднятое предусиление тогда делает громкий трек плотнее, а не громче. Если его выключить, подъём слышен целиком, а то, что выходит за полную шкалу, обрезает Windows."
+    )
+}
+
+pub(crate) fn drive_limiter_hint() -> &'static str {
+    tr!(
+        "Drive uses the limiter to catch peaks. When Drive is turned off, the manual limiter setting applies again.",
+        "Драйв включает лимитер для защиты от пиков. После выключения драйва снова действует ручная настройка лимитера."
     )
 }
 

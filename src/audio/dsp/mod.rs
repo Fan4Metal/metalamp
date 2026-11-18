@@ -11,6 +11,7 @@
 //! Dry and processed sound share a fixed delay, including in bypass:
 //! toggling processing never drops or repeats part of the waveform.
 
+mod activity;
 pub mod biquad;
 pub mod channels;
 pub mod drive;
@@ -44,6 +45,7 @@ pub struct DspSettings {
     pub enhancer: bool,
     /// 0 to 10 each.
     pub bass: u8,
+    pub adaptive_bass: u8,
     pub clarity: u8,
     pub bass_harmonics: u8,
     /// The treble raised as far as it is dull against the middle.
@@ -72,6 +74,7 @@ impl Default for DspSettings {
             bands: [0.0; 10],
             enhancer: false,
             bass: 0,
+            adaptive_bass: 0,
             clarity: 0,
             bass_harmonics: 0,
             brilliance: 0,
@@ -102,6 +105,7 @@ impl DspSettings {
         let f = |v: u8| f32::from(v.min(10)) / 10.0;
         enhancer::Amounts {
             bass: f(self.bass),
+            adaptive_bass: f(self.adaptive_bass),
             clarity: f(self.clarity),
             bass_harmonics: f(self.bass_harmonics),
             brilliance: f(self.brilliance),
@@ -118,6 +122,14 @@ impl DspSettings {
         } else {
             0.0
         }
+    }
+
+    pub fn drive_enabled(&self) -> bool {
+        self.enhancer && self.drive > 0
+    }
+
+    pub fn limiter_enabled(&self) -> bool {
+        self.limiter || self.drive_enabled()
     }
 }
 
@@ -272,8 +284,10 @@ impl Chain {
         // Also after it was turned off, while its amounts slide out; and
         // off, it still delays the sound by its `LATENCY`, so turning it
         // on or off does not shift it.
-        self.enhancer.process(samples);
-        self.drive.process(samples);
+        for frame in samples.chunks_exact_mut(self.channels) {
+            let activity = self.enhancer.process_frame(frame);
+            self.drive.process_frame(frame, activity);
+        }
         self.channels_stage.process(samples, s.balance, s.mono);
         self.limiter.process_enabled(samples, limiting);
     }
@@ -432,6 +446,54 @@ mod tests {
     }
 
     #[test]
+    fn adaptive_gains_release_together_on_a_quiet_tail() {
+        let rate = 48000;
+        let mut c = Chain::new(
+            rate,
+            2,
+            &DspSettings {
+                enhancer: true,
+                brilliance: 10,
+                drive: 10,
+                adaptive_bass: 10,
+                limiter: false,
+                ..Default::default()
+            },
+        );
+        // Quiet music with a little energy in both outer bands. All
+        // three adaptive gains have something to do before the pause.
+        let mut music: Vec<f32> = (0..rate * 3)
+            .flat_map(|i| {
+                let t = std::f64::consts::TAU * f64::from(i) / f64::from(rate);
+                let x = (0.025 * (t * 1000.0).sin()
+                    + 0.001 * ((t * 65.0).sin() + (t * 12000.0).sin()))
+                    as f32;
+                [x, x]
+            })
+            .collect();
+        c.process(&mut music, 1.0);
+        assert!(c.enhancer.brilliance().1 > 8.0 && c.drive.gain_db() > 12.0);
+        assert!(c.enhancer.bass_shelf_db() > 10.0);
+        // A quiet high-frequency residue starts immediately, persists
+        // through the pause and must return to its original amplitude.
+        let noise: Vec<f32> = (0..rate * 2)
+            .flat_map(|i| {
+                let x = [0.0, 1e-5, 0.0, -1e-5][i as usize % 4];
+                [x, x]
+            })
+            .collect();
+        let mut out = noise.clone();
+        for block in out.chunks_mut(2 * 97) {
+            c.process(block, 1.0);
+        }
+        let delay = 2 * c.latency_frames();
+        assert_eq!(c.enhancer.brilliance().1, 0.0);
+        assert_eq!(c.enhancer.bass_shelf_db(), 0.0);
+        assert_eq!(c.drive.gain_db(), 0.0);
+        assert_eq!(out[96000..], noise[96000 - delay..noise.len() - delay]);
+    }
+
+    #[test]
     fn the_drive_raises_quiet_sound_and_keeps_the_limiter_with_it() {
         // The limiter switched off: the drive still brings it in, so a
         // quiet passage raised and a loud one after it stay under the
@@ -442,12 +504,13 @@ mod tests {
             limiter: false,
             ..Default::default()
         };
+        assert!(settings.drive_enabled() && settings.limiter_enabled());
         let mut c = Chain::new(48000, 2, &settings);
         let sine = |amplitude: f32, seconds: usize| -> Vec<f32> {
             (0..48000 * seconds)
                 .flat_map(|i| {
-                    let x =
-                        amplitude * (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / 48000.0).sin();
+                    let x = amplitude
+                        * (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / 48000.0).sin();
                     [x, x]
                 })
                 .collect()
@@ -465,6 +528,7 @@ mod tests {
         // Off with the enhancer: back to a wire once the gain is back.
         let mut off = settings.clone();
         off.enhancer = false;
+        assert!(!off.limiter_enabled());
         c.configure(&off);
         c.process(&mut sine(0.5, 2), 1.0);
         assert_eq!(c.drive_state().1, 0.0);

@@ -14,7 +14,7 @@ const RELATIVE_GATE: f64 = -10.0;
 
 pub struct Meter {
     channels: usize,
-    weights: Vec<f64>,
+    weights: Vec<f32>,
     /// The two K-weighting stages per channel.
     pre: Vec<Biquad>,
     rlb: Vec<Biquad>,
@@ -33,18 +33,9 @@ impl Meter {
     pub fn new(rate: u32, channels: usize) -> Meter {
         let channels = channels.max(1);
         let (pre, rlb) = k_weighting(rate);
-        // L, R, C at 1; the LFE of a 5.1 layout left out; the surrounds
-        // at +1.5 dB.
-        let weights = (0..channels)
-            .map(|ch| match (channels, ch) {
-                (6, 3) => 0.0,
-                (6, 4 | 5) => 1.41,
-                _ => 1.0,
-            })
-            .collect();
         Meter {
             channels,
-            weights,
+            weights: channel_weights(channels),
             pre: vec![Biquad::new(pre); channels],
             rlb: vec![Biquad::new(rlb); channels],
             step_frames: (rate as usize / 10).max(1),
@@ -62,7 +53,7 @@ impl Meter {
             for (ch, &x) in frame.iter().enumerate() {
                 self.peak = self.peak.max(x.abs());
                 let y = self.rlb[ch].run(self.pre[ch].run(x));
-                self.step_energy += self.weights[ch] * f64::from(y * y);
+                self.step_energy += f64::from(self.weights[ch]) * f64::from(y * y);
             }
             self.in_step += 1;
             if self.in_step == self.step_frames {
@@ -108,6 +99,15 @@ impl Meter {
     /// The largest sample magnitude seen.
     pub fn peak(&self) -> f32 {
         self.peak
+    }
+}
+
+/// BS.1770 weights for the layouts identified here. With six channels
+/// the decoder uses L, R, C, LFE, surround L and surround R.
+pub(super) fn channel_weights(channels: usize) -> Vec<f32> {
+    match channels {
+        6 => vec![1.0, 1.0, 1.0, 0.0, 1.41, 1.41],
+        _ => vec![1.0; channels],
     }
 }
 

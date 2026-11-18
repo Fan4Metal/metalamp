@@ -1,4 +1,4 @@
-//! Seven independent controls: bass depth, bass harmonics, brilliance,
+//! Bass depth, adaptive bass, bass harmonics, brilliance,
 //! clarity, air, stereo width and warmth. The bass detector only sees low
 //! frequencies; treble transients cannot duck its gain. Clarity uses
 //! linked dynamic EQ instead of synthesizing high-frequency sum tones;
@@ -12,6 +12,7 @@
 //! Warmth's oversampled residual and the dry signal share a fixed delay.
 
 use super::CEILING_DB;
+use super::activity::{Activity, Detector, STEP as SUB};
 use super::biquad::{Biquad, Coeffs, db_to_gain, gain_to_db};
 use std::f32::consts::FRAC_1_SQRT_2;
 
@@ -19,6 +20,7 @@ use std::f32::consts::FRAC_1_SQRT_2;
 pub struct Amounts {
     /// 0 to 1 each.
     pub bass: f32,
+    pub adaptive_bass: f32,
     pub bass_harmonics: f32,
     pub brilliance: f32,
     pub clarity: f32,
@@ -37,6 +39,7 @@ impl Amounts {
         };
         Self {
             bass: finite(self.bass),
+            adaptive_bass: finite(self.adaptive_bass),
             bass_harmonics: finite(self.bass_harmonics),
             brilliance: finite(self.brilliance),
             clarity: finite(self.clarity),
@@ -49,7 +52,8 @@ impl Amounts {
     /// itself is only what the peaks need (`Enhancer::step`); all-zero
     /// controls keep exact unity.
     pub fn most_reserve_db(self, channels: usize) -> f32 {
-        (BASS_SHELF_DB * self.bass + 2.0 * self.bass_harmonics)
+        ((BASS_SHELF_DB * self.bass).max(ADAPTIVE_BASS_MAX_DB * self.adaptive_bass)
+            + 2.0 * self.bass_harmonics)
             .max(AIR_SHELF_DB * self.air)
             .max(BRIGHT_MOST_DB * self.brilliance)
             .max(if channels == 2 {
@@ -61,9 +65,12 @@ impl Amounts {
     }
 }
 const SLIDE_S: f32 = 0.05;
-const SUB: usize = 32;
 pub const BASS_SHELF_DB: f32 = 6.0;
 pub const BASS_SHELF_HZ: f32 = 120.0;
+const ADAPTIVE_BASS_MAX_DB: f32 = 13.0;
+// Pink-noise RMS power of the 40–120 Hz detector relative to the
+// 1.25 kHz reference (about -1.5 dB at 44.1–192 kHz).
+const BASS_PINK_DB: f32 = -1.5;
 const BASS_THIRD: f32 = 0.3;
 const BASS_RELEASE_S: f32 = 0.2;
 pub const AIR_SHELF_DB: f32 = 3.0;
@@ -102,6 +109,13 @@ struct Bass {
     harm_lp: Biquad,
     shelf: Vec<Biquad>,
     low: Vec<Biquad>,
+    // High-pass after the existing 120 Hz low-pass, and a mid reference.
+    detectors: Vec<[Biquad; 2]>,
+    low_power: f32,
+    mid_power: f32,
+    mean: f32,
+    adaptive: ShelfGain,
+    shelf_db: f32,
     low_part: Vec<Biquad>,
     added: Vec<f32>,
     low_env: f32,
@@ -124,6 +138,18 @@ impl Bass {
             harm_lp: Biquad::new(Coeffs::low_pass(rate, 350.0, FRAC_1_SQRT_2)),
             shelf: vec![Biquad::default(); channels],
             low: vec![Biquad::new(Coeffs::low_pass(rate, 120.0, FRAC_1_SQRT_2)); channels],
+            detectors: vec![
+                [
+                    Biquad::new(Coeffs::high_pass(rate, 40.0, FRAC_1_SQRT_2)),
+                    Biquad::new(Coeffs::band_pass(rate, REFERENCE_HZ, REFERENCE_Q)),
+                ];
+                channels
+            ],
+            low_power: 0.0,
+            mid_power: 0.0,
+            mean: release(rate, BAND_MEAN_S),
+            adaptive: ShelfGain::new(rate),
+            shelf_db: 0.0,
             low_part: vec![Biquad::new(Coeffs::low_pass(rate, 120.0, FRAC_1_SQRT_2)); channels],
             added: vec![0.0; channels],
             low_env: 0.0,
@@ -134,11 +160,25 @@ impl Bass {
             limit: db_to_gain(CEILING_DB),
         }
     }
-    fn set_shelf(&mut self, rate: u32, amount: f32) {
-        let c = if amount == 0.0 {
+    fn set_shelf(&mut self, rate: u32, a: Amounts, activity: Activity) {
+        let mut wanted = 0.0;
+        if a.adaptive_bass > 0.0 && self.mid_power > TONE_FLOOR {
+            let balance =
+                10.0 * (self.low_power.max(TONE_FLOOR) / self.mid_power).log10() - BASS_PINK_DB;
+            // The measured low band pulls two thirds of the way to pink +6 dB.
+            wanted =
+                a.adaptive_bass * ((6.0 - balance) * (2.0 / 3.0)).clamp(0.0, ADAPTIVE_BASS_MAX_DB);
+        }
+        self.adaptive.update(wanted, activity);
+        let db = (BASS_SHELF_DB * a.bass).max(self.adaptive.db);
+        if db == self.shelf_db {
+            return;
+        }
+        self.shelf_db = db;
+        let c = if db == 0.0 {
             Coeffs::default()
         } else {
-            Coeffs::low_shelf(rate, BASS_SHELF_HZ, BASS_SHELF_DB * amount)
+            Coeffs::low_shelf(rate, BASS_SHELF_HZ, db)
         };
         for f in &mut self.shelf {
             f.set(c);
@@ -161,14 +201,22 @@ impl Bass {
         let harm = harmonics * self.harmonics(mono);
         let mut low = 0f32;
         let mut boosted = 0f32;
+        let (mut low_power, mut mid_power) = (0.0, 0.0);
         for (ch, &x) in frame.iter().enumerate() {
             let lows = self.low[ch].run(x);
+            if frame.len() != 6 || ch != 3 {
+                let [hp, reference] = &mut self.detectors[ch];
+                low_power += hp.run(lows).powi(2);
+                mid_power += reference.run(x).powi(2);
+            }
             low = low.max(lows.abs());
             let part = self.shelf[ch].run(x) - x + if ch < front { harm } else { 0.0 };
             self.added[ch] = part;
             // Through the same low-pass, so its phase is the low end's.
             boosted = boosted.max((lows + self.low_part[ch].run(part)).abs());
         }
+        self.low_power += (low_power - self.low_power) * self.mean;
+        self.mid_power += (mid_power - self.mid_power) * self.mean;
         self.low_env = follow(self.low_env, low, self.release);
         self.boosted_env = follow(self.boosted_env, boosted, self.release);
         // Only the LF envelope controls bass gain, against the level the
@@ -256,11 +304,37 @@ pub const BRIGHT_MOST_DB: f32 = 12.0;
 /// The treble and the middle are followed over this (power, one pole):
 /// longer than clarity's 20 ms, so a hi-hat's stroke does not make the
 /// shelf breathe between strokes.
-const BRIGHT_MEAN_S: f32 = 0.06;
+const BAND_MEAN_S: f32 = 0.06;
 /// The shelf comes up slowly and goes down fast when the treble is back
 /// (PowerFX: 10 dB in about 250 ms up, 11 dB in 60 to 100 ms down).
-const BRIGHT_RISE_S: f32 = 0.3;
-const BRIGHT_FALL_S: f32 = 0.04;
+struct ShelfGain {
+    db: f32,
+    rise: f32,
+    fall: f32,
+}
+impl ShelfGain {
+    fn new(rate: u32) -> Self {
+        let per_step = |seconds: f32| 1.0 - (-(SUB as f32) / (rate as f32 * seconds)).exp();
+        Self {
+            db: 0.0,
+            rise: per_step(0.3),
+            fall: per_step(0.04),
+        }
+    }
+
+    fn update(&mut self, wanted: f32, activity: Activity) {
+        let target = activity.target(wanted, self.db);
+        let k = if target > self.db {
+            self.rise
+        } else {
+            self.fall
+        };
+        self.db += (target - self.db) * k;
+        if target == 0.0 && self.db < 1e-4 {
+            self.db = 0.0;
+        }
+    }
+}
 /// Under this rate the treble band and shelf would sit at the edge: no
 /// brilliance.
 const BRIGHT_LEAST_RATE: u32 = 32000;
@@ -282,14 +356,12 @@ struct Tone {
     attack: f32,
     release: f32,
     /// Brilliance's treble and middle powers, its treble over the middle
-    /// (dB, as `excess`; kept while the middle is silent) and its shelf now.
+    /// (dB, as `excess`) and its shelf now.
     bright_power: f32,
     bright_reference: f32,
     bright_excess: f32,
-    bright_db: f32,
+    bright_gain: ShelfGain,
     bright_mean: f32,
-    bright_rise: f32,
-    bright_fall: f32,
     bright_able: bool,
 }
 impl Tone {
@@ -323,15 +395,13 @@ impl Tone {
             // for a treble not yet measured.
             bright_excess: BRIGHT_TARGET_DB,
             // (the target itself: nothing to raise)
-            bright_db: 0.0,
-            bright_mean: release(rate, BRIGHT_MEAN_S),
-            bright_rise: release(rate, BRIGHT_RISE_S),
-            bright_fall: release(rate, BRIGHT_FALL_S),
+            bright_gain: ShelfGain::new(rate),
+            bright_mean: release(rate, BAND_MEAN_S),
             bright_able: rate >= BRIGHT_LEAST_RATE,
         }
     }
     /// Brilliance's shelf for the treble heard: `amount` 0 to 1.
-    fn brilliance(&mut self, rate: u32, amount: f32) {
+    fn brilliance(&mut self, rate: u32, amount: f32, activity: Activity) {
         let reference = self.bright_reference * REFERENCE_Q;
         if reference >= TONE_FLOOR {
             let band = self.bright_power;
@@ -341,26 +411,22 @@ impl Tone {
                 10.0 * (band / reference).log10() - BRIGHT_PINK_DB
             };
         }
-        let target = if self.bright_able {
-            amount
+        let target = if self.bright_able && reference >= TONE_FLOOR {
+            // Fade the boost out when the measured treble itself approaches
+            // the noise floor (full correction above -80 dBFS RMS/channel).
+            let confidence = (self.bright_power / (1e-8 * self.channels.len() as f32)).min(1.0);
+            confidence
+                * amount
                 * (BRIGHT_RATIO * (BRIGHT_TARGET_DB - self.bright_excess))
                     .clamp(0.0, BRIGHT_MOST_DB)
         } else {
             0.0
         };
-        let k = if target > self.bright_db {
-            self.bright_rise
-        } else {
-            self.bright_fall
-        };
-        self.bright_db += (target - self.bright_db) * (1.0 - (1.0 - k).powi(SUB as i32));
-        if target == 0.0 && self.bright_db.abs() < 1e-4 {
-            self.bright_db = 0.0;
-        }
-        let c = if self.bright_db == 0.0 {
+        self.bright_gain.update(target, activity);
+        let c = if self.bright_gain.db == 0.0 {
             Coeffs::default()
         } else {
-            Coeffs::high_shelf(rate, BRIGHT_SHELF_HZ, self.bright_db)
+            Coeffs::high_shelf(rate, BRIGHT_SHELF_HZ, self.bright_gain.db)
         };
         for ch in &mut self.channels {
             ch.bright.set(c);
@@ -592,7 +658,8 @@ pub struct Enhancer {
     target: Amounts,
     now: Amounts,
     slide: f32,
-    shelves_for: (f32, f32, f32),
+    shelves_for: (f32, f32),
+    activity: Detector,
     bass: Bass,
     air: Vec<Biquad>,
     tone: Tone,
@@ -622,7 +689,8 @@ impl Enhancer {
             target: a,
             now: a,
             slide: 1.0 - (-(SUB as f32) / (rate as f32 * SLIDE_S)).exp(),
-            shelves_for: (-1.0, -1.0, -1.0),
+            shelves_for: (-1.0, -1.0),
+            activity: Detector::new(rate),
             bass: Bass::new(rate, channels),
             air: vec![Biquad::default(); channels],
             tone: Tone::new(rate, channels),
@@ -647,12 +715,11 @@ impl Enhancer {
     /// limiter must keep protecting boosts until this transition ends.
     pub fn active(&self) -> bool {
         self.now != Amounts::default()
+            || self.bass.adaptive.db > 0.0
+            || self.tone.bright_gain.db > 0.0
     }
     fn set_shelves(&mut self) {
-        if self.now.bass != self.shelves_for.0 {
-            self.bass.set_shelf(self.rate, self.now.bass);
-        }
-        if self.now.air != self.shelves_for.1 {
+        if self.now.air != self.shelves_for.0 {
             let c = if self.now.air == 0.0 {
                 Coeffs::default()
             } else {
@@ -662,16 +729,16 @@ impl Enhancer {
                 f.set(c);
             }
         }
-        if self.now.width != self.shelves_for.2 {
+        if self.now.width != self.shelves_for.1 {
             self.side_shelf.set(if self.now.width == 0.0 {
                 Coeffs::default()
             } else {
                 Coeffs::high_shelf(self.rate, WIDTH_HZ, WIDTH_DB * self.now.width)
             });
         }
-        self.shelves_for = (self.now.bass, self.now.air, self.now.width);
+        self.shelves_for = (self.now.air, self.now.width);
     }
-    fn step(&mut self) {
+    fn step(&mut self, activity: Activity) {
         let slid = |now: f32, to: f32| {
             if (to - now).abs() < 1e-5 {
                 to
@@ -682,6 +749,7 @@ impl Enhancer {
         let (was, to) = (self.now, self.target);
         self.now = Amounts {
             bass: slid(was.bass, to.bass),
+            adaptive_bass: slid(was.adaptive_bass, to.adaptive_bass),
             bass_harmonics: slid(was.bass_harmonics, to.bass_harmonics),
             brilliance: slid(was.brilliance, to.brilliance),
             clarity: slid(was.clarity, to.clarity),
@@ -693,6 +761,7 @@ impl Enhancer {
             self.warmth.clear_wet();
         }
         self.set_shelves();
+        self.bass.set_shelf(self.rate, self.now, activity);
         // What the boosts add to the peaks over both the ceiling and the
         // peaks the sound had: a master already over the ceiling is the
         // limiter's as it was without the enhancer.
@@ -717,50 +786,57 @@ impl Enhancer {
         };
         self.tone
             .coefficients(self.rate, self.now.bass, self.now.clarity);
-        self.tone.brilliance(self.rate, self.now.brilliance);
+        self.tone
+            .brilliance(self.rate, self.now.brilliance, activity);
     }
     /// Fixed latency even at zero. State keeps running while a stage is
     /// off, avoiding stale tails and allocations when a control moves.
     pub fn process(&mut self, samples: &mut [f32]) {
         for frame in samples.chunks_exact_mut(self.channels) {
-            if self.sub == 0 {
-                self.step();
-            }
-            let reserve = self.reserve_from
-                + (self.reserve_to - self.reserve_from) * (self.sub + 1) as f32 / SUB as f32;
-            self.sub = (self.sub + 1) % SUB;
-            let a = self.now;
-            let peak = frame.iter().fold(0f32, |m, x| m.max(x.abs()));
-            self.in_peak = follow(self.in_peak, peak, self.peak_release);
-            self.warmth.run(frame, a.warmth);
-            if reserve != 1.0 {
-                for x in frame.iter_mut() {
-                    *x *= reserve;
-                }
-            }
-            let held = self.bass.run(frame, a.bass_harmonics);
-            self.tone.run(frame);
-            for (x, filter) in frame.iter_mut().zip(&mut self.air) {
-                *x = filter.run(*x);
-            }
-            if self.channels == 2 {
-                let (l, r) = (frame[0], frame[1]);
-                let mid = (l + r) / 2.0;
-                let side = (l - r) / 2.0;
-                // A monotonic side shelf avoids the LF cancellation of
-                // adding a phase-shifted high-pass to the original side.
-                // The mid is untouched: the width cancels in a mono sum.
-                let side = self.side_shelf.run(side);
-                if a.width > 0.0 {
-                    frame[0] = mid + side;
-                    frame[1] = mid - side;
-                }
-            }
-            // As they would be without the reserve and with the whole
-            // bass boost, so the reserve makes room for what was held back.
-            let peak = (frame.iter().fold(0f32, |m, x| m.max(x.abs())) + held) / reserve;
-            self.out_peak = follow(self.out_peak, peak, self.peak_release);
+            self.process_frame(frame);
         }
+    }
+
+    pub(super) fn process_frame(&mut self, frame: &mut [f32]) -> Activity {
+        let activity = self.activity.observe(frame);
+        if self.sub == 0 {
+            self.step(activity);
+        }
+        let reserve = self.reserve_from
+            + (self.reserve_to - self.reserve_from) * (self.sub + 1) as f32 / SUB as f32;
+        self.sub = (self.sub + 1) % SUB;
+        let a = self.now;
+        let peak = frame.iter().fold(0f32, |m, x| m.max(x.abs()));
+        self.in_peak = follow(self.in_peak, peak, self.peak_release);
+        self.warmth.run(frame, a.warmth);
+        if reserve != 1.0 {
+            for x in frame.iter_mut() {
+                *x *= reserve;
+            }
+        }
+        let held = self.bass.run(frame, a.bass_harmonics);
+        self.tone.run(frame);
+        for (x, filter) in frame.iter_mut().zip(&mut self.air) {
+            *x = filter.run(*x);
+        }
+        if self.channels == 2 {
+            let (l, r) = (frame[0], frame[1]);
+            let mid = (l + r) / 2.0;
+            let side = (l - r) / 2.0;
+            // A monotonic side shelf avoids the LF cancellation of
+            // adding a phase-shifted high-pass to the original side.
+            // The mid is untouched: the width cancels in a mono sum.
+            let side = self.side_shelf.run(side);
+            if a.width > 0.0 {
+                frame[0] = mid + side;
+                frame[1] = mid - side;
+            }
+        }
+        // As they would be without the reserve and with the whole
+        // bass boost, so the reserve makes room for what was held back.
+        let peak = (frame.iter().fold(0f32, |m, x| m.max(x.abs())) + held) / reserve;
+        self.out_peak = follow(self.out_peak, peak, self.peak_release);
+        activity
     }
 
     /// The reserve taken now, dB.
@@ -772,6 +848,11 @@ impl Enhancer {
     /// for `--bench enhancer`.
     pub fn bass_given(&self) -> f32 {
         self.bass.given
+    }
+
+    /// Gain requested of the shared bass shelf, before its peak guard.
+    pub fn bass_shelf_db(&self) -> f32 {
+        self.bass.shelf_db
     }
 
     /// The reserve carried into a chain made anew (another track, a seek),
@@ -797,7 +878,7 @@ impl Enhancer {
     /// Brilliance's treble over the middle and its shelf now, dB, for
     /// `--bench enhancer`.
     pub fn brilliance(&self) -> (f32, f32) {
-        (self.tone.bright_excess, self.tone.bright_db)
+        (self.tone.bright_excess, self.tone.bright_gain.db)
     }
 }
 
@@ -989,7 +1070,10 @@ mod tests {
         let mut rest = original[..2 * 48000 * 3].to_vec();
         e.process(&mut rest);
         assert_eq!(e.reserve_db(), 0.0);
-        assert_eq!(rest[rest.len() - 1], original[2 * 48000 * 3 - 1 - 2 * LATENCY]);
+        assert_eq!(
+            rest[rest.len() - 1],
+            original[2 * 48000 * 3 - 1 - 2 * LATENCY]
+        );
     }
     #[test]
     fn a_reserve_is_carried_into_a_chain_made_anew() {
@@ -1059,7 +1143,10 @@ mod tests {
             assert!(raised > 5.0, "{amplitude}: {raised} dB");
             let last = peak(&s[s.len() - 48000..]);
             let ceiling = db_to_gain(CEILING_DB);
-            assert!(last < peak(&original).max(ceiling) * 1.02, "{amplitude}: {last}");
+            assert!(
+                last < peak(&original).max(ceiling) * 1.02,
+                "{amplitude}: {last}"
+            );
         }
     }
     #[test]
@@ -1195,6 +1282,7 @@ mod tests {
     fn processing_is_independent_of_block_boundaries() {
         let a = Amounts {
             bass: 0.8,
+            adaptive_bass: 0.6,
             bass_harmonics: 0.4,
             brilliance: 0.5,
             clarity: 0.7,
@@ -1270,6 +1358,36 @@ mod tests {
     }
 
     #[test]
+    fn adaptive_bass_follows_the_input_balance_and_shares_the_manual_shelf() {
+        let rate = 48000;
+        let a = only(|a| a.adaptive_bass = 1.0);
+        // The same pink noise throughout. Judge a full second so the
+        // outcome does not depend on a single bass note at the end.
+        let measure = |mut s: Vec<f32>, amounts: Amounts| {
+            let mut e = Enhancer::new(rate, 2, amounts);
+            let mut db = Vec::new();
+            for block in s.chunks_mut(2 * 4800) {
+                e.process(block);
+                db.push(e.bass.shelf_db);
+            }
+            db[db.len() - 10..].iter().sum::<f32>() / 10.0
+        };
+        for (tilt, range) in [
+            (-24.0, 12.0..13.01),
+            (-6.0, 6.8..9.0),
+            (0.0, 3.0..5.0),
+            (9.0, 0.0..0.6),
+        ] {
+            let s = pink(rate, 3.0, Some(Coeffs::low_shelf(rate, 280.0, tilt)));
+            let actual = measure(s, a);
+            assert!(range.contains(&actual), "tilt {tilt}: {actual} dB");
+        }
+        let both = Amounts { bass: 1.0, ..a };
+        let db = measure(pink(rate, 3.0, None), both);
+        assert!((db - BASS_SHELF_DB).abs() < 0.1, "{db} dB");
+    }
+
+    #[test]
     fn brilliance_reads_pink_noise_as_balanced() {
         for rate in [44100, 48000, 96000] {
             let (excess, db) = brilliance_after(rate, &pink(rate, 3.0, None));
@@ -1291,9 +1409,16 @@ mod tests {
         let wanted = BRIGHT_RATIO * (BRIGHT_TARGET_DB - excess);
         assert!((db - wanted).abs() < 0.5, "{excess} dB: {db} dB");
         // At most `BRIGHT_MOST_DB`, however dull.
-        let dark = pink(rate, 3.0, Some(Coeffs::low_pass(rate, 3000.0, FRAC_1_SQRT_2)));
+        let dark = pink(
+            rate,
+            3.0,
+            Some(Coeffs::low_pass(rate, 3000.0, FRAC_1_SQRT_2)),
+        );
         let (_, db) = brilliance_after(rate, &dark);
-        assert!((BRIGHT_MOST_DB - 0.1..=BRIGHT_MOST_DB).contains(&db), "{db} dB");
+        assert!(
+            (BRIGHT_MOST_DB - 0.1..=BRIGHT_MOST_DB).contains(&db),
+            "{db} dB"
+        );
         // 6 dB over pink: nothing at all, the shelf an exact wire.
         let bright = pink(rate, 3.0, Some(Coeffs::high_shelf(rate, 4000.0, 6.0)));
         let mut s = bright.clone();
@@ -1361,6 +1486,7 @@ mod tests {
             for channels in [1, 2, 6] {
                 let a = Amounts {
                     bass: 1.0,
+                    adaptive_bass: 1.0,
                     bass_harmonics: 1.0,
                     brilliance: 1.0,
                     clarity: 1.0,
