@@ -34,10 +34,25 @@ const SENSITIVITY: [[f32; 6]; 20] = [
     [0., 0., 0., 0., 422., 5664.],
     [0., 0., 61., 0., 146., 6234.],
 ];
-// Reserve inside the measured profile. Abrupt level steps otherwise hold the
-// final look-ahead limiter down longer than the reference recording.
+// The profile's level against PowerFX's. PowerFX lets its peaks go up to
+// 4 dB over full scale (its volume control comes after it), the final
+// limiter here holds them at -1 dBTP: with 2 dB less the sound is about
+// 2 dB quieter than PowerFX's, and the limiter takes about as much off a
+// hit as PowerFX's peaks pass over full scale. Measured on six A/B
+// recordings (local/PowerFX-AB), less trim held the hits further down,
+// more matched them closer still at the cost of loudness.
 const OUTPUT_TRIM_DB: f32 = -2.0;
 const SLOPE: [f32; 6] = [0.646, 0.8, 0.766, 0.772, 0.742, 0.711];
+// The detectors' gains at most (dB): also where they start, as after
+// silence. PowerFX starts so after a seek (the gains high, settling in
+// about 60 ms); a start as after a reference level had the first hit of a
+// passage 5-11 dB short and the treble creeping up over 300 ms (Dark
+// Chest Of Wonders started on its first hit).
+const MOST_DB: [f32; 6] = [9.7, 11.1, 12.3, 15.2, 11.4, 5.7];
+// Seconds: the detectors' smoothing, a gain falling and rising.
+const AVERAGE_S: f32 = 0.041;
+const ATTACK_S: f32 = 0.016;
+const RELEASE_S: f32 = 0.052;
 // Hz, interpolated detector index, gain at the reference pink-noise
 // level, and maximum gain measured on a separate quiet plateau (dB).
 const CURVE: &[[f32; 4]] = &[
@@ -127,7 +142,7 @@ struct Channel {
     full_range: bool,
 }
 
-pub(super) struct PowerFx {
+pub(crate) struct PowerFx {
     enabled: bool,
     tail: usize,
     pos: usize,
@@ -144,7 +159,7 @@ pub(super) struct PowerFx {
 }
 
 impl PowerFx {
-    pub(super) fn new(rate: u32, channels: usize, enabled: bool) -> Self {
+    pub(crate) fn new(rate: u32, channels: usize, enabled: bool) -> Self {
         let rate = rate.max(1) as f32;
         let n = 1usize << (10. + (rate / 44100.).log2()).round().clamp(7., 13.) as u32;
         let angle = TAU / n as f32;
@@ -181,19 +196,19 @@ impl PowerFx {
                 .map(|i| Bin::new(i as f32 * step, step, scale))
                 .collect(),
             bin_gain: vec![0.; n / 2 + 1],
-            env: [1.; 6],
-            gain: [0.; 6],
-            average: smooth(0.041),
-            attack: smooth(0.016),
-            release: smooth(0.052),
+            env: [0.; 6],
+            gain: MOST_DB,
+            average: smooth(AVERAGE_S),
+            attack: smooth(ATTACK_S),
+            release: smooth(RELEASE_S),
         }
     }
 
-    pub(super) fn configure(&mut self, enabled: bool) {
+    pub(crate) fn configure(&mut self, enabled: bool) {
         if enabled != self.enabled {
             if enabled {
-                self.env.fill(1.);
-                self.gain.fill(0.);
+                self.env.fill(0.);
+                self.gain = MOST_DB;
             } else {
                 self.tail = self.latency_frames() + enhancer::LATENCY;
             }
@@ -201,14 +216,14 @@ impl PowerFx {
         }
     }
 
-    pub(super) fn active(&self) -> bool {
+    pub(crate) fn active(&self) -> bool {
         self.enabled || self.tail > 0
     }
-    pub(super) fn latency_frames(&self) -> usize {
+    pub(crate) fn latency_frames(&self) -> usize {
         self.window.len()
     }
 
-    pub(super) fn process(&mut self, samples: &mut [f32]) {
+    pub(crate) fn process(&mut self, samples: &mut [f32]) {
         let n = self.window.len();
         for frame in samples.chunks_exact_mut(self.channels.len()) {
             for (ch, x) in self.channels.iter_mut().zip(frame) {
@@ -247,10 +262,9 @@ impl PowerFx {
         }
         // Cap the detector as well as the per-bin gain so long silences
         // cannot leave the compressor wound up when music resumes.
-        let max_delta = [9.7, 11.1, 12.3, 15.2, 11.4, 5.7];
         for (i, g) in self.gain.iter_mut().enumerate() {
             let energy = self.env[i];
-            let target = (-10. * SLOPE[i] * energy.max(1e-12).log10()).clamp(-35., max_delta[i]);
+            let target = (-10. * SLOPE[i] * energy.max(1e-12).log10()).clamp(-35., MOST_DB[i]);
             let alpha = if target < *g {
                 self.attack
             } else {
@@ -337,6 +351,48 @@ mod tests {
             } else {
                 assert!(change.abs() < 1., "{change}");
             }
+        }
+    }
+
+    #[test]
+    fn a_start_within_music_is_as_after_silence() {
+        // Started on a passage (a seek, another track), the gains begin
+        // high and settle within about 60 ms, as PowerFX's do; they are
+        // never under where they settle, which held the first hit down.
+        let rate = 44100;
+        let block = rate as usize / 50;
+        for amplitude in [0.003, 0.03, 0.3] {
+            let mut fx = PowerFx::new(rate, 2, true);
+            let delay = fx.latency_frames();
+            let mut audio: Vec<f32> = (0..rate as usize + delay)
+                .flat_map(|i| {
+                    let t = i as f32 / rate as f32;
+                    let x = if i < rate as usize {
+                        [70., 185., 700., 2800., 10500.]
+                            .iter()
+                            .map(|hz| amplitude * (TAU * hz * t).sin())
+                            .sum()
+                    } else {
+                        0.
+                    };
+                    [x, x]
+                })
+                .collect();
+            fx.process(&mut audio);
+            let out = &audio[2 * delay..];
+            let level = |b: usize| {
+                let s = &out[2 * b * block..2 * (b + 1) * block];
+                10. * (s.iter().map(|x| x * x).sum::<f32>() / s.len() as f32).log10()
+            };
+            let settled = level(40);
+            for b in 0..40 {
+                assert!(
+                    level(b) > settled - 0.5,
+                    "{amplitude}: {b}: {} {settled}",
+                    level(b)
+                );
+            }
+            assert!((level(5) - settled).abs() < 1., "{amplitude}: {}", level(5));
         }
     }
 

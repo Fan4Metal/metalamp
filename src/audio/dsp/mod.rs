@@ -20,7 +20,7 @@ pub mod eq;
 pub(crate) mod fft;
 pub mod limiter;
 pub mod loudness;
-mod powerfx;
+pub(crate) mod powerfx;
 
 use serde::{Deserialize, Serialize};
 
@@ -300,6 +300,7 @@ impl Chain {
             self.drive.process_frame(frame, activity);
         }
         self.channels_stage.process(samples, s.balance, s.mono);
+        self.limiter.set_fast(self.powerfx.active());
         self.limiter.process_enabled(samples, limiting);
     }
 }

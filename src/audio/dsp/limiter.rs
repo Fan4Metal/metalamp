@@ -1,9 +1,16 @@
 //! Linked look-ahead limiter with 4x inter-sample peak detection.
 //! A finite linear attack reaches the required gain before the peak;
 //! limiting changes gain, never clips individual waveform samples.
-//! Recovery is faster for isolated transients than sustained overload.
+//! Recovery is faster for isolated transients than sustained overload,
+//! unless set `fast` (the measured PowerFX profile): then it follows the
+//! peaks within `FAST_RELEASE`, as PowerFX's own limiter does.
 use std::collections::VecDeque;
 const LOOKAHEAD: f32 = 0.005;
+/// Seconds. Measured against PowerFX on six recordings: its output stays
+/// at full scale through a hit and lets go almost at once, so the AGC's
+/// overshoot costs only the peaks; the adaptive 60–240 ms recovery held
+/// every hit after it 5–7 dB down for about 100 ms (Dark Chest Of Wonders).
+const FAST_RELEASE: f64 = 0.01;
 const TAPS: usize = 32;
 const DETECTOR_DELAY: usize = TAPS / 2;
 const SAFETY: f32 = 0.98;
@@ -95,6 +102,8 @@ pub struct Limiter {
     slow_release: f64,
     sustained: f64,
     mean: f64,
+    rate: u32,
+    fast: bool,
     detector: TruePeak,
 }
 impl Limiter {
@@ -118,8 +127,24 @@ impl Limiter {
             slow_release: 1.0 - (-1.0 / (f64::from(rate) * 0.24)).exp(),
             sustained: 0.0,
             mean: 1.0 - (-1.0 / (f64::from(rate) * 0.1)).exp(),
+            rate,
+            fast: false,
             detector: TruePeak::new(channels),
         }
+    }
+    /// Recovery within `FAST_RELEASE` (true) or the adaptive one (false);
+    /// the gain and the delay are kept.
+    pub(crate) fn set_fast(&mut self, fast: bool) {
+        if fast == self.fast {
+            return;
+        }
+        self.fast = fast;
+        let k = |seconds: f64| 1.0 - (-1.0 / (f64::from(self.rate) * seconds)).exp();
+        (self.fast_release, self.slow_release) = if fast {
+            (k(FAST_RELEASE), k(FAST_RELEASE))
+        } else {
+            (k(0.06), k(0.24))
+        };
     }
     pub fn reduction_db(&self) -> f32 {
         (-20.0 * self.gain.max(1e-9).log10()) as f32
@@ -295,6 +320,32 @@ mod tests {
                 .iter()
                 .all(|f| (f[0] * 0.5 - f[1]).abs() < 1e-7)
         );
+    }
+    #[test]
+    fn fast_recovery_lets_go_of_a_hit_at_once() {
+        // 100 ms over the ceiling by 9 dB, then sound 1 dB under it: the
+        // adaptive recovery still holds it down 50 ms on, the fast one
+        // has let go, as PowerFX's limiter does.
+        let rate = 48000;
+        let hit = rate as usize / 10;
+        let mut gains = Vec::new();
+        for fast in [false, true] {
+            let mut l = Limiter::new(rate, 1, 0.9);
+            l.set_fast(fast);
+            let mut s: Vec<f32> = (0..rate as usize)
+                .map(|i| {
+                    let a = if i < hit { 2.5 } else { 0.8 };
+                    a * (i as f32 * 0.05).sin()
+                })
+                .collect();
+            l.process(&mut s);
+            let at = hit + l.latency_frames() + rate as usize / 20;
+            let level = |s: &[f32]| s.iter().fold(0f32, |m, x| m.max(x.abs()));
+            gains.push(level(&s[at..at + 400]) / 0.8);
+            assert!(level(&s) <= 0.9 + 1e-6);
+        }
+        assert!(gains[0] < 0.8, "{gains:?}");
+        assert!(gains[1] > 0.99, "{gains:?}");
     }
     #[test]
     fn limiter_is_independent_of_block_boundaries() {

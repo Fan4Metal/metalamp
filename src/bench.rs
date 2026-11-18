@@ -15,6 +15,9 @@
 //! - `--bench drive <file> [from s] [seconds] [amount] [gain dB]`: the
 //!   drive (and the limiter after it) on a passage: the loudness, peaks
 //!   and crest factor before and after, and the gain it gave.
+//! - `--bench render <file> <out.wav> [from s] [seconds] [gain dB] [raw]`:
+//!   the passage through the chain with the settings' sound processing,
+//!   written as a WAV to compare with a recording of another player.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -50,10 +53,14 @@ pub fn run(args: &[String]) -> i32 {
             bench_drive(&args[1..], &mut out);
             0
         }
+        Some("render") if args.len() > 2 => {
+            bench_render(&args[1..], &mut out);
+            0
+        }
         _ => {
             let _ = writeln!(
                 out,
-                "usage: metalamp --bench scan <folder>... | gapless <file>... | loudness <file>... | enhancer <file> [from s] [seconds] [bass,clarity,width,warmth,harmonics,air,brilliance,adaptive_bass] [gain dB] | drive <file> [from s] [seconds] [amount] [gain dB]"
+                "usage: metalamp --bench scan <folder>... | gapless <file>... | loudness <file>... | enhancer <file> [from s] [seconds] [bass,clarity,width,warmth,harmonics,air,brilliance,adaptive_bass] [gain dB] | drive <file> [from s] [seconds] [amount] [gain dB] | render <file> <out.wav> [from s] [seconds] [gain dB] [raw]"
             );
             2
         }
@@ -138,14 +145,19 @@ fn bench_drive(args: &[String], out: &mut impl Write) {
     let measure = |s: &[f32]| {
         let mut m = Meter::new(rate, ch);
         m.add(s);
-        (m.integrated().unwrap_or(-100.0), gain_to_db(m.peak().max(1e-9)))
+        (
+            m.integrated().unwrap_or(-100.0),
+            gain_to_db(m.peak().max(1e-9)),
+        )
     };
     let (dry_lufs, dry_peak) = measure(&dry);
     let (wet_lufs, wet_peak) = measure(&wet);
     let percentile = |v: &[f32], p: f32| {
         let mut v = v.to_vec();
         v.sort_by(f32::total_cmp);
-        v.get(((v.len() as f32 - 1.0) * p) as usize).copied().unwrap_or(0.0)
+        v.get(((v.len() as f32 - 1.0) * p) as usize)
+            .copied()
+            .unwrap_or(0.0)
     };
     let _ = writeln!(
         out,
@@ -179,6 +191,107 @@ fn bench_drive(args: &[String], out: &mut impl Write) {
         "the chain took {:.2} % of real time",
         100.0 * took.as_secs_f64() / (dry.len() / ch) as f64 * f64::from(rate)
     );
+}
+
+/// `--bench render <file> <out.wav> [from s] [seconds] [gain dB] [raw]`:
+/// the passage through the chain with the settings' sound processing, in
+/// blocks of 1024 frames as the player would, written as a 32-bit float WAV
+/// with the chain's delay taken out (for comparing with a recording of
+/// another player); `gain` is applied first, as normalisation would; `raw`:
+/// through the measured PowerFX profile alone, without the limiter.
+fn bench_render(args: &[String], out: &mut impl Write) {
+    use crate::audio::decoder::{Decoder, SECOND};
+    use crate::audio::dsp::Chain;
+    use crate::audio::dsp::biquad::db_to_gain;
+    use crate::audio::mf;
+    let file = PathBuf::from(&args[0]);
+    let target = PathBuf::from(&args[1]);
+    let from: f64 = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let seconds: f64 = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(30.0);
+    let gain_db: f32 = args.get(4).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let _com = mf::com_init_mta();
+    let _mf = match mf::Mf::start() {
+        Ok(m) => m,
+        Err(e) => {
+            let _ = writeln!(out, "Media Foundation: {}", mf::describe(&e));
+            return;
+        }
+    };
+    let mut decoder = match Decoder::open(&file) {
+        Ok(d) => d,
+        Err(e) => {
+            let _ = writeln!(out, "{}: {}", file.display(), mf::describe(&e));
+            return;
+        }
+    };
+    if from > 0.0 {
+        let _ = decoder.seek((from * SECOND as f64) as i64);
+    }
+    let (rate, ch) = (decoder.rate, usize::from(decoder.channels));
+    let want = (seconds * f64::from(rate)) as usize * ch;
+    let mut wet = Vec::with_capacity(want);
+    while wet.len() < want {
+        match decoder.next() {
+            Ok(Some(block)) => wet.extend(block),
+            _ => break,
+        }
+    }
+    wet.truncate(want);
+    if gain_db != 0.0 {
+        let gain = db_to_gain(gain_db);
+        wet.iter_mut().for_each(|x| *x *= gain);
+    }
+    let raw = args.get(5).is_some_and(|a| a == "raw");
+    let settings = crate::settings::Settings::load().dsp;
+    let mut chain = Chain::new(rate, decoder.channels, &settings);
+    let mut powerfx = crate::audio::dsp::powerfx::PowerFx::new(rate, ch, true);
+    let delay = if raw {
+        powerfx.latency_frames()
+    } else {
+        chain.latency_frames()
+    } * ch;
+    wet.resize(wet.len() + delay, 0.0);
+    let t = Instant::now();
+    for block in wet.chunks_mut(1024 * ch) {
+        if raw {
+            powerfx.process(block);
+        } else {
+            chain.process(block, 1.0);
+        }
+    }
+    let took = t.elapsed();
+    wet.drain(..delay);
+    let mut bytes = Vec::with_capacity(44 + wet.len() * 4);
+    let data = (wet.len() * 4) as u32;
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&(36 + data).to_le_bytes());
+    bytes.extend_from_slice(b"WAVEfmt ");
+    bytes.extend_from_slice(&16u32.to_le_bytes());
+    bytes.extend_from_slice(&3u16.to_le_bytes());
+    bytes.extend_from_slice(&(ch as u16).to_le_bytes());
+    bytes.extend_from_slice(&rate.to_le_bytes());
+    bytes.extend_from_slice(&(rate * ch as u32 * 4).to_le_bytes());
+    bytes.extend_from_slice(&(ch as u16 * 4).to_le_bytes());
+    bytes.extend_from_slice(&32u16.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&data.to_le_bytes());
+    for x in &wet {
+        bytes.extend_from_slice(&x.to_le_bytes());
+    }
+    match std::fs::write(&target, bytes) {
+        Ok(()) => {
+            let _ = writeln!(
+                out,
+                "{}: {} s, {rate} Hz, {ch} ch, in {:.0} ms",
+                target.display(),
+                wet.len() / ch / rate as usize,
+                took.as_secs_f64() * 1000.0
+            );
+        }
+        Err(e) => {
+            let _ = writeln!(out, "{}: {e}", target.display());
+        }
+    }
 }
 
 fn bench_scan(folders: &[PathBuf], out: &mut impl Write) {
@@ -661,13 +774,14 @@ fn bench_enhancer(args: &[String], out: &mut impl Write) {
     let mean = |v: &[f32]| v.iter().sum::<f32>() / v.len().max(1) as f32;
     let most = |v: &[f32]| v.iter().fold(0f32, |m, &x| m.max(x));
     let least = |v: &[f32]| v.iter().fold(0f32, |m, &x| m.min(x));
-    let share = |v: &[f32]| {
-        100.0 * v.iter().filter(|&&x| x < -0.05).count() as f32 / v.len().max(1) as f32
-    };
+    let share =
+        |v: &[f32]| 100.0 * v.iter().filter(|&&x| x < -0.05).count() as f32 / v.len().max(1) as f32;
     let percentile = |v: &[f32], p: f32| {
         let mut v = v.to_vec();
         v.sort_by(f32::total_cmp);
-        v.get(((v.len() as f32 - 1.0) * p) as usize).copied().unwrap_or(0.0)
+        v.get(((v.len() as f32 - 1.0) * p) as usize)
+            .copied()
+            .unwrap_or(0.0)
     };
     let _ = writeln!(
         out,
