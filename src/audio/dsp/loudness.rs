@@ -115,7 +115,7 @@ impl Meter {
 /// of +4 dB above 1.5 kHz) and the RLB high-pass at 38 Hz, from their
 /// analogue prototypes (libebur128's way, so any rate gives the curve
 /// BS.1770 tabulates for 48 kHz).
-fn k_weighting(rate: u32) -> (Coeffs, Coeffs) {
+pub(super) fn k_weighting(rate: u32) -> (Coeffs, Coeffs) {
     let rate = f64::from(rate.max(1));
     let pre = {
         let f0 = 1681.974450955533;

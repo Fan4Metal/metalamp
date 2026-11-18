@@ -12,6 +12,9 @@
 //!   what each of the enhancer's stages does to a passage of real music,
 //!   by third-octave bands (sines told too little: two faults were found
 //!   only this way), and what the limiter then takes.
+//! - `--bench drive <file> [from s] [seconds] [amount] [gain dB]`: the
+//!   drive (and the limiter after it) on a passage: the loudness, peaks
+//!   and crest factor before and after, and the gain it gave.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -43,14 +46,139 @@ pub fn run(args: &[String]) -> i32 {
             bench_enhancer(&args[1..], &mut out);
             0
         }
+        Some("drive") if args.len() > 1 => {
+            bench_drive(&args[1..], &mut out);
+            0
+        }
         _ => {
             let _ = writeln!(
                 out,
-                "usage: metalamp --bench scan <folder>... | gapless <file>... | loudness <file>... | enhancer <file> [from s] [seconds] [bass,clarity,width,warmth,harmonics,air,brilliance] [gain dB]"
+                "usage: metalamp --bench scan <folder>... | gapless <file>... | loudness <file>... | enhancer <file> [from s] [seconds] [bass,clarity,width,warmth,harmonics,air,brilliance] [gain dB] | drive <file> [from s] [seconds] [amount] [gain dB]"
             );
             2
         }
     }
+}
+
+/// `--bench drive <file> [from s] [seconds] [amount 0-10] [gain dB]`: the
+/// passage through a chain with the enhancer on, its amounts at 0 and the
+/// drive at `amount` (the settings' when left out), in blocks of 1024
+/// frames as the player would; `gain` is applied first, as normalisation
+/// would (`--bench loudness` tells a file's).
+fn bench_drive(args: &[String], out: &mut impl Write) {
+    use crate::audio::decoder::{Decoder, SECOND};
+    use crate::audio::dsp::biquad::{db_to_gain, gain_to_db};
+    use crate::audio::dsp::loudness::Meter;
+    use crate::audio::dsp::{Chain, DspSettings};
+    use crate::audio::mf;
+    let file = PathBuf::from(&args[0]);
+    let from: f64 = args.get(1).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let seconds: f64 = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(30.0);
+    let amount: u8 = match args.get(3) {
+        Some(v) => match v.parse::<u8>() {
+            Ok(a) if a <= 10 => a,
+            _ => {
+                let _ = writeln!(out, "the amount: 0 to 10");
+                return;
+            }
+        },
+        None => crate::settings::Settings::load().dsp.drive,
+    };
+    let gain_db: f32 = args.get(4).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let _com = mf::com_init_mta();
+    let _mf = match mf::Mf::start() {
+        Ok(m) => m,
+        Err(e) => {
+            let _ = writeln!(out, "Media Foundation: {}", mf::describe(&e));
+            return;
+        }
+    };
+    let mut decoder = match Decoder::open(&file) {
+        Ok(d) => d,
+        Err(e) => {
+            let _ = writeln!(out, "{}: {}", file.display(), mf::describe(&e));
+            return;
+        }
+    };
+    let _ = decoder.seek((from * SECOND as f64) as i64);
+    let (rate, ch) = (decoder.rate, usize::from(decoder.channels));
+    let want = (seconds * f64::from(rate)) as usize * ch;
+    let mut dry = Vec::with_capacity(want);
+    while dry.len() < want {
+        match decoder.next() {
+            Ok(Some(block)) => dry.extend(block),
+            _ => break,
+        }
+    }
+    dry.truncate(want);
+    if gain_db != 0.0 {
+        let gain = db_to_gain(gain_db);
+        dry.iter_mut().for_each(|x| *x *= gain);
+    }
+    let settings = DspSettings {
+        enhancer: true,
+        drive: amount,
+        limiter: true,
+        ..Default::default()
+    };
+    let mut chain = Chain::new(rate, decoder.channels, &settings);
+    let delay = chain.latency_frames() * ch;
+    let mut wet = dry.clone();
+    wet.resize(wet.len() + delay, 0.0);
+    let (mut levels, mut gains) = (Vec::new(), Vec::new());
+    let t = Instant::now();
+    for block in wet.chunks_mut(1024 * ch) {
+        chain.process(block, 1.0);
+        let (level, gain) = chain.drive_state();
+        levels.push(level);
+        gains.push(gain);
+    }
+    let took = t.elapsed();
+    wet.drain(..delay);
+    let measure = |s: &[f32]| {
+        let mut m = Meter::new(rate, ch);
+        m.add(s);
+        (m.integrated().unwrap_or(-100.0), gain_to_db(m.peak().max(1e-9)))
+    };
+    let (dry_lufs, dry_peak) = measure(&dry);
+    let (wet_lufs, wet_peak) = measure(&wet);
+    let percentile = |v: &[f32], p: f32| {
+        let mut v = v.to_vec();
+        v.sort_by(f32::total_cmp);
+        v.get(((v.len() as f32 - 1.0) * p) as usize).copied().unwrap_or(0.0)
+    };
+    let _ = writeln!(
+        out,
+        "{}: {from} s + {seconds} s, {rate} Hz, {ch} ch; drive {amount}, gain first {gain_db:+.1} dB",
+        file.display()
+    );
+    let _ = writeln!(
+        out,
+        "dry: {dry_lufs:.1} LUFS, peak {dry_peak:+.1} dBFS, peak over loudness {:.1} dB",
+        dry_peak - dry_lufs
+    );
+    let _ = writeln!(
+        out,
+        "out: {wet_lufs:.1} LUFS ({:+.1} LU), peak {wet_peak:+.1} dBFS, peak over loudness {:.1} dB",
+        wet_lufs - dry_lufs,
+        wet_peak - wet_lufs
+    );
+    let _ = writeln!(
+        out,
+        "level followed: median {:.1} LUFS, 10 % {:.1}, 90 % {:.1}; gain: median {:.1} dB, 10 % {:.1}, 90 % {:.1}, most {:.1}",
+        percentile(&levels, 0.5),
+        percentile(&levels, 0.1),
+        percentile(&levels, 0.9),
+        percentile(&gains, 0.5),
+        percentile(&gains, 0.1),
+        percentile(&gains, 0.9),
+        percentile(&gains, 1.0)
+    );
+    let _ = writeln!(
+        out,
+        "the chain took {:.2} % of real time",
+        100.0 * took.as_secs_f64() / (dry.len() / ch) as f64 * f64::from(rate)
+    );
 }
 
 fn bench_scan(folders: &[PathBuf], out: &mut impl Write) {

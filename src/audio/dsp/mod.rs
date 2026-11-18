@@ -13,6 +13,7 @@
 
 pub mod biquad;
 pub mod channels;
+pub mod drive;
 pub mod enhancer;
 pub mod eq;
 pub mod limiter;
@@ -50,7 +51,11 @@ pub struct DspSettings {
     pub air: u8,
     pub width: u8,
     pub warmth: u8,
-    /// The look-ahead limiter after the rest; on by default.
+    /// The automatic gain control lifting quiet passages towards a
+    /// loudness (`drive.rs`); with the enhancer's switch, after it.
+    pub drive: u8,
+    /// The look-ahead limiter after the rest; on by default (and whenever
+    /// the drive works).
     pub limiter: bool,
     /// -100 (the left alone) to 100 (the right alone); 0: both.
     pub balance: i8,
@@ -73,6 +78,7 @@ impl Default for DspSettings {
             air: 0,
             width: 0,
             warmth: 0,
+            drive: 0,
             limiter: true,
             balance: 0,
             mono: false,
@@ -104,6 +110,15 @@ impl DspSettings {
             warmth: f(self.warmth),
         }
     }
+
+    /// The drive's amount, 0 while the enhancer is off.
+    fn drive_amount(&self) -> f32 {
+        if self.enhancer {
+            f32::from(self.drive.min(10)) / 10.0
+        } else {
+            0.0
+        }
+    }
 }
 
 /// The gain that brings a track measured at `lufs` with a sample peak of
@@ -128,6 +143,7 @@ pub struct Chain {
     channels: usize,
     eq: eq::Equalizer,
     enhancer: enhancer::Enhancer,
+    drive: drive::Drive,
     limiter: limiter::Limiter,
     channels_stage: channels::Channels,
     /// The track gain applied now; it slides to the one asked for.
@@ -148,6 +164,7 @@ impl Chain {
             channels,
             eq: eq::Equalizer::new(rate, channels, settings.preamp, &settings.bands),
             enhancer: enhancer::Enhancer::new(rate, channels, settings.amounts()),
+            drive: drive::Drive::new(rate, channels, settings.drive_amount()),
             limiter: limiter::Limiter::new(rate, channels, db_to_gain(CEILING_DB)),
             channels_stage: {
                 let mut c = channels::Channels::new(rate, channels);
@@ -168,9 +185,11 @@ impl Chain {
     pub fn reset(&mut self) {
         let gain = self.gain;
         let reserve = self.enhancer.reserve_db();
+        let drive = self.drive.gain_db();
         *self = Chain::new(self.rate, self.channels as u16, &self.settings);
         self.gain = gain;
         self.enhancer.keep_reserve(reserve);
+        self.drive.keep(drive);
     }
 
     /// New settings; every stage's history and delay are kept. Only a
@@ -182,7 +201,14 @@ impl Chain {
         if settings.amounts() != self.settings.amounts() {
             self.enhancer.configure(settings.amounts());
         }
+        self.drive.configure(settings.drive_amount());
         self.settings = settings.clone();
+    }
+
+    /// The level the drive follows (LUFS) and its gain now (dB), for
+    /// `--bench drive`.
+    pub fn drive_state(&self) -> (f32, f32) {
+        (self.drive.level(), self.drive.gain_db())
     }
 
     /// Fixed processing delay in the output format, including bypass.
@@ -207,8 +233,12 @@ impl Chain {
         // Controls can still be fading out after their switches were
         // cleared. Keep protecting those boosted frames for this entire
         // block, even if the controls settle before its end.
-        let limiting = s.limiter
-            && (s.active() || self.gain > 1.0 || self.eq_mix > 0.0 || self.enhancer.active());
+        // The drive raises quiet passages and has no look-ahead: the
+        // limiter works with it even when switched off.
+        let driving = self.drive.active();
+        let limiting = driving
+            || s.limiter
+                && (s.active() || self.gain > 1.0 || self.eq_mix > 0.0 || self.enhancer.active());
         let target = if s.normalize {
             f64::from(track_gain)
         } else {
@@ -243,6 +273,7 @@ impl Chain {
         // off, it still delays the sound by its `LATENCY`, so turning it
         // on or off does not shift it.
         self.enhancer.process(samples);
+        self.drive.process(samples);
         self.channels_stage.process(samples, s.balance, s.mono);
         self.limiter.process_enabled(samples, limiting);
     }
@@ -398,6 +429,45 @@ mod tests {
         let peak = s.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
         assert!(peak <= db_to_gain(CEILING_DB) + 1e-6, "{peak}");
         assert_eq!(s[s.len() - 1], 0.5);
+    }
+
+    #[test]
+    fn the_drive_raises_quiet_sound_and_keeps_the_limiter_with_it() {
+        // The limiter switched off: the drive still brings it in, so a
+        // quiet passage raised and a loud one after it stay under the
+        // ceiling.
+        let settings = DspSettings {
+            enhancer: true,
+            drive: 10,
+            limiter: false,
+            ..Default::default()
+        };
+        let mut c = Chain::new(48000, 2, &settings);
+        let sine = |amplitude: f32, seconds: usize| -> Vec<f32> {
+            (0..48000 * seconds)
+                .flat_map(|i| {
+                    let x =
+                        amplitude * (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / 48000.0).sin();
+                    [x, x]
+                })
+                .collect()
+        };
+        let mut quiet = sine(0.02, 3);
+        c.process(&mut quiet, 1.0);
+        let raised = quiet[quiet.len() - 4800..]
+            .iter()
+            .fold(0f32, |m, x| m.max(x.abs()));
+        assert!(raised > 0.1, "{raised}");
+        let mut loud = sine(0.95, 1);
+        c.process(&mut loud, 1.0);
+        let peak = loud.iter().fold(0f32, |m, x| m.max(x.abs()));
+        assert!(peak <= db_to_gain(CEILING_DB) + 1e-6, "{peak}");
+        // Off with the enhancer: back to a wire once the gain is back.
+        let mut off = settings.clone();
+        off.enhancer = false;
+        c.configure(&off);
+        c.process(&mut sine(0.5, 2), 1.0);
+        assert_eq!(c.drive_state().1, 0.0);
     }
 
     /// The peak in dBFS of a stereo 1 kHz sine at `level` dBFS through a

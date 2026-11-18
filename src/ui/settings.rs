@@ -1564,18 +1564,18 @@ fn processing(
 /// the switch in the equalizer's window.
 fn enhancer_hint() -> &'static str {
     tr!(
-        "Seven independent controls; 0 leaves a part alone. A boost turns the rest down only as far as the peaks need: with loudness normalisation, hardly ever.",
-        "Семь независимых регуляторов; 0 оставляет часть без изменений. Усиление приглушает остальное лишь настолько, насколько этого требуют пики: при нормализации громкости почти никогда."
+        "Eight independent controls; 0 leaves a part alone. A boost turns the rest down only as far as the peaks need: with loudness normalisation, hardly ever.",
+        "Восемь независимых регуляторов; 0 оставляет часть без изменений. Усиление приглушает остальное лишь настолько, насколько этого требуют пики: при нормализации громкости почти никогда."
     )
 }
 
 /// One of the enhancer's amounts: its name, what it does, where it is kept.
 type EnhancerAmount = (&'static str, &'static str, fn(&mut DspSettings) -> &mut u8);
 
-/// The enhancer's seven amounts in the order shown (the window's grid takes
+/// The enhancer's eight amounts in the order shown (the window's grid takes
 /// them two a row: the bass's two, the two raising the treble, clarity and
-/// width, warmth).
-fn enhancer_amounts() -> [EnhancerAmount; 7] {
+/// width, warmth and the drive, which works after the enhancer).
+fn enhancer_amounts() -> [EnhancerAmount; 8] {
     [
         (
             tr!("Bass", "Бас"),
@@ -1633,6 +1633,14 @@ fn enhancer_amounts() -> [EnhancerAmount; 7] {
             ),
             |d| &mut d.warmth,
         ),
+        (
+            tr!("Drive", "Драйв"),
+            tr!(
+                "Automatic gain control: brings quiet passages up towards a loudness, up to 4:1 and -10 LUFS at 10, never turning loud ones down; held in pauses, so silence and hiss are not raised. The limiter works with it even when switched off.",
+                "Автоматическая регулировка усиления: подтягивает тихие места к целевой громкости, на 10 — до 4:1 и −10 LUFS, громкие никогда не убавляет; в паузах усиление замирает, поэтому тишина и шипение не поднимаются. Лимитер работает вместе с ним, даже если выключен."
+            ),
+            |d| &mut d.drive,
+        ),
     ]
 }
 
@@ -1645,7 +1653,7 @@ const ENHANCER_GAP: f32 = 28.0;
 /// columns: the switch and the name on the left (a click on the name folds
 /// or unfolds it), on the right, folded, the amounts not at 0, a round
 /// arrow putting every amount back to 0 under the equalizer's bin and the
-/// fold's chevron (`fold_button`) under its chevron; unfolded, the seven
+/// fold's chevron (`fold_button`) under its chevron; unfolded, the eight
 /// amounts two a row (`enhancer_cell`), greyed while it is off.
 pub(crate) fn enhancer(ui: &mut Ui, dsp: &mut DspSettings, open: &mut bool) {
     let amounts = enhancer_amounts();
@@ -1709,7 +1717,7 @@ pub(crate) fn enhancer(ui: &mut Ui, dsp: &mut DspSettings, open: &mut bool) {
     });
 }
 
-/// The amounts two a row (the last alone), greyed while the enhancer is off.
+/// The amounts two a row, greyed while the enhancer is off.
 fn enhancer_grid(ui: &mut Ui, dsp: &mut DspSettings, amounts: &[EnhancerAmount], on: bool) {
     ui.add_enabled_ui(on, |ui| {
         let cell = ((ui.available_width() - ENHANCER_GAP) / 2.0).floor();
