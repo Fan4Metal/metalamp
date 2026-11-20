@@ -1498,10 +1498,6 @@ fn processing(
             |ui| switch(ui, &mut dsp.mono),
         );
     });
-    section(ui, tr!("Equalizer", "Эквалайзер"), |ui| {
-        ui.add_space(8.0);
-        equalizer(ui, dsp, presets, naming, None);
-    });
     section(
         ui,
         tr!("Between tracks", "Между треками"),
@@ -1565,6 +1561,10 @@ fn processing(
             );
         },
     );
+    section(ui, tr!("Equalizer", "Эквалайзер"), |ui| {
+        ui.add_space(8.0);
+        equalizer(ui, dsp, presets, naming, None);
+    });
     section(ui, tr!("Enhancer", "Улучшение звука"), |ui| {
         ui.add_space(8.0);
         enhancer(ui, dsp, enhancer_presets, enhancer_naming, None);
