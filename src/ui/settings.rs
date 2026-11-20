@@ -1575,8 +1575,8 @@ fn processing(
 /// the switch in the equalizer's window.
 fn enhancer_hint() -> &'static str {
     tr!(
-        "Raises quiet sound band by band and gives it character: a multiband automatic gain control modelled on recordings of a well-known enhancer, with its controls. Its Loud preset, the default, is the one it was modelled at. The limiter works with it.",
-        "Поднимает тихий звук по полосам и придаёт ему характер: многополосная автоматическая регулировка усиления, смоделированная по записям известного улучшителя звука, с его регуляторами. Его пресет «Громкий», выбранный по умолчанию, — тот, на котором он моделировался. Вместе с ним работает лимитер."
+        "Raises quiet sound band by band and gives it character: a multiband automatic gain control. The Loud preset is the default. The limiter works with it.",
+        "Поднимает тихий звук по полосам и придаёт ему характер: многополосная автоматическая регулировка усиления. По умолчанию выбран пресет «Громкий». Вместе с ним работает лимитер."
     )
 }
 
