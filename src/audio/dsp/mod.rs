@@ -5,26 +5,26 @@
 //! limiter after them whenever any of the first three is on, so nothing
 //! clips (unless `limiter` is
 //! turned off: then what goes past full scale is clipped by Windows, as in
-//! the players of old, and a raised preamp is heard). `DspSettings` is
+//! the players of old, and a raised preamp is heard; the enhancer always
+//! keeps it). `DspSettings` is
 //! what the settings window edits (`settings.dsp`); the engine gets a
 //! copy with `Cmd::Dsp` and keeps the filters' state across changes.
 //! Dry and processed sound share a fixed delay, including in bypass:
 //! toggling processing never drops or repeats part of the waveform.
 
-mod activity;
 pub mod biquad;
 pub mod channels;
-pub mod drive;
 pub mod enhancer;
+mod enhancer_law;
 pub mod eq;
 pub(crate) mod fft;
 pub mod limiter;
 pub mod loudness;
-pub(crate) mod powerfx;
 
 use serde::{Deserialize, Serialize};
 
 use biquad::db_to_gain;
+pub use enhancer::Enhancement;
 
 /// Where loudness normalisation brings a track: ReplayGain 2.0's
 /// reference.
@@ -45,19 +45,11 @@ pub struct DspSettings {
     pub preamp: f32,
     pub bands: [f32; 10],
     pub enhancer: bool,
-    /// Measured 135% Modern profile, selected in place of the manual amounts.
-    pub powerfx: bool,
-    /// 0 to 10 each.
-    pub bass: u8,
-    pub adaptive_bass: u8,
-    /// The treble raised as far as it is dull against the middle.
-    pub brilliance: u8,
-    pub width: u8,
-    /// The automatic gain control lifting quiet passages towards a
-    /// loudness (`drive.rs`); with the enhancer's switch, after it.
-    pub drive: u8,
+    /// The enhancer's controls (the standard ones by default; the older
+    /// enhancer's amounts in a settings file are left unread).
+    pub enhancement: Enhancement,
     /// The look-ahead limiter after the rest; on by default (and whenever
-    /// the drive works).
+    /// the enhancer works).
     pub limiter: bool,
     /// -100 (the left alone) to 100 (the right alone); 0: both.
     pub balance: i8,
@@ -73,12 +65,7 @@ impl Default for DspSettings {
             preamp: 0.0,
             bands: [0.0; 10],
             enhancer: false,
-            powerfx: false,
-            bass: 0,
-            adaptive_bass: 0,
-            brilliance: 0,
-            width: 0,
-            drive: 0,
+            enhancement: Enhancement::STANDARD,
             limiter: true,
             balance: 0,
             mono: false,
@@ -93,36 +80,14 @@ impl DspSettings {
         self.normalize || self.eq || self.enhancer
     }
 
-    /// The enhancer's amounts, all 0 while it is off (so turning it off
-    /// slides it out, and on again in, with continuously warm filters).
-    fn amounts(&self) -> enhancer::Amounts {
-        if !self.enhancer || self.powerfx {
-            return enhancer::Amounts::default();
-        }
-        let f = |v: u8| f32::from(v.min(10)) / 10.0;
-        enhancer::Amounts {
-            bass: f(self.bass),
-            adaptive_bass: f(self.adaptive_bass),
-            brilliance: f(self.brilliance),
-            width: f(self.width),
-        }
-    }
-
-    /// The drive's amount, 0 while the enhancer is off.
-    fn drive_amount(&self) -> f32 {
-        if self.enhancer && !self.powerfx {
-            f32::from(self.drive.min(10)) / 10.0
-        } else {
-            0.0
-        }
-    }
-
     pub fn limiter_enabled(&self) -> bool {
         self.limiter || self.limiter_required()
     }
 
+    /// The enhancer raises quiet sound up to past full scale: the limiter
+    /// works with it whatever its switch says.
     pub fn limiter_required(&self) -> bool {
-        self.enhancer && (self.powerfx || self.drive > 0)
+        self.enhancer
     }
 }
 
@@ -147,9 +112,7 @@ pub struct Chain {
     rate: u32,
     channels: usize,
     eq: eq::Equalizer,
-    powerfx: powerfx::PowerFx,
     enhancer: enhancer::Enhancer,
-    drive: drive::Drive,
     limiter: limiter::Limiter,
     channels_stage: channels::Channels,
     /// The track gain applied now; it slides to the one asked for.
@@ -169,9 +132,12 @@ impl Chain {
             rate,
             channels,
             eq: eq::Equalizer::new(rate, channels, settings.preamp, &settings.bands),
-            powerfx: powerfx::PowerFx::new(rate, channels, settings.enhancer && settings.powerfx),
-            enhancer: enhancer::Enhancer::new(rate, channels, settings.amounts()),
-            drive: drive::Drive::new(rate, channels, settings.drive_amount()),
+            enhancer: enhancer::Enhancer::new(
+                rate,
+                channels,
+                settings.enhancer,
+                &settings.enhancement,
+            ),
             limiter: limiter::Limiter::new(rate, channels, db_to_gain(CEILING_DB)),
             channels_stage: {
                 let mut c = channels::Channels::new(rate, channels);
@@ -188,15 +154,12 @@ impl Chain {
     }
 
     /// The filters' and the limiter's state dropped, the gain kept: what
-    /// they hold is the sound before (another track, a seek).
+    /// they hold is the sound before (another track, a seek). The
+    /// enhancer starts as after silence, as the recorded one did.
     pub fn reset(&mut self) {
         let gain = self.gain;
-        let reserve = self.enhancer.reserve_db();
-        let drive = self.drive.gain_db();
         *self = Chain::new(self.rate, self.channels as u16, &self.settings);
         self.gain = gain;
-        self.enhancer.keep_reserve(reserve);
-        self.drive.keep(drive);
     }
 
     /// New settings; every stage's history and delay are kept. Only a
@@ -205,24 +168,18 @@ impl Chain {
         if settings.preamp != self.settings.preamp || settings.bands != self.settings.bands {
             self.eq.configure(settings.preamp, &settings.bands);
         }
-        if settings.amounts() != self.settings.amounts() {
-            self.enhancer.configure(settings.amounts());
+        if settings.enhancer != self.settings.enhancer
+            || settings.enhancement != self.settings.enhancement
+        {
+            self.enhancer
+                .configure(settings.enhancer, &settings.enhancement);
         }
-        self.powerfx
-            .configure(settings.enhancer && settings.powerfx);
-        self.drive.configure(settings.drive_amount());
         self.settings = settings.clone();
-    }
-
-    /// The level the drive follows (LUFS) and its gain now (dB), for
-    /// `--bench drive`.
-    pub fn drive_state(&self) -> (f32, f32) {
-        (self.drive.level(), self.drive.gain_db())
     }
 
     /// Fixed processing delay in the output format, including bypass.
     pub fn latency_frames(&self) -> usize {
-        self.powerfx.latency_frames() + self.limiter.latency_frames()
+        self.enhancer.latency_frames() + self.limiter.latency_frames()
     }
 
     /// A track (or a crossfade into one) begins: its gain applies at once,
@@ -239,16 +196,13 @@ impl Chain {
     /// `track_gain` (1 when not known).
     pub fn process(&mut self, samples: &mut [f32], track_gain: f32) {
         let s = &self.settings;
-        // Controls can still be fading out after their switches were
-        // cleared. Keep protecting those boosted frames for this entire
-        // block, even if the controls settle before its end.
-        // The drive raises quiet passages and has no look-ahead: the
-        // limiter works with it even when switched off.
-        let driving = self.drive.active();
-        let limiting = self.powerfx.active()
-            || driving
-            || s.limiter
-                && (s.active() || self.gain > 1.0 || self.eq_mix > 0.0 || self.enhancer.active());
+        // Gains can still be fading out after their switches were cleared.
+        // Keep protecting those boosted frames for this entire block, even
+        // if they settle before its end. The enhancer raises quiet sound
+        // past full scale: the limiter works with it even when switched
+        // off (also while its tail drains).
+        let limiting = self.enhancer.active()
+            || s.limiter && (s.active() || self.gain > 1.0 || self.eq_mix > 0.0);
         let target = if s.normalize {
             f64::from(track_gain)
         } else {
@@ -279,15 +233,9 @@ impl Chain {
                 };
             }
         }
-        self.powerfx.process(samples);
-        // Also after it was turned off, while its amounts slide out (it
-        // has no delay, so turning it on or off shifts nothing).
-        for frame in samples.chunks_exact_mut(self.channels) {
-            let activity = self.enhancer.process_frame(frame);
-            self.drive.process_frame(frame, activity);
-        }
+        self.enhancer.process(samples);
         self.channels_stage.process(samples, s.balance, s.mono);
-        self.limiter.set_fast(self.powerfx.active());
+        self.limiter.set_fast(self.enhancer.active());
         self.limiter.process_enabled(samples, limiting);
     }
 }
@@ -308,18 +256,13 @@ mod tests {
     }
 
     #[test]
-    fn measured_profile_replaces_manual_amounts_and_protects_peaks() {
-        let mut s = DspSettings {
+    fn the_enhancer_keeps_the_limiter_and_its_peaks_under_the_ceiling() {
+        let s = DspSettings {
             enhancer: true,
-            powerfx: true,
-            drive: 9,
-            bass: 10,
             limiter: false,
             ..Default::default()
         };
-        assert_eq!(s.amounts(), enhancer::Amounts::default());
-        assert!(s.limiter_enabled());
-        assert_eq!(s.drive_amount(), 0.);
+        assert!(s.limiter_required() && s.limiter_enabled());
         let mut chain = Chain::new(44100, 2, &s);
         let mut samples: Vec<_> = (0..44100)
             .flat_map(|i| {
@@ -330,9 +273,11 @@ mod tests {
         chain.process(&mut samples, 1.);
         let peak = samples.iter().map(|s| s.abs()).fold(0., f32::max);
         assert!(peak <= db_to_gain(CEILING_DB) + 1e-4 && peak > 0.1);
-        s.powerfx = false;
-        assert_eq!(s.amounts().bass, 1.);
-        assert_eq!(s.drive_amount(), 0.9);
+        let off = DspSettings {
+            enhancer: false,
+            ..s
+        };
+        assert!(!off.limiter_enabled());
     }
 
     #[test]
@@ -383,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn zero_enhancement_and_limiter_switches_keep_the_sample_timeline() {
+    fn limiter_switches_keep_the_sample_timeline() {
         let mut settings = DspSettings::default();
         let mut c = Chain::new(48000, 2, &settings);
         let latency = c.latency_frames();
@@ -391,7 +336,6 @@ mod tests {
         let mut s = original.clone();
         s.extend(std::iter::repeat_n(0.0, latency * 2));
         for (i, part) in s.chunks_mut(200).enumerate() {
-            settings.enhancer = i % 4 >= 2;
             settings.limiter = i % 3 != 0;
             c.configure(&settings);
             c.process(part, 1.0);
@@ -401,13 +345,36 @@ mod tests {
     }
 
     #[test]
+    fn the_enhancer_switched_off_drains_to_the_wire() {
+        let mut settings = DspSettings {
+            enhancer: true,
+            ..Default::default()
+        };
+        let mut c = Chain::new(48000, 2, &settings);
+        let latency = c.latency_frames();
+        let tone: Vec<f32> = (0..48000 * 2)
+            .map(|i| 0.05 * (i as f32 * 0.13).sin())
+            .collect();
+        let mut s = tone.clone();
+        c.process(&mut s[..48000], 1.0);
+        settings.enhancer = false;
+        c.configure(&settings);
+        c.process(&mut s[48000..], 1.0);
+        // A second later the enhancer's tail and the limiter's release
+        // are long over: the input delayed, exactly.
+        let end = s.len();
+        assert_eq!(
+            &s[end - 2000..],
+            &tone[end - 2000 - 2 * latency..end - 2 * latency]
+        );
+    }
+
+    #[test]
     fn turning_processing_off_releases_gains_without_a_step() {
         let mut settings = DspSettings {
             eq: true,
             preamp: -12.0,
             normalize: true,
-            enhancer: true,
-            bass: 5,
             ..Default::default()
         };
         let mut c = Chain::new(48000, 2, &settings);
@@ -415,7 +382,6 @@ mod tests {
         c.process(&mut s[..48000], 0.5);
         settings.eq = false;
         settings.normalize = false;
-        settings.enhancer = false;
         c.configure(&settings);
         c.process(&mut s[48000..], 0.5);
         let jump = s[47000..]
@@ -434,8 +400,6 @@ mod tests {
                 normalize: true,
                 eq: true,
                 preamp: -6.0,
-                enhancer: true,
-                bass: 5,
                 ..Default::default()
             };
             let mut c = Chain::new(rate, 2, &settings);
@@ -443,7 +407,6 @@ mod tests {
             c.process(&mut vec![0.1; rate as usize], 0.5);
             settings.normalize = false;
             settings.eq = false;
-            settings.enhancer = false;
             c.configure(&settings);
             let mut s = vec![0.1; 2 * rate as usize * 6];
             c.process(&mut s, 0.5);
@@ -470,95 +433,6 @@ mod tests {
         let peak = s.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
         assert!(peak <= db_to_gain(CEILING_DB) + 1e-6, "{peak}");
         assert_eq!(s[s.len() - 1], 0.5);
-    }
-
-    #[test]
-    fn adaptive_gains_release_together_on_a_quiet_tail() {
-        let rate = 48000;
-        let mut c = Chain::new(
-            rate,
-            2,
-            &DspSettings {
-                enhancer: true,
-                brilliance: 10,
-                drive: 10,
-                adaptive_bass: 10,
-                limiter: false,
-                ..Default::default()
-            },
-        );
-        // Quiet music with a little energy in both outer bands. All
-        // three adaptive gains have something to do before the pause.
-        let mut music: Vec<f32> = (0..rate * 3)
-            .flat_map(|i| {
-                let t = std::f64::consts::TAU * f64::from(i) / f64::from(rate);
-                let x = (0.025 * (t * 1000.0).sin()
-                    + 0.001 * ((t * 65.0).sin() + (t * 12000.0).sin()))
-                    as f32;
-                [x, x]
-            })
-            .collect();
-        c.process(&mut music, 1.0);
-        assert!(c.enhancer.brilliance().1 > 8.0 && c.drive.gain_db() > 12.0);
-        assert!(c.enhancer.bass_shelf_db() > 10.0);
-        // A quiet high-frequency residue starts immediately, persists
-        // through the pause and must return to its original amplitude.
-        let noise: Vec<f32> = (0..rate * 2)
-            .flat_map(|i| {
-                let x = [0.0, 1e-5, 0.0, -1e-5][i as usize % 4];
-                [x, x]
-            })
-            .collect();
-        let mut out = noise.clone();
-        for block in out.chunks_mut(2 * 97) {
-            c.process(block, 1.0);
-        }
-        let delay = 2 * c.latency_frames();
-        assert_eq!(c.enhancer.brilliance().1, 0.0);
-        assert_eq!(c.enhancer.bass_shelf_db(), 0.0);
-        assert_eq!(c.drive.gain_db(), 0.0);
-        assert_eq!(out[96000..], noise[96000 - delay..noise.len() - delay]);
-    }
-
-    #[test]
-    fn the_drive_raises_quiet_sound_and_keeps_the_limiter_with_it() {
-        // The limiter switched off: the drive still brings it in, so a
-        // quiet passage raised and a loud one after it stay under the
-        // ceiling.
-        let settings = DspSettings {
-            enhancer: true,
-            drive: 10,
-            limiter: false,
-            ..Default::default()
-        };
-        assert!(settings.limiter_required() && settings.limiter_enabled());
-        let mut c = Chain::new(48000, 2, &settings);
-        let sine = |amplitude: f32, seconds: usize| -> Vec<f32> {
-            (0..48000 * seconds)
-                .flat_map(|i| {
-                    let x = amplitude
-                        * (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / 48000.0).sin();
-                    [x, x]
-                })
-                .collect()
-        };
-        let mut quiet = sine(0.02, 3);
-        c.process(&mut quiet, 1.0);
-        let raised = quiet[quiet.len() - 4800..]
-            .iter()
-            .fold(0f32, |m, x| m.max(x.abs()));
-        assert!(raised > 0.1, "{raised}");
-        let mut loud = sine(0.95, 1);
-        c.process(&mut loud, 1.0);
-        let peak = loud.iter().fold(0f32, |m, x| m.max(x.abs()));
-        assert!(peak <= db_to_gain(CEILING_DB) + 1e-6, "{peak}");
-        // Off with the enhancer: back to a wire once the gain is back.
-        let mut off = settings.clone();
-        off.enhancer = false;
-        assert!(!off.limiter_enabled());
-        c.configure(&off);
-        c.process(&mut sine(0.5, 2), 1.0);
-        assert_eq!(c.drive_state().1, 0.0);
     }
 
     /// The peak in dBFS of a stereo 1 kHz sine at `level` dBFS through a

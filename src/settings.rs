@@ -1014,23 +1014,23 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn removed_enhancer_controls_are_ignored_and_the_rest_round_trip() {
-        // Clarity, air, bass harmonics and warmth were removed: an older
-        // file's amounts of them cost nothing else.
+    fn the_older_enhancers_settings_give_the_standard_one() {
+        // The older enhancer's amounts, its drive and the measured
+        // profile's switch were removed: such a file keeps the enhancer
+        // on with the standard controls, and the rest of the file.
         let old = Settings::from_json(
-            br#"{"dsp":{"enhancer":true,"bass":6,"clarity":5,"air":3,"bass_harmonics":2,"warmth":4,"width":7}}"#,
+            br#"{"dsp":{"enhancer":true,"powerfx":true,"bass":6,"drive":3,"brilliance":2,"width":7,"normalize":true}}"#,
         )
         .unwrap();
-        assert!(old.dsp.enhancer);
-        assert_eq!(old.dsp.bass, 6);
-        assert_eq!(old.dsp.width, 7);
-        assert_eq!(old.dsp.adaptive_bass, 0);
-        assert!(!old.dsp.powerfx);
-        assert_eq!(old.dsp.brilliance, 0);
+        assert!(old.dsp.enhancer && old.dsp.normalize);
+        assert_eq!(
+            old.dsp.enhancement,
+            crate::audio::dsp::Enhancement::STANDARD
+        );
         let mut new = old;
-        new.dsp.adaptive_bass = 8;
-        new.dsp.powerfx = true;
-        new.dsp.brilliance = 6;
+        new.dsp.enhancement.drive = 90;
+        new.dsp.enhancement.bass_type = -40;
+        new.dsp.enhancement.ambience = 3.5;
         let json = serde_json::to_vec(&new).unwrap();
         let again = Settings::from_json(&json).unwrap();
         assert_eq!(again.dsp, new.dsp);

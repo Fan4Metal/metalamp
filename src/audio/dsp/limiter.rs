@@ -2,11 +2,11 @@
 //! A finite linear attack reaches the required gain before the peak;
 //! limiting changes gain, never clips individual waveform samples.
 //! Recovery is faster for isolated transients than sustained overload,
-//! unless set `fast` (the measured PowerFX profile): then it follows the
-//! peaks within `FAST_RELEASE`, as PowerFX's own limiter does.
+//! unless set `fast` (while the enhancer works): then it follows the
+//! peaks within `FAST_RELEASE`, as the modelled enhancer's own limiter does.
 use std::collections::VecDeque;
 const LOOKAHEAD: f32 = 0.005;
-/// Seconds. Measured against PowerFX on six recordings: its output stays
+/// Seconds. Measured against the modelled enhancer on six recordings: its output stays
 /// at full scale through a hit and lets go almost at once, so the AGC's
 /// overshoot costs only the peaks; the adaptive 60–240 ms recovery held
 /// every hit after it 5–7 dB down for about 100 ms (Dark Chest Of Wonders).
@@ -146,13 +146,11 @@ impl Limiter {
             (k(0.06), k(0.24))
         };
     }
-    pub fn reduction_db(&self) -> f32 {
-        (-20.0 * self.gain.max(1e-9).log10()) as f32
-    }
     /// The audio delay stays in place while limiting is bypassed.
     pub(crate) fn latency_frames(&self) -> usize {
         self.frames
     }
+    #[cfg(test)]
     pub fn process(&mut self, samples: &mut [f32]) {
         self.process_enabled(samples, true);
     }
@@ -325,7 +323,7 @@ mod tests {
     fn fast_recovery_lets_go_of_a_hit_at_once() {
         // 100 ms over the ceiling by 9 dB, then sound 1 dB under it: the
         // adaptive recovery still holds it down 50 ms on, the fast one
-        // has let go, as PowerFX's limiter does.
+        // has let go, as the modelled enhancer's limiter does.
         let rate = 48000;
         let hit = rate as usize / 10;
         let mut gains = Vec::new();

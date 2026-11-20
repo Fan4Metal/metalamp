@@ -11,7 +11,7 @@ use egui::{
 
 use crate::palette::ColourText;
 
-use crate::audio::dsp::{DspSettings, eq};
+use crate::audio::dsp::{DspSettings, Enhancement, eq};
 use crate::audio::output::Device;
 use crate::i18n::LangChoice;
 use crate::keymap::{Action, Chord, Group, Keymap};
@@ -1452,7 +1452,7 @@ fn processing(
             ui,
             tr!("Limiter", "Лимитер"),
             Some(if forced {
-                required_limiter_hint(dsp.powerfx)
+                required_limiter_hint()
             } else {
                 limiter_hint()
             }),
@@ -1562,101 +1562,191 @@ fn processing(
             ui,
             tr!("Enhancer", "Улучшение звука"),
             Some(enhancer_hint()),
-            50.0,
-            |ui| switch(ui, &mut dsp.enhancer),
+            50.0 + TOOL,
+            |ui| {
+                switch(ui, &mut dsp.enhancer);
+                standard_button(ui, &mut dsp.enhancement);
+            },
         );
         divider(ui);
-        powerfx_profile(ui, dsp);
-        if dsp.powerfx {
-            return;
-        }
-        for (title, hint, value) in enhancer_amounts() {
-            divider(ui);
-            amount(ui, title, hint, value(dsp));
-        }
+        ui.add_space(8.0);
+        enhancer_grid(ui, &mut dsp.enhancement, dsp.enhancer);
     });
-}
-
-const POWERFX_PROFILE: &str = "PowerFX 135% · Modern";
-
-fn powerfx_profile(ui: &mut Ui, dsp: &mut DspSettings) {
-    ui.checkbox(&mut dsp.powerfx, POWERFX_PROFILE).on_hover_text(tr!(
-        "Uses the measured Modern profile with linked multiband compression. Clear to use the manual controls.",
-        "Включает профиль Modern с многополосной компрессией, настроенный по замерам PowerFX. Снимите флажок для ручной настройки."
-    ));
 }
 
 /// What the enhancer's switch does: the Sound page's row and the tip of
 /// the switch in the equalizer's window.
 fn enhancer_hint() -> &'static str {
     tr!(
-        "Select the PowerFX profile or adjust the manual controls from 0 to 10.",
-        "Выберите профиль PowerFX или настройте ручные регуляторы от 0 до 10."
+        "Raises quiet sound band by band and gives it character: a multiband automatic gain control modelled on recordings of a well-known enhancer, with its controls. The standard settings are those it was modelled at. The limiter works with it.",
+        "Поднимает тихий звук по полосам и придаёт ему характер: многополосная автоматическая регулировка усиления, смоделированная по записям известного улучшителя звука, с его регуляторами. Стандартные настройки — те, на которых он моделировался. Вместе с ним работает лимитер."
     )
 }
 
-/// One of the enhancer's amounts: its name, what it does, where it is kept.
-type EnhancerAmount = (&'static str, &'static str, fn(&mut DspSettings) -> &mut u8);
+/// The round arrow putting every control back to the standard settings.
+fn standard_button(ui: &mut Ui, e: &mut Enhancement) {
+    if tool(
+        ui,
+        tr!("The standard settings", "Стандартные настройки"),
+        *e != Enhancement::STANDARD,
+        Icon::RotateLeft,
+    )
+    .clicked()
+    {
+        *e = Enhancement::STANDARD;
+    }
+}
 
-/// The enhancer's amounts in display order, two per row in the tuning window.
-fn enhancer_amounts() -> [EnhancerAmount; 5] {
+/// One of the enhancer's controls: its name, what it does, and its value
+/// as a number with the slider's range and step, read from and written to
+/// the settings, and shown.
+struct Control {
+    title: &'static str,
+    hint: &'static str,
+    range: (f32, f32),
+    step: f32,
+    get: fn(&Enhancement) -> f32,
+    set: fn(&mut Enhancement, f32),
+    text: fn(f32) -> String,
+}
+
+fn level_text(v: f32) -> String {
+    format!("{v:+.1}{}", tr!(" dB", " дБ"))
+}
+
+fn amount_text(v: f32) -> String {
+    format!("{v:.1}")
+}
+
+/// The controls in rows, as the window lays them out: how much and of
+/// what, the character of the bass and the treble, the levels.
+fn enhancer_controls() -> [Vec<Control>; 3] {
     [
-        (
-            tr!("Bass", "Бас"),
-            tr!(
-                "Depth below 120 Hz, controlled by the bass itself, with gentle low-mid masking reduction.",
-                "Глубина ниже 120 Гц с управлением по самому басу и мягким уменьшением гула в нижней середине."
-            ),
-            |d| &mut d.bass,
-        ),
-        (
-            tr!("Adaptive bass", "Адаптивный бас"),
-            tr!(
-                "Compares bass at 40–120 Hz with the midrange. A thin passage gets up to 13 dB of bass boost. The manual Bass control sets the minimum boost.",
-                "Сравнивает низ на 40–120 Гц с серединой. В местах со слабым басом подъём достигает 13 дБ. Ручной регулятор «Бас» задаёт минимальный подъём."
-            ),
-            |d| &mut d.adaptive_bass,
-        ),
-        (
-            tr!("Brilliance", "Блеск"),
-            tr!(
-                "Raises the treble from 8 kHz as far as it is dull against the middle, up to 12 dB: a dull recording gets more, a bright one nothing. Comes up over a fraction of a second and goes back at once when the treble returns.",
-                "Поднимает верх от 8 кГц настолько, насколько он тусклее середины, до 12 дБ: тусклая запись получает больше, яркая — ничего. Нарастает за доли секунды и сразу уходит, когда верх возвращается."
-            ),
-            |d| &mut d.brilliance,
-        ),
-        (
-            tr!("Width", "Ширина"),
-            tr!(
-                "Widens the mid and high stereo image with a smooth side shelf, preserving deep bass and the mono sum.",
-                "Плавно расширяет стереокартину средних и высоких частот, сохраняя глубокий бас и моносумму."
-            ),
-            |d| &mut d.width,
-        ),
-        (
-            tr!("Drive", "Драйв"),
-            tr!(
-                "Raises quiet passages. At 10 the ratio is 4:1 below −10 LUFS, with up to 18 dB of boost. In pauses the boost returns smoothly to 0 dB. Drive enables the limiter.",
-                "Подтягивает тихие места. На 10 отношение составляет 4:1 ниже −10 LUFS, максимальный подъём — 18 дБ. В паузах усиление плавно возвращается к 0 дБ. Драйв включает лимитер."
-            ),
-            |d| &mut d.drive,
-        ),
+        vec![
+            Control {
+                title: tr!("Drive", "Драйв"),
+                hint: tr!(
+                    "How much of all the rest: how far quiet sound is raised and how much of the character below is heard. 0: only the levels.",
+                    "Сколько всего остального: насколько поднимается тихий звук и сколько слышно характера ниже. 0 — только уровни."
+                ),
+                range: (0.0, f32::from(Enhancement::MOST_DRIVE)),
+                step: 1.0,
+                get: |e| f32::from(e.drive),
+                set: |e, v| e.drive = v.round() as u8,
+                text: |v| format!("{v:.0} %"),
+            },
+            Control {
+                title: tr!("Fidelity", "Чёткость"),
+                hint: tr!(
+                    "Raises quiet sound across the range, at 10 up to about 20 dB, less the louder it is.",
+                    "Поднимает тихий звук во всём диапазоне, на 10 примерно до 20 дБ, тем меньше, чем он громче."
+                ),
+                range: (0.0, 10.0),
+                step: 0.1,
+                get: |e| e.fidelity,
+                set: |e, v| e.fidelity = v,
+                text: amount_text,
+            },
+            Control {
+                title: tr!("Ambience", "Объём"),
+                hint: tr!(
+                    "As fidelity, mostly from 160 Hz to 10 kHz and a little unevenly across it, which gives the room. Together the two raise less than each would add.",
+                    "Как чёткость, но в основном от 160 Гц до 10 кГц и немного неровно по частотам, что даёт ощущение пространства. Вместе они поднимают меньше, чем сумма каждой."
+                ),
+                range: (0.0, 10.0),
+                step: 0.1,
+                get: |e| e.ambience,
+                set: |e, v| e.ambience = v,
+                text: amount_text,
+            },
+        ],
+        vec![
+            Control {
+                title: tr!("Bass type", "Тип баса"),
+                hint: tr!(
+                    "Deep: the low bass raised far more, the quieter it is the more. Punch: the low middle (250 Hz to 1 kHz) raised instead.",
+                    "Глубокий — низкий бас поднимается гораздо сильнее, и тем больше, чем он тише. Плотный — вместо этого поднимается нижняя середина (250 Гц – 1 кГц)."
+                ),
+                range: (-100.0, 100.0),
+                step: 1.0,
+                get: |e| f32::from(e.bass_type),
+                set: |e, v| e.bass_type = v.round() as i8,
+                text: |v| match v.round() as i32 {
+                    0 => tr!("Neutral", "Нейтральный").to_owned(),
+                    v if v < 0 => format!("{} {}", tr!("Deep", "Глубокий"), -v),
+                    v => format!("{} {v}", tr!("Punch", "Плотный")),
+                },
+            },
+            Control {
+                title: tr!("Treble type", "Тип верха"),
+                hint: tr!(
+                    "Sharp: 5 to 12 kHz raised. Smooth: the whole top from 1.6 kHz raised and the middle a little lower.",
+                    "Резкий — поднимается 5–12 кГц. Мягкий — поднимается весь верх от 1,6 кГц, а середина чуть ниже."
+                ),
+                range: (-100.0, 100.0),
+                step: 1.0,
+                get: |e| f32::from(e.treble_type),
+                set: |e, v| e.treble_type = v.round() as i8,
+                text: |v| match v.round() as i32 {
+                    0 => tr!("Neutral", "Нейтральный").to_owned(),
+                    v if v < 0 => format!("{} {}", tr!("Sharp", "Резкий"), -v),
+                    v => format!("{} {v}", tr!("Smooth", "Мягкий")),
+                },
+            },
+        ],
+        vec![
+            Control {
+                title: tr!("Bass", "Бас"),
+                hint: tr!(
+                    "A fixed level after the rest: under 150 Hz.",
+                    "Постоянный уровень после всего остального: ниже 150 Гц."
+                ),
+                range: (-Enhancement::LEVEL_DB, Enhancement::LEVEL_DB),
+                step: 0.1,
+                get: |e| e.bass,
+                set: |e, v| e.bass = v,
+                text: level_text,
+            },
+            Control {
+                title: tr!("Mid", "Середина"),
+                hint: tr!(
+                    "A fixed level after the rest: 300 Hz to 1 kHz, and half of it from 1.6 to 5 kHz.",
+                    "Постоянный уровень после всего остального: 300 Гц – 1 кГц и наполовину 1,6–5 кГц."
+                ),
+                range: (-Enhancement::LEVEL_DB, Enhancement::LEVEL_DB),
+                step: 0.1,
+                get: |e| e.mid,
+                set: |e, v| e.mid = v,
+                text: level_text,
+            },
+            Control {
+                title: tr!("Treble", "Верх"),
+                hint: tr!(
+                    "A fixed level after the rest: from 10 kHz, and half of it from 1.6 to 5 kHz.",
+                    "Постоянный уровень после всего остального: от 10 кГц и наполовину 1,6–5 кГц."
+                ),
+                range: (-Enhancement::LEVEL_DB, Enhancement::LEVEL_DB),
+                step: 0.1,
+                get: |e| e.treble,
+                set: |e, v| e.treble = v,
+                text: level_text,
+            },
+        ],
     ]
 }
 
-/// The gap between the two columns of the enhancer's grid.
-const ENHANCER_GAP: f32 = 28.0;
+/// The gap between the columns of the enhancer's grid.
+const ENHANCER_GAP: f32 = 22.0;
 
 /// The enhancer in the equalizer's window (`ui::eq_window`), a section
 /// that folds (`open`, kept in the settings), laid out as the equalizer's
 /// head over it, so the two switches and the two pairs of tools stand in
 /// columns: the switch and the name on the left (a click on the name folds
-/// or unfolds it), on the right, folded, the amounts not at 0, a round
-/// arrow putting every amount back to 0 under the equalizer's bin and the
+/// or unfolds it), on the right, folded, what differs from the standard
+/// settings, a round arrow back to them under the equalizer's bin and the
 /// fold's chevron (`fold_button`) under its chevron; unfolded, the
-/// amounts two a row (`enhancer_cell`), greyed while it is off.
+/// controls in rows (`enhancer_grid`), greyed while it is off.
 pub(crate) fn enhancer(ui: &mut Ui, dsp: &mut DspSettings, open: &mut bool) {
-    let amounts = enhancer_amounts();
     let mut fold = fold_of(ui, "eq_enhancer", *open);
     let openness = fold.openness(ui.ctx());
     let heading = ui
@@ -1669,33 +1759,9 @@ pub(crate) fn enhancer(ui: &mut Ui, dsp: &mut DspSettings, open: &mut bool) {
                 // `eq_head`'s tools end a spacing short of the edge.
                 ui.add_space(ui.spacing().item_spacing.x);
                 toggled |= fold_button(ui, openness).clicked();
-                let any = !dsp.powerfx && amounts.iter().any(|(_, _, value)| *value(dsp) != 0);
-                if tool(
-                    ui,
-                    tr!("All back to 0", "Вернуть все к 0"),
-                    any,
-                    Icon::RotateLeft,
-                )
-                .clicked()
-                {
-                    for (_, _, value) in &amounts {
-                        *value(dsp) = 0;
-                    }
-                }
+                standard_button(ui, &mut dsp.enhancement);
                 if !fold.is_open() {
                     // What is set, so a folded section still tells it.
-                    let summary = if dsp.powerfx {
-                        POWERFX_PROFILE.to_owned()
-                    } else {
-                        amounts
-                            .iter()
-                            .filter_map(|(title, _, value)| {
-                                let v = *value(dsp);
-                                (v != 0).then(|| format!("{title} {v}"))
-                            })
-                            .collect::<Vec<_>>()
-                            .join(" · ")
-                    };
                     let color = if dsp.enhancer {
                         palette::text_weak()
                     } else {
@@ -1703,8 +1769,12 @@ pub(crate) fn enhancer(ui: &mut Ui, dsp: &mut DspSettings, open: &mut bool) {
                     };
                     ui.add_space(4.0);
                     ui.add(
-                        egui::Label::new(RichText::new(summary).size(12.5).color(color))
-                            .truncate(),
+                        egui::Label::new(
+                            RichText::new(enhancer_summary(&dsp.enhancement))
+                                .size(12.5)
+                                .color(color),
+                        )
+                        .truncate(),
                     );
                 }
             });
@@ -1718,28 +1788,43 @@ pub(crate) fn enhancer(ui: &mut Ui, dsp: &mut DspSettings, open: &mut bool) {
     let on = dsp.enhancer;
     fold.show_body_unindented(ui, |ui| {
         ui.add_space(8.0);
-        powerfx_profile(ui, dsp);
-        if !dsp.powerfx {
-            enhancer_grid(ui, dsp, &amounts, on);
-        }
+        enhancer_grid(ui, &mut dsp.enhancement, on);
     });
 }
 
-/// The amounts two a row, greyed while the enhancer is off.
-fn enhancer_grid(ui: &mut Ui, dsp: &mut DspSettings, amounts: &[EnhancerAmount], on: bool) {
+/// "Standard", or the controls that differ from the standard settings.
+fn enhancer_summary(e: &Enhancement) -> String {
+    let standard = Enhancement::STANDARD;
+    let changed: Vec<String> = enhancer_controls()
+        .iter()
+        .flatten()
+        .filter(|c| (c.get)(e) != (c.get)(&standard))
+        .map(|c| format!("{} {}", c.title, (c.text)((c.get)(e))))
+        .collect();
+    if changed.is_empty() {
+        tr!("Standard", "Стандартные").to_owned()
+    } else {
+        changed.join(" · ")
+    }
+}
+
+/// The controls in their rows, greyed while the enhancer is off.
+fn enhancer_grid(ui: &mut Ui, e: &mut Enhancement, on: bool) {
     ui.add_enabled_ui(on, |ui| {
-        let cell = ((ui.available_width() - ENHANCER_GAP) / 2.0).floor();
-        for pair in amounts.chunks(2) {
+        let width = ui.available_width();
+        for controls in enhancer_controls() {
+            let n = controls.len() as f32;
+            let cell = ((width - ENHANCER_GAP * (n - 1.0)) / n).floor();
             // Top-aligned: a centred row put the second cell lower.
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = ENHANCER_GAP;
-                for &(title, hint, value) in pair {
+                for control in &controls {
                     ui.allocate_ui_with_layout(
                         vec2(cell, 0.0),
                         Layout::top_down(Align::Min),
                         |ui| {
                             ui.set_width(cell);
-                            enhancer_cell(ui, title, hint, value(dsp), on);
+                            enhancer_cell(ui, control, e, on);
                         },
                     );
                 }
@@ -1749,41 +1834,58 @@ fn enhancer_grid(ui: &mut Ui, dsp: &mut DspSettings, amounts: &[EnhancerAmount],
     });
 }
 
-/// One amount in the enhancer's grid: its name (the hint as its tip) and
-/// its value (in the accent when not 0) over a slider of the cell's width;
-/// a double click on the slider puts it back to 0.
-fn enhancer_cell(ui: &mut Ui, title: &str, hint: &str, value: &mut u8, on: bool) {
+/// One control in the enhancer's grid: its name (the hint as its tip) and
+/// its value (in the accent when not the standard one) over a slider of
+/// the cell's width; a double click on the slider puts the standard value
+/// back.
+fn enhancer_cell(ui: &mut Ui, c: &Control, e: &mut Enhancement, on: bool) {
     let width = ui.available_width();
+    let standard = (c.get)(&Enhancement::STANDARD);
     let tip = format!(
-        "{hint}\n\n{}",
+        "{}\n\n{}",
+        c.hint,
         tr!(
-            "A double click puts it back to 0.",
-            "Двойной щелчок возвращает 0."
+            "A double click puts the standard value back.",
+            "Двойной щелчок возвращает стандартное значение."
         )
     );
+    let mut value = (c.get)(e);
     ui.horizontal(|ui| {
-        ui.label(RichText::new(title).size(13.5).color(palette::text()))
+        ui.label(RichText::new(c.title).size(13.5).color(palette::text()))
             .on_hover_text(&tip);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let color = if *value != 0 && on {
+            let color = if value != standard && on {
                 palette::accent_hover()
             } else {
                 palette::text_weak()
             };
-            ui.label(
-                RichText::new(value.to_string())
-                    .size(13.0)
-                    .strong()
-                    .color(color),
+            ui.add(
+                egui::Label::new(
+                    RichText::new((c.text)(value))
+                        .size(13.0)
+                        .strong()
+                        .color(color),
+                )
+                .truncate(),
             );
         });
     });
     ui.spacing_mut().slider_width = width;
     let response = ui
-        .add(egui::Slider::new(value, 0..=10).show_value(false))
+        .add(
+            egui::Slider::new(&mut value, c.range.0..=c.range.1)
+                .step_by(f64::from(c.step))
+                .show_value(false),
+        )
         .on_hover_text(&tip);
+    // Only what the user did: the slider's stepping alone moves a value by
+    // a rounding error (0.0 read as 8.9e-8 on a 0.1 step from -6, 1.8 as
+    // 1.8000001), and says it changed it.
     if slider_double_clicked(ui, &response) {
-        *value = 0;
+        (c.set)(e, standard);
+    } else if (value - (c.get)(e)).abs() > 0.4 * c.step {
+        let per_unit = (1.0 / c.step).round();
+        (c.set)(e, (value * per_unit).round() / per_unit);
     }
 }
 
@@ -1796,20 +1898,14 @@ pub(crate) fn limiter_hint() -> &'static str {
     )
 }
 
-pub(crate) fn required_limiter_hint(powerfx: bool) -> &'static str {
-    if powerfx {
-        return tr!(
-            "The PowerFX profile uses the limiter to catch peaks.",
-            "Профиль PowerFX включает лимитер для защиты от пиков."
-        );
-    }
+/// Why the limiter cannot be turned off now.
+pub(crate) fn required_limiter_hint() -> &'static str {
     tr!(
-        "Drive uses the limiter to catch peaks. When Drive is turned off, the manual limiter setting applies again.",
-        "Драйв включает лимитер для защиты от пиков. После выключения драйва снова действует ручная настройка лимитера."
+        "The enhancer raises quiet sound up past full scale and works with the limiter. When it is turned off, the limiter's own switch applies again.",
+        "Улучшение звука поднимает тихий звук выше полной шкалы и работает вместе с лимитером. После его выключения снова действует переключатель лимитера."
     )
 }
 
-/// A row with a slider of 0 to 10.
 /// The balance's slider (-100 to 100, the side named and how far) and a
 /// round arrow back to the middle.
 fn balance(ui: &mut Ui, value: &mut i8) {
@@ -1846,13 +1942,6 @@ fn balance(ui: &mut Ui, value: &mut i8) {
                 }
             }),
     );
-}
-
-fn amount(ui: &mut Ui, title: &str, hint: &str, value: &mut u8) {
-    row(ui, title, Some(hint), CONTROL, |ui| {
-        ui.spacing_mut().slider_width = CONTROL - 50.0;
-        ui.add(egui::Slider::new(value, 0..=10));
-    });
 }
 
 /// The width of a small icon button (`tool`).
