@@ -223,11 +223,16 @@ const INDEX: [[f32; 2]; 38] = [
     [19000., 5.],
     [20000., 5.],
 ];
-/// The output against the recorded player's: its peaks went up to 4 dB
-/// over full scale (its volume came after it), the final limiter here
-/// holds them at -1 dBTP; with 2 dB less the limiter takes about as much
-/// off a hit as those peaks passed over full scale.
-const OUTPUT_TRIM_DB: f32 = -2.0;
+/// The output against the recorded enhancer's: its peaks went up to
+/// 3.7 dB over full scale, and the player's volume after it (167 of 255,
+/// about -6 dB) took them back under it, with no limiter. Here the same
+/// 6 dB come off at once, so the final limiter only catches what is left:
+/// with 2 dB off it worked nearly all the time on rock (94-100 % of the
+/// time, 2.4-3.1 dB on average), and its 10 ms recovery moved the bass's
+/// gain within a note, heard as a gurgle; with 6 dB, 0.3-10 % of the time,
+/// 0.05-0.2 dB on average, the bass's gain moving no faster than the
+/// recorded one's.
+const OUTPUT_TRIM_DB: f32 = -6.0;
 /// The share of the way a changed control's curve and drive go per hop
 /// (a quarter window): about 25 ms at 44.1 and 48 kHz.
 const GLIDE: f32 = 0.25;
