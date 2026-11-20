@@ -11,16 +11,16 @@ pub const SHARE: [[f32; 6]; 30] = [[0.1271, 0.0000, 0.0000, 0.0000, 0.0000, 0.00
 /// The core stage at a Drive of 100 %: per detector the offset (dB), the
 /// slope (dB per dB of the detector's level), the floor and the most (dB),
 /// per band the base (dB).
-pub const CORE_OFFSET: [f32; 6] = [5.493, -2.141, -13.971, -7.030, -2.424, 9.772];
-pub const CORE_SLOPE: [f32; 6] = [0.4975, 0.4515, 0.0726, 0.5584, 0.2783, 1.4732];
-pub const CORE_FLOOR: [f32; 6] = [-33.172, -22.862, -27.492, -26.666, -24.421, -20.454];
+pub const CORE_OFFSET: [f32; 6] = [5.470, -1.968, -14.061, -7.634, -5.791, 8.988];
+pub const CORE_SLOPE: [f32; 6] = [0.5025, 0.4678, 0.0500, 0.4661, 0.0669, 1.4857];
+pub const CORE_FLOOR: [f32; 6] = [-33.118, -28.095, -20.874, -38.822, -30.710, -20.668];
 pub const CORE_MOST: [f32; 6] = [3.493, -8.040, -19.567, -11.154, -5.913, -6.343];
 pub const CORE_BASE: [f32; 30] = [7.021, 7.021, 7.021, 7.009, 6.787, 6.410, 6.543, 8.046, 12.823, 14.999, 16.848, 20.294, 20.540, 20.636, 20.576, 20.728, 19.121, 17.905, 17.254, 17.243, 17.185, 17.436, 17.408, 15.826, 13.889, 11.512, 10.015, 7.892, 8.400, 12.658];
 /// The upward stages: per detector the offset and the slope.
-pub const FIDELITY_OFFSET: [f32; 6] = [8.830, 9.189, 10.879, 6.259, 11.233, 12.750];
-pub const FIDELITY_SLOPE: [f32; 6] = [0.4676, 0.3929, 0.5290, 0.4573, 0.4289, 0.5736];
-pub const AMBIENCE_OFFSET: [f32; 6] = [-2.663, 11.052, 10.247, 6.673, 17.274, 17.291];
-pub const AMBIENCE_SLOPE: [f32; 6] = [0.1420, 0.6042, 0.6118, 0.4569, 0.5855, 0.3635];
+pub const FIDELITY_OFFSET: [f32; 6] = [8.907, 9.619, 10.923, 6.298, 11.407, 12.768];
+pub const FIDELITY_SLOPE: [f32; 6] = [0.4723, 0.4163, 0.5319, 0.4577, 0.4188, 0.5782];
+pub const AMBIENCE_OFFSET: [f32; 6] = [-3.599, 10.861, 9.981, 6.536, 17.112, 17.199];
+pub const AMBIENCE_SLOPE: [f32; 6] = [0.1649, 0.5994, 0.5934, 0.4437, 0.5742, 0.3600];
 /// What each control adds to the most and the base of its stage, between
 /// knots linearly (the bass and treble types to the core's).
 pub const BASS_TYPE: [Knot; 5] = [
@@ -51,6 +51,12 @@ pub const AMBIENCE: [Knot; 5] = [
     Knot { at: 0.75, most: [25.00, 9.91, 13.01, 7.17, 14.16, 14.74], base: [0.18, 0.18, 0.18, 0.15, 0.60, 0.81, 0.42, 0.24, 1.29, 2.28, -0.18, 0.31, 0.45, -1.02, 0.20, 0.77, -0.68, -0.10, 0.76, -1.07, 0.22, 0.65, -1.12, -2.98, -4.26, -2.50, -2.80, -4.84, -12.60, -8.12] },
     Knot { at: 1.00, most: [15.22, 14.48, 19.44, 14.25, 18.61, 23.06], base: [-0.53, -0.53, -0.53, -0.11, 0.34, 1.16, 0.96, -0.09, 1.71, 2.34, 1.10, 2.02, 2.07, 0.17, 1.75, 2.19, 0.33, 0.81, 1.29, -0.71, 0.72, 1.32, -0.42, -2.56, -4.17, -1.86, -2.44, -5.78, -14.46, -11.76] },
 ];
+/// The parts not scaled by drive, for any drive over 0: the share of the
+/// core's compression (its gain under its most) per detector, of the
+/// fidelity and the ambience stages whole.
+pub const UNSCALED_CORE: [f32; 6] = [-0.0186, -0.0406, 0.5008, 0.2753, 0.5645, -0.3107];
+pub const UNSCALED_FIDELITY: f32 = -0.0107;
+pub const UNSCALED_AMBIENCE: f32 = 0.0308;
 /// The levels' curves: dB of each band per dB of the bass, mid and treble.
 pub const LEVEL_BASS: [f32; 30] = [0.990, 0.990, 0.991, 0.992, 0.989, 0.991, 0.986, 0.938, 0.720, 0.505, 0.252, 0.001, -0.006, -0.006, -0.010, -0.007, -0.008, -0.007, -0.008, -0.007, -0.007, -0.007, -0.007, -0.008, -0.008, -0.007, -0.008, -0.007, -0.007, -0.007];
 pub const LEVEL_MID: [f32; 30] = [-0.002, -0.002, -0.002, -0.002, -0.002, -0.002, 0.003, 0.070, 0.311, 0.497, 0.798, 0.998, 0.998, 0.998, 0.997, 0.997, 0.858, 0.636, 0.506, 0.498, 0.498, 0.498, 0.498, 0.471, 0.404, 0.308, 0.163, 0.012, -0.002, -0.002];

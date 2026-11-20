@@ -270,6 +270,10 @@ struct Stage {
     /// The base of each detector's own bands (dB), so the next stage's
     /// detector hears that detector's region with this stage's gain.
     own_base: [f32; K],
+    /// The share of the gain over `reference` that the drive does not scale
+    /// (for any drive over 0).
+    unscaled: [f32; K],
+    reference: [f32; K],
     env: [f32; K],
     gain: [f32; K],
 }
@@ -289,19 +293,35 @@ fn law_of(e: &Enhancement) -> Law {
     let (tt_most, tt_base) = knotted(&law::TREBLE_TYPE, f32::from(e.treble_type) / 100.);
     let core_base: [f32; NB] = std::array::from_fn(|n| law::CORE_BASE[n] + bt_base[n] + tt_base[n]);
     let mut stages = [Stage::default(); 3];
+    let core_most = std::array::from_fn(|k| law::CORE_MOST[k] + bt_most[k] + tt_most[k]);
     stages[0] = Stage {
         on: true,
         offset: law::CORE_OFFSET,
         slope: law::CORE_SLOPE,
         floor: law::CORE_FLOOR,
-        most: std::array::from_fn(|k| law::CORE_MOST[k] + bt_most[k] + tt_most[k]),
+        most: core_most,
         own_base: own(&core_base),
+        unscaled: law::UNSCALED_CORE,
+        reference: core_most,
         ..Stage::default()
     };
     let mut band_db = core_base;
-    for (i, (amount, knots, offset, slope)) in [
-        (e.fidelity, &law::FIDELITY, law::FIDELITY_OFFSET, law::FIDELITY_SLOPE),
-        (e.ambience, &law::AMBIENCE, law::AMBIENCE_OFFSET, law::AMBIENCE_SLOPE),
+    let mut fixed = [0.; NB];
+    for (i, (amount, knots, offset, slope, unscaled)) in [
+        (
+            e.fidelity,
+            &law::FIDELITY,
+            law::FIDELITY_OFFSET,
+            law::FIDELITY_SLOPE,
+            law::UNSCALED_FIDELITY,
+        ),
+        (
+            e.ambience,
+            &law::AMBIENCE,
+            law::AMBIENCE_OFFSET,
+            law::AMBIENCE_SLOPE,
+            law::UNSCALED_AMBIENCE,
+        ),
     ]
     .into_iter()
     .enumerate()
@@ -315,16 +335,20 @@ fn law_of(e: &Enhancement) -> Law {
             floor: [0.; K],
             most: most.map(|m| m.max(0.)),
             own_base: own(&base),
+            unscaled: [unscaled; K],
             ..Stage::default()
         };
         if x > 0. {
-            for (b, v) in band_db.iter_mut().zip(base) {
+            for ((b, f), v) in band_db.iter_mut().zip(&mut fixed).zip(base) {
                 *b += v;
+                *f += unscaled * v;
             }
         }
     }
+    let u = unscaled_share(d);
     for (n, b) in band_db.iter_mut().enumerate() {
         *b = d * *b
+            + u * fixed[n]
             + e.bass * law::LEVEL_BASS[n]
             + e.mid * law::LEVEL_MID[n]
             + e.treble * law::LEVEL_TREBLE[n];
@@ -334,6 +358,13 @@ fn law_of(e: &Enhancement) -> Law {
         stages,
         band_db,
     }
+}
+
+/// How much of the parts the drive does not scale apply: all from a drive
+/// of 10 %, none at 0, where the recorded player left the sound as it was
+/// but for the levels.
+fn unscaled_share(d: f32) -> f32 {
+    (d / 0.1).clamp(0., 1.)
 }
 
 fn own(base: &[f32; NB]) -> [f32; K] {
@@ -563,6 +594,14 @@ impl Enhancer {
             }
         }
         let on = self.law.stages.map(|s| s.on);
+        // The parts the drive does not scale, per detector (dB).
+        let u = unscaled_share(d);
+        let mut extra = [0f32; K];
+        for s in self.law.stages.iter().filter(|s| s.on) {
+            for (k, x) in extra.iter_mut().enumerate() {
+                *x += u * s.unscaled[k] * (s.gain[k] - s.reference[k]);
+            }
+        }
         for (g, b) in self.bin_gain.iter_mut().zip(&self.bins) {
             let mut product = 1.;
             for (lin, _) in linear.iter().zip(on).filter(|(_, on)| *on) {
@@ -570,7 +609,11 @@ impl Enhancer {
             }
             let (i, t) = b.place;
             let base = self.band_now[i - 1] + t * (self.band_now[i] - self.band_now[i - 1]);
-            let db = base + OUTPUT_TRIM_DB + d * 20. * product.max(1e-9).log10();
+            let db = base
+                + OUTPUT_TRIM_DB
+                + d * 20. * product.max(1e-9).log10()
+                + extra[b.band]
+                + b.blend * (extra[b.band + 1] - extra[b.band]);
             *g = (10f32.powf(db / 20.) - 1.) * b.audible;
         }
         // Four periodic Hann windows overlap with a squared sum of 1.5.
