@@ -1025,10 +1025,10 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn the_older_enhancers_settings_give_the_standard_one() {
+    fn the_older_enhancers_settings_give_the_loud_one() {
         // The older enhancer's amounts, its drive and the measured
         // profile's switch were removed: such a file keeps the enhancer
-        // on with the standard controls, and the rest of the file.
+        // on with the Loud controls, and the rest of the file.
         let old = Settings::from_json(
             br#"{"dsp":{"enhancer":true,"powerfx":true,"bass":6,"drive":3,"brilliance":2,"width":7,"normalize":true}}"#,
         )
@@ -1036,7 +1036,7 @@ mod tests {
         assert!(old.dsp.enhancer && old.dsp.normalize);
         assert_eq!(
             old.dsp.enhancement,
-            crate::audio::dsp::Enhancement::STANDARD
+            crate::audio::dsp::Enhancement::LOUD
         );
         let mut new = old;
         new.dsp.enhancement.drive = 90;

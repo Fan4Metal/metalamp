@@ -55,9 +55,10 @@ pub struct Enhancement {
 }
 
 impl Enhancement {
-    /// The settings recorded (Drive 135 %, punch 30, smooth 50, bass +2,
+    /// The Loud preset, the default and the settings recorded (Drive
+    /// 135 %, punch 30, smooth 50, bass +2,
     /// treble +1.8, fidelity 5.5, ambience 7).
-    pub const STANDARD: Enhancement = Enhancement {
+    pub const LOUD: Enhancement = Enhancement {
         drive: 135,
         bass_type: 30,
         treble_type: 50,
@@ -95,7 +96,7 @@ impl Enhancement {
 
 impl Default for Enhancement {
     fn default() -> Self {
-        Self::STANDARD
+        Self::LOUD
     }
 }
 
@@ -130,15 +131,15 @@ const fn preset(
     }
 }
 
-/// The built-in presets: the standard settings, then those the modelled
+/// The built-in presets: Loud, the default, then those the modelled
 /// enhancer comes with (its Default, the settings at their middles, named
 /// Neutral here), as its window shows them.
 #[rustfmt::skip]
 pub const PRESETS: &[Preset] = &[
     Preset {
-        name: "Standard",
-        ru: "Стандартный",
-        settings: Enhancement::STANDARD,
+        name: "Loud",
+        ru: "Громкий",
+        settings: Enhancement::LOUD,
     },
     preset("Neutral", "Нейтральный", (100, 0, 0), [0.0, 0.0, 0.0], (0.0, 0.0)),
     preset("Acoustic", "Акустика", (65, -35, 65), [-2.6, 1.2, -1.4], (8.5, 6.0)),
@@ -607,8 +608,8 @@ mod tests {
     #[test]
     fn quiet_sound_is_raised_more_than_loud_sound() {
         // The recorded player: a 1 kHz tone at -36 dBFS got about 20 dB
-        // more than one at -12 (with the standard settings).
-        let e = Enhancement::STANDARD;
+        // more than one at -12 (with the Loud settings).
+        let e = Enhancement::LOUD;
         let quiet = gain_db(&e, 1000., -36.);
         let loud = gain_db(&e, 1000., -12.);
         assert!(quiet - loud > 10., "{quiet} {loud}");
@@ -621,7 +622,7 @@ mod tests {
         // +2 dB under 125 Hz, the middle untouched.
         let e = Enhancement {
             drive: 0,
-            ..Enhancement::STANDARD
+            ..Enhancement::LOUD
         };
         let bass = gain_db(&e, 60., -24.) - f64::from(OUTPUT_TRIM_DB);
         let mid = gain_db(&e, 500., -24.) - f64::from(OUTPUT_TRIM_DB);
@@ -641,7 +642,7 @@ mod tests {
                     bass: 0.,
                     mid: 0.,
                     treble: 0.,
-                    ..Enhancement::STANDARD
+                    ..Enhancement::LOUD
                 },
                 1000.,
                 -50.,
@@ -656,12 +657,12 @@ mod tests {
         let none = Enhancement {
             fidelity: 0.,
             ambience: 0.,
-            ..Enhancement::STANDARD
+            ..Enhancement::LOUD
         };
         let more = Enhancement {
             fidelity: 10.,
             ambience: 10.,
-            ..Enhancement::STANDARD
+            ..Enhancement::LOUD
         };
         let (a, b) = (gain_db(&none, 1000., -40.), gain_db(&more, 1000., -40.));
         assert!(b - a > 8., "{a} {b}");
@@ -669,7 +670,7 @@ mod tests {
 
     #[test]
     fn the_stages_start_at_their_most() {
-        let fx = Enhancer::new(48000, 2, true, &Enhancement::STANDARD);
+        let fx = Enhancer::new(48000, 2, true, &Enhancement::LOUD);
         for (stage, gains) in fx.law.stages.iter().zip(fx.gains()) {
             assert_eq!(stage.most, gains);
         }
@@ -678,7 +679,7 @@ mod tests {
     #[test]
     fn linked_gain_preserves_polarity() {
         let rate = 44100;
-        let mut fx = Enhancer::new(rate, 2, true, &Enhancement::STANDARD);
+        let mut fx = Enhancer::new(rate, 2, true, &Enhancement::LOUD);
         let mut audio: Vec<_> = sine(rate, 185., -26., 1.)
             .into_iter()
             .flat_map(|x| [x, -0.25 * x])
@@ -695,7 +696,7 @@ mod tests {
 
     #[test]
     fn the_presets_are_within_range_and_apart() {
-        assert_eq!(PRESETS[0].settings, Enhancement::STANDARD);
+        assert_eq!(PRESETS[0].settings, Enhancement::LOUD);
         for (i, p) in PRESETS.iter().enumerate() {
             assert_eq!(p.settings.clamped(), p.settings, "{}", p.name);
             for q in &PRESETS[i + 1..] {
@@ -727,7 +728,7 @@ mod tests {
     #[test]
     fn switching_across_blocks_drains_to_an_exact_wire() {
         for rate in [22050, 44100, 48000, 96000, 192000] {
-            let e = Enhancement::STANDARD;
+            let e = Enhancement::LOUD;
             let mut whole = Enhancer::new(rate, 1, false, &e);
             let mut split = Enhancer::new(rate, 1, false, &e);
             let delay = whole.latency_frames();
@@ -766,12 +767,12 @@ mod tests {
             true,
             &Enhancement {
                 drive: 0,
-                ..Enhancement::STANDARD
+                ..Enhancement::LOUD
             },
         );
         let mut s = sine(rate, 1000., -30., 1.);
         fx.process(&mut s);
-        fx.configure(true, &Enhancement::STANDARD);
+        fx.configure(true, &Enhancement::LOUD);
         let mut s = sine(rate, 1000., -30., 0.2);
         fx.process(&mut s);
         let block = rate as usize / 100;

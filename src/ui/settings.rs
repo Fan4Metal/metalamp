@@ -1575,8 +1575,8 @@ fn processing(
 /// the switch in the equalizer's window.
 fn enhancer_hint() -> &'static str {
     tr!(
-        "Raises quiet sound band by band and gives it character: a multiband automatic gain control modelled on recordings of a well-known enhancer, with its controls. The standard settings are those it was modelled at. The limiter works with it.",
-        "Поднимает тихий звук по полосам и придаёт ему характер: многополосная автоматическая регулировка усиления, смоделированная по записям известного улучшителя звука, с его регуляторами. Стандартные настройки — те, на которых он моделировался. Вместе с ним работает лимитер."
+        "Raises quiet sound band by band and gives it character: a multiband automatic gain control modelled on recordings of a well-known enhancer, with its controls. Its Loud preset, the default, is the one it was modelled at. The limiter works with it.",
+        "Поднимает тихий звук по полосам и придаёт ему характер: многополосная автоматическая регулировка усиления, смоделированная по записям известного улучшителя звука, с его регуляторами. Его пресет «Громкий», выбранный по умолчанию, — тот, на котором он моделировался. Вместе с ним работает лимитер."
     )
 }
 
@@ -1763,7 +1763,7 @@ fn enhancer_base_id() -> egui::Id {
 
 /// The settings the controls are told against (the value in the accent
 /// when it differs, a double click back to it): the preset they stand at,
-/// else the one last put at, else the standard settings.
+/// else the one last put at, else Loud.
 fn enhancer_base(ui: &Ui, e: &Enhancement, presets: &[EnhancerPreset]) -> Enhancement {
     let standing = enhancer::PRESETS
         .iter()
@@ -1775,7 +1775,7 @@ fn enhancer_base(ui: &Ui, e: &Enhancement, presets: &[EnhancerPreset]) -> Enhanc
         return s;
     }
     ui.data(|d| d.get_temp::<Enhancement>(enhancer_base_id()))
-        .unwrap_or(Enhancement::STANDARD)
+        .unwrap_or(Enhancement::LOUD)
 }
 
 /// The enhancer's switch, the built-in presets and the user's own in one

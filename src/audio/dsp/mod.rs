@@ -65,7 +65,7 @@ impl Default for DspSettings {
             preamp: 0.0,
             bands: [0.0; 10],
             enhancer: false,
-            enhancement: Enhancement::STANDARD,
+            enhancement: Enhancement::LOUD,
             limiter: true,
             balance: 0,
             mono: false,
