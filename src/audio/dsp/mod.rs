@@ -45,8 +45,7 @@ pub struct DspSettings {
     pub preamp: f32,
     pub bands: [f32; 10],
     pub enhancer: bool,
-    /// The enhancer's controls (the standard ones by default; the older
-    /// enhancer's amounts in a settings file are left unread).
+    /// The enhancer's controls (the Loud preset's by default).
     pub enhancement: Enhancement,
     /// The look-ahead limiter after the rest; on by default (and whenever
     /// the enhancer works).
