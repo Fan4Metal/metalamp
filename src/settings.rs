@@ -129,6 +129,8 @@ pub struct Settings {
     pub dsp: crate::audio::dsp::DspSettings,
     /// The user's equalizer presets (the classic ones are built in).
     pub eq_presets: Vec<EqPreset>,
+    /// The user's enhancer presets (beside the built-in ones).
+    pub enhancer_presets: Vec<EnhancerPreset>,
     /// The equalizer's sliders and the enhancer's section unfolded in the
     /// sound tuning window.
     pub eq_bands_open: bool,
@@ -424,6 +426,14 @@ pub struct EqPreset {
     pub name: String,
     pub preamp: f32,
     pub bands: [f32; 10],
+}
+
+/// The enhancer's settings saved under a name: `{name, drive, …}`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EnhancerPreset {
+    pub name: String,
+    #[serde(flatten)]
+    pub settings: crate::audio::dsp::Enhancement,
 }
 
 /// What the window holds: the library, or the player and the playlist.
@@ -723,6 +733,7 @@ impl Default for Settings {
             output_device_name: String::new(),
             dsp: Default::default(),
             eq_presets: Vec::new(),
+            enhancer_presets: Vec::new(),
             eq_bands_open: true,
             eq_enhancer_open: true,
             crossfade: 0,
@@ -1031,9 +1042,20 @@ mod tests {
         new.dsp.enhancement.drive = 90;
         new.dsp.enhancement.bass_type = -40;
         new.dsp.enhancement.ambience = 3.5;
+        new.enhancer_presets.push(EnhancerPreset {
+            name: "Mine".to_owned(),
+            settings: new.dsp.enhancement,
+        });
         let json = serde_json::to_vec(&new).unwrap();
         let again = Settings::from_json(&json).unwrap();
         assert_eq!(again.dsp, new.dsp);
+        assert_eq!(again.enhancer_presets, new.enhancer_presets);
+        // One's own preset is its name beside the controls.
+        let text = String::from_utf8(json).unwrap();
+        assert!(
+            text.contains(r#"{"name":"Mine","drive":90,"bass_type":-40"#),
+            "{text}"
+        );
     }
 
     #[test]

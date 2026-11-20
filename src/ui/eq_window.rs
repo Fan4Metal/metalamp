@@ -1,7 +1,7 @@
 //! The sound tuning window, opened by the player bar's button under it:
 //! the same equalizer as the settings window's Sound page (the switch,
 //! the presets, one's own presets, the sliders) and under it the
-//! enhancer (its switch and amounts two a row), each a section whose
+//! enhancer (its switch, presets and controls), each a section whose
 //! sliders fold away (kept in the settings), on a card of its own,
 //! the limiter's state beside the cross (a click switches it).
 //! Not modal: the player and its keys go on. The cross, Esc or the bar's
@@ -14,7 +14,7 @@ use egui::{Align, Layout, Pos2, Rect, RichText, pos2, vec2};
 
 use crate::audio::dsp::DspSettings;
 use crate::palette;
-use crate::settings::EqPreset;
+use crate::settings::{EnhancerPreset, EqPreset};
 
 /// The width of the content in points (the settings page's card is about
 /// as wide).
@@ -34,8 +34,10 @@ pub struct EqWindow {
     fresh: bool,
     /// The button's bottom right corner.
     anchor: Pos2,
-    /// The name a preset is being saved under, while one is.
+    /// The name an equalizer preset and an enhancer preset is being
+    /// saved under, while one is.
     naming: Option<String>,
+    enhancer_naming: Option<String>,
     /// In a window of its own (decided as it opens, and when the program's
     /// window gets too small), that window, and its height as last laid
     /// out (the content's).
@@ -67,10 +69,7 @@ fn limiter_state(ui: &mut egui::Ui, dsp: &mut DspSettings) {
     );
     let forced = dsp.limiter_required();
     let (state, color) = if forced {
-        (
-            tr!("on (enhancer)", "вкл. (улучшение)"),
-            palette::accent(),
-        )
+        (tr!("on (enhancer)", "вкл. (улучшение)"), palette::accent())
     } else if dsp.limiter {
         (tr!("on", "вкл."), palette::accent())
     } else {
@@ -88,7 +87,10 @@ fn limiter_state(ui: &mut egui::Ui, dsp: &mut DspSettings) {
         .on_hover_text(format!(
             "{}\n\n{}",
             crate::ui::settings::limiter_hint(),
-            tr!("A click turns it on or off.", "Щелчок включает или выключает его.")
+            tr!(
+                "A click turns it on or off.",
+                "Щелчок включает или выключает его."
+            )
         ));
     if response.clicked() {
         dsp.limiter = !dsp.limiter;
@@ -119,15 +121,16 @@ impl EqWindow {
         self.fresh = self.open;
         self.anchor = button.right_bottom();
         self.naming = None;
+        self.enhancer_naming = None;
     }
 
-    /// Draws the window while it is open, editing `dsp` and `presets` in
+    /// Draws the window while it is open, editing `dsp` and the presets in
     /// place; `keys`: no modal over it takes Esc.
     pub fn show(
         &mut self,
         ctx: &egui::Context,
         dsp: &mut DspSettings,
-        presets: &mut Vec<EqPreset>,
+        (presets, own): (&mut Vec<EqPreset>, &mut Vec<EnhancerPreset>),
         keys: bool,
         keymap: &crate::keymap::Keymap,
         owner: Option<isize>,
@@ -151,7 +154,14 @@ impl EqWindow {
             self.window.reset();
         }
         if self.windowed {
-            if self.window(ctx, dsp, presets, keys.then_some(keymap), owner, fresh) {
+            if self.window(
+                ctx,
+                dsp,
+                (presets, own),
+                keys.then_some(keymap),
+                owner,
+                fresh,
+            ) {
                 self.open = false;
             }
             return;
@@ -177,7 +187,7 @@ impl EqWindow {
         }
         let mut close = false;
         let shown = window.show(ctx, |ui| {
-            close |= self.content(ui, dsp, presets);
+            close |= self.content(ui, dsp, presets, own);
         });
         if let Some(shown) = shown {
             self.height = shown.response.rect.height();
@@ -186,6 +196,7 @@ impl EqWindow {
         if !fresh
             && keys
             && self.naming.is_none()
+            && self.enhancer_naming.is_none()
             && !egui::Popup::is_any_open(ctx)
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
@@ -203,6 +214,7 @@ impl EqWindow {
         ui: &mut egui::Ui,
         dsp: &mut DspSettings,
         presets: &mut Vec<EqPreset>,
+        own: &mut Vec<EnhancerPreset>,
     ) -> bool {
         let mut close = false;
         crate::ui::settings::round_widgets(ui);
@@ -231,7 +243,13 @@ impl EqWindow {
         ui.add_space(6.0);
         crate::ui::settings::divider(ui);
         ui.add_space(10.0);
-        crate::ui::settings::enhancer(ui, dsp, &mut self.enhancer_open);
+        crate::ui::settings::enhancer(
+            ui,
+            dsp,
+            own,
+            &mut self.enhancer_naming,
+            Some(&mut self.enhancer_open),
+        );
         close
     }
 
@@ -243,7 +261,7 @@ impl EqWindow {
         &mut self,
         ctx: &egui::Context,
         dsp: &mut DspSettings,
-        presets: &mut Vec<EqPreset>,
+        (presets, own): (&mut Vec<EqPreset>, &mut Vec<EnhancerPreset>),
         keymap: Option<&crate::keymap::Keymap>,
         owner: Option<isize>,
         fresh: bool,
@@ -274,6 +292,7 @@ impl EqWindow {
             close |= ctx.input(|i| i.viewport().close_requested());
             if !fresh
                 && self.naming.is_none()
+                && self.enhancer_naming.is_none()
                 && !egui::Popup::is_any_open(&ctx)
                 && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
             {
@@ -301,7 +320,7 @@ impl EqWindow {
                         ui.id().with("eq_drag"),
                         egui::Sense::hover(),
                     );
-                    let content = ui.scope(|ui| self.content(ui, dsp, presets));
+                    let content = ui.scope(|ui| self.content(ui, dsp, presets, own));
                     close |= content.inner;
                     // As tall as the content (the name row comes and goes).
                     let height = content.response.rect.height() + 2.0 * margin;

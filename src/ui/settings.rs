@@ -11,15 +11,15 @@ use egui::{
 
 use crate::palette::ColourText;
 
-use crate::audio::dsp::{DspSettings, Enhancement, eq};
+use crate::audio::dsp::{DspSettings, Enhancement, enhancer, eq};
 use crate::audio::output::Device;
 use crate::i18n::LangChoice;
 use crate::keymap::{Action, Chord, Group, Keymap};
 use crate::palette;
 use crate::palette::{Accent, Palette, Theme, Tint, VisualColours};
 use crate::settings::{
-    ApeTag, BarLayout, CoverPriority, EqPreset, Id3Version, Id3v1Tag, MediaKeys, Settings, Visual,
-    WindowLayout,
+    ApeTag, BarLayout, CoverPriority, EnhancerPreset, EqPreset, Id3Version, Id3v1Tag, MediaKeys,
+    Settings, Visual, WindowLayout,
 };
 use crate::ui::icons::{self, Icon};
 use crate::update::{Status, Updates, release_url, version_of};
@@ -102,8 +102,9 @@ pub struct SettingsDialog {
     page: Page,
     /// The output devices, listed when the window opens.
     devices: Vec<Device>,
-    /// The name an equalizer preset is being saved under, while one is.
-    naming: Option<String>,
+    /// The name an equalizer preset and an enhancer preset is being saved
+    /// under, while one is.
+    naming: (Option<String>, Option<String>),
     /// A scroll offset to put the page at once (`from_env`).
     scroll_to: Option<f32>,
     /// A key being chosen on the Keys page: the action, and which of its
@@ -319,7 +320,7 @@ impl SettingsDialog {
             .clicked()
         {
             reset(settings, updates);
-            self.naming = None;
+            self.naming = (None, None);
             self.capture = None;
             self.taken = None;
         }
@@ -1355,7 +1356,12 @@ fn tag_rows(ui: &mut Ui, settings: &mut Settings) {
     );
 }
 
-fn sound(ui: &mut Ui, settings: &mut Settings, devices: &[Device], naming: &mut Option<String>) {
+fn sound(
+    ui: &mut Ui,
+    settings: &mut Settings,
+    devices: &[Device],
+    naming: &mut (Option<String>, Option<String>),
+) {
     section(ui, tr!("Output", "Вывод"), |ui| {
         row(
             ui,
@@ -1414,7 +1420,8 @@ fn sound(ui: &mut Ui, settings: &mut Settings, devices: &[Device], naming: &mut 
         ui,
         &mut settings.dsp,
         &mut settings.eq_presets,
-        naming,
+        &mut naming.0,
+        (&mut settings.enhancer_presets, &mut naming.1),
         (
             &mut settings.crossfade,
             &mut settings.crossfade_in_albums,
@@ -1430,6 +1437,7 @@ fn processing(
     dsp: &mut DspSettings,
     presets: &mut Vec<EqPreset>,
     naming: &mut Option<String>,
+    (enhancer_presets, enhancer_naming): (&mut Vec<EnhancerPreset>, &mut Option<String>),
     crossfade: (&mut u8, &mut bool, &mut f32, &mut bool),
 ) {
     section(ui, tr!("Loudness", "Громкость"), |ui| {
@@ -1558,19 +1566,8 @@ fn processing(
         },
     );
     section(ui, tr!("Enhancer", "Улучшение звука"), |ui| {
-        row(
-            ui,
-            tr!("Enhancer", "Улучшение звука"),
-            Some(enhancer_hint()),
-            50.0 + TOOL,
-            |ui| {
-                switch(ui, &mut dsp.enhancer);
-                standard_button(ui, &mut dsp.enhancement);
-            },
-        );
-        divider(ui);
         ui.add_space(8.0);
-        enhancer_grid(ui, &mut dsp.enhancement, dsp.enhancer);
+        enhancer(ui, dsp, enhancer_presets, enhancer_naming, None);
     });
 }
 
@@ -1581,20 +1578,6 @@ fn enhancer_hint() -> &'static str {
         "Raises quiet sound band by band and gives it character: a multiband automatic gain control modelled on recordings of a well-known enhancer, with its controls. The standard settings are those it was modelled at. The limiter works with it.",
         "Поднимает тихий звук по полосам и придаёт ему характер: многополосная автоматическая регулировка усиления, смоделированная по записям известного улучшителя звука, с его регуляторами. Стандартные настройки — те, на которых он моделировался. Вместе с ним работает лимитер."
     )
-}
-
-/// The round arrow putting every control back to the standard settings.
-fn standard_button(ui: &mut Ui, e: &mut Enhancement) {
-    if tool(
-        ui,
-        tr!("The standard settings", "Стандартные настройки"),
-        *e != Enhancement::STANDARD,
-        Icon::RotateLeft,
-    )
-    .clicked()
-    {
-        *e = Enhancement::STANDARD;
-    }
 }
 
 /// One of the enhancer's controls: its name, what it does, and its value
@@ -1735,84 +1718,215 @@ fn enhancer_controls() -> [Vec<Control>; 3] {
     ]
 }
 
-/// The gap between the columns of the enhancer's grid.
-const ENHANCER_GAP: f32 = 22.0;
+/// The gap between the columns of the enhancer's grid, and between its
+/// rows.
+const ENHANCER_GAP: f32 = 28.0;
+const ENHANCER_ROW_GAP: f32 = 14.0;
 
-/// The enhancer in the equalizer's window (`ui::eq_window`), a section
-/// that folds (`open`, kept in the settings), laid out as the equalizer's
-/// head over it, so the two switches and the two pairs of tools stand in
-/// columns: the switch and the name on the left (a click on the name folds
-/// or unfolds it), on the right, folded, what differs from the standard
-/// settings, a round arrow back to them under the equalizer's bin and the
-/// fold's chevron (`fold_button`) under its chevron; unfolded, the
-/// controls in rows (`enhancer_grid`), greyed while it is off.
-pub(crate) fn enhancer(ui: &mut Ui, dsp: &mut DspSettings, open: &mut bool) {
+/// The enhancer: its head (`enhancer_head`) and its controls in rows
+/// (`enhancer_grid`), greyed while it is off. With `open` (the sound
+/// tuning window), a section that folds as the equalizer's over it, kept
+/// in the settings: a click on its name or its chevron folds it.
+pub(crate) fn enhancer(
+    ui: &mut Ui,
+    dsp: &mut DspSettings,
+    presets: &mut Vec<EnhancerPreset>,
+    naming: &mut Option<String>,
+    open: Option<&mut bool>,
+) {
+    let Some(open) = open else {
+        enhancer_head(ui, dsp, presets, naming, None);
+        ui.add_space(12.0);
+        let base = enhancer_base(ui, &dsp.enhancement, presets);
+        enhancer_grid(ui, &mut dsp.enhancement, base, dsp.enhancer);
+        return;
+    };
     let mut fold = fold_of(ui, "eq_enhancer", *open);
     let openness = fold.openness(ui.ctx());
-    let heading = ui
-        .horizontal(|ui| {
-            // As `eq_head`: the switch, 4 points, then the name.
-            switch(ui, &mut dsp.enhancer).on_hover_text(enhancer_hint());
-            ui.add_space(4.0);
-            let mut toggled = fold_title(ui, tr!("Enhancer", "Улучшение звука")).clicked();
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                // `eq_head`'s tools end a spacing short of the edge.
-                ui.add_space(ui.spacing().item_spacing.x);
-                toggled |= fold_button(ui, openness).clicked();
-                standard_button(ui, &mut dsp.enhancement);
-                if !fold.is_open() {
-                    // What is set, so a folded section still tells it.
-                    let color = if dsp.enhancer {
-                        palette::text_weak()
-                    } else {
-                        palette::text_weak().gamma_multiply(0.6)
-                    };
-                    ui.add_space(4.0);
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(enhancer_summary(&dsp.enhancement))
-                                .size(12.5)
-                                .color(color),
-                        )
-                        .truncate(),
-                    );
-                }
-            });
-            toggled
-        })
-        .inner;
-    if heading {
+    if enhancer_head(ui, dsp, presets, naming, Some(openness)) {
         fold.toggle(ui);
     }
     *open = fold.is_open();
+    let base = enhancer_base(ui, &dsp.enhancement, presets);
     let on = dsp.enhancer;
     fold.show_body_unindented(ui, |ui| {
-        ui.add_space(8.0);
-        enhancer_grid(ui, &mut dsp.enhancement, on);
+        ui.add_space(12.0);
+        enhancer_grid(ui, &mut dsp.enhancement, base, on);
     });
 }
 
-/// "Standard", or the controls that differ from the standard settings.
-fn enhancer_summary(e: &Enhancement) -> String {
-    let standard = Enhancement::STANDARD;
-    let changed: Vec<String> = enhancer_controls()
-        .iter()
-        .flatten()
-        .filter(|c| (c.get)(e) != (c.get)(&standard))
-        .map(|c| format!("{} {}", c.title, (c.text)((c.get)(e))))
-        .collect();
-    if changed.is_empty() {
-        tr!("Standard", "Стандартные").to_owned()
-    } else {
-        changed.join(" · ")
-    }
+/// Where the preset last put at (chosen, or saved as one's own) is kept,
+/// shared by the settings window and the sound tuning window.
+fn enhancer_base_id() -> egui::Id {
+    egui::Id::new("enhancer_base")
 }
 
-/// The controls in their rows, greyed while the enhancer is off.
-fn enhancer_grid(ui: &mut Ui, e: &mut Enhancement, on: bool) {
+/// The settings the controls are told against (the value in the accent
+/// when it differs, a double click back to it): the preset they stand at,
+/// else the one last put at, else the standard settings.
+fn enhancer_base(ui: &Ui, e: &Enhancement, presets: &[EnhancerPreset]) -> Enhancement {
+    let standing = enhancer::PRESETS
+        .iter()
+        .map(|p| p.settings)
+        .chain(presets.iter().map(|p| p.settings))
+        .find(|s| s == e);
+    if let Some(s) = standing {
+        ui.data_mut(|d| d.insert_temp(enhancer_base_id(), s));
+        return s;
+    }
+    ui.data(|d| d.get_temp::<Enhancement>(enhancer_base_id()))
+        .unwrap_or(Enhancement::STANDARD)
+}
+
+/// The enhancer's switch, the built-in presets and the user's own in one
+/// list (the one the controls stand at named; "Custom" otherwise), and
+/// beside it saving the controls as one's own and deleting one's own, the
+/// name typed in a row under it: the equalizer's head (`eq_head`), so the
+/// two switches, lists and tools stand in columns. With `fold` (the
+/// section's openness, in the sound tuning window), the name follows the
+/// switch and the fold's chevron the tools; whether the name or the
+/// chevron was clicked.
+fn enhancer_head(
+    ui: &mut Ui,
+    dsp: &mut DspSettings,
+    presets: &mut Vec<EnhancerPreset>,
+    naming: &mut Option<String>,
+    fold: Option<f32>,
+) -> bool {
+    let mut toggled = false;
+    let e = dsp.enhancement;
+    // The one of mine chosen last while the controls still stand at it,
+    // else the first that does: two of the same values are two presets.
+    let same = |p: &EnhancerPreset| p.settings == e;
+    let chosen_id = egui::Id::new("enhancer_mine");
+    let mine = ui
+        .data(|d| d.get_temp::<usize>(chosen_id))
+        .filter(|&i| presets.get(i).is_some_and(same))
+        .or_else(|| presets.iter().position(same));
+    let built_in = enhancer::PRESETS.iter().find(|p| p.settings == e);
+    let mut chosen: Option<(Enhancement, Option<usize>)> = None;
+    ui.horizontal(|ui| {
+        switch(ui, &mut dsp.enhancer).on_hover_text(enhancer_hint());
+        ui.add_space(4.0);
+        if fold.is_some() {
+            toggled |= fold_title(ui, tr!("Enhancer", "Улучшение звука")).clicked();
+            ui.add_space(8.0);
+        }
+        let name = match (mine, built_in) {
+            (Some(i), _) => presets[i].name.clone(),
+            (None, Some(p)) => tr!(p.name, p.ru).to_owned(),
+            (None, None) => tr!("Custom", "Другой").to_owned(),
+        };
+        let tools = if fold.is_some() { 3.0 } else { 2.0 };
+        let width =
+            ui.available_width() - tools * TOOL - (tools + 1.0) * ui.spacing().item_spacing.x;
+        egui::ComboBox::from_id_salt("enhancer_preset")
+            .selected_text(name)
+            .width(width)
+            .show_ui(ui, |ui| {
+                for preset in enhancer::PRESETS {
+                    let on = mine.is_none() && preset.settings == e;
+                    if ui
+                        .selectable_label(on, tr!(preset.name, preset.ru))
+                        .clicked()
+                    {
+                        chosen = Some((preset.settings, None));
+                    }
+                }
+                if !presets.is_empty() {
+                    ui.separator();
+                    ui.label(
+                        RichText::new(tr!("Mine", "Мои"))
+                            .small()
+                            .color(palette::text_weak()),
+                    );
+                    for (i, p) in presets.iter().enumerate() {
+                        if ui.selectable_label(mine == Some(i), &p.name).clicked() {
+                            chosen = Some((p.settings.clamped(), Some(i)));
+                        }
+                    }
+                }
+            });
+        if tool(
+            ui,
+            tr!("Save as my own…", "Сохранить как свой…"),
+            naming.is_none(),
+            Icon::Plus,
+        )
+        .clicked()
+        {
+            *naming = Some(mine.map(|i| presets[i].name.clone()).unwrap_or_default());
+        }
+        if tool(
+            ui,
+            tr!("Delete this preset of mine", "Удалить этот свой пресет"),
+            mine.is_some(),
+            Icon::Delete,
+        )
+        .clicked()
+            && let Some(i) = mine
+        {
+            presets.remove(i);
+            ui.data_mut(|d| d.remove::<usize>(chosen_id));
+        }
+        if let Some(openness) = fold {
+            toggled |= fold_button(ui, openness).clicked();
+        }
+    });
+    if let Some((settings, i)) = chosen {
+        dsp.enhancement = settings;
+        dsp.enhancer = true;
+        ui.data_mut(|d| {
+            d.insert_temp(enhancer_base_id(), settings);
+            if let Some(i) = i {
+                d.insert_temp(chosen_id, i);
+            } else {
+                d.remove::<usize>(chosen_id);
+            }
+        });
+    }
+    // A name in any case is the same name ("Rock" is "rock").
+    let same_name = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
+    let full = presets.len() >= MAX_OWN_PRESETS;
+    let names: Vec<String> = presets.iter().map(|p| p.name.clone()).collect();
+    if let Some(name) = name_row(
+        ui,
+        naming,
+        tr!("My enhancer", "Моё улучшение"),
+        |n| full && !names.iter().any(|o| same_name(o, n)),
+    ) {
+        let name: String = name.chars().take(MAX_NAME).collect();
+        let settings = dsp.enhancement;
+        let at = match presets.iter().position(|p| same_name(&p.name, &name)) {
+            Some(i) => {
+                presets[i] = EnhancerPreset { name, settings };
+                i
+            }
+            None => {
+                // A list made longer by hand keeps only the newest.
+                while presets.len() >= MAX_OWN_PRESETS {
+                    presets.remove(0);
+                }
+                presets.push(EnhancerPreset { name, settings });
+                presets.len() - 1
+            }
+        };
+        ui.data_mut(|d| {
+            d.insert_temp(chosen_id, at);
+            d.insert_temp(enhancer_base_id(), settings);
+        });
+    }
+    toggled
+}
+
+/// The controls in their rows, each told against `base`, greyed while the
+/// enhancer is off.
+fn enhancer_grid(ui: &mut Ui, e: &mut Enhancement, base: Enhancement, on: bool) {
     ui.add_enabled_ui(on, |ui| {
         let width = ui.available_width();
-        for controls in enhancer_controls() {
+        let rows = enhancer_controls();
+        let last = rows.len() - 1;
+        for (r, controls) in rows.into_iter().enumerate() {
             let n = controls.len() as f32;
             let cell = ((width - ENHANCER_GAP * (n - 1.0)) / n).floor();
             // Top-aligned: a centred row put the second cell lower.
@@ -1824,29 +1938,30 @@ fn enhancer_grid(ui: &mut Ui, e: &mut Enhancement, on: bool) {
                         Layout::top_down(Align::Min),
                         |ui| {
                             ui.set_width(cell);
-                            enhancer_cell(ui, control, e, on);
+                            enhancer_cell(ui, control, e, base, on);
                         },
                     );
                 }
             });
-            ui.add_space(6.0);
+            if r < last {
+                ui.add_space(ENHANCER_ROW_GAP);
+            }
         }
     });
 }
 
 /// One control in the enhancer's grid: its name (the hint as its tip) and
-/// its value (in the accent when not the standard one) over a slider of
-/// the cell's width; a double click on the slider puts the standard value
-/// back.
-fn enhancer_cell(ui: &mut Ui, c: &Control, e: &mut Enhancement, on: bool) {
+/// its value (in the accent when not `base`'s) over a slider of the
+/// cell's width; a double click on the slider puts `base`'s value back.
+fn enhancer_cell(ui: &mut Ui, c: &Control, e: &mut Enhancement, base: Enhancement, on: bool) {
     let width = ui.available_width();
-    let standard = (c.get)(&Enhancement::STANDARD);
+    let standard = (c.get)(&base);
     let tip = format!(
         "{}\n\n{}",
         c.hint,
         tr!(
-            "A double click puts the standard value back.",
-            "Двойной щелчок возвращает стандартное значение."
+            "A double click puts the preset's value back.",
+            "Двойной щелчок возвращает значение пресета."
         )
     );
     let mut value = (c.get)(e);
@@ -1870,6 +1985,7 @@ fn enhancer_cell(ui: &mut Ui, c: &Control, e: &mut Enhancement, on: bool) {
             );
         });
     });
+    ui.add_space(4.0);
     ui.spacing_mut().slider_width = width;
     let response = ui
         .add(
@@ -3187,6 +3303,8 @@ mod eq_tests {
         let saved = dsp.clone();
         let mut own = Vec::new();
         let mut naming = None;
+        let mut mine = Vec::new();
+        let mut enhancer_naming = None;
         let input = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0))),
             ..Default::default()
@@ -3206,7 +3324,13 @@ mod eq_tests {
             let mut out = ctx.run_ui(input.clone(), |ui| {
                 ui.set_width(560.0);
                 equalizer(ui, &mut dsp, &mut own, &mut naming, Some(&mut bands_open));
-                enhancer(ui, &mut dsp, &mut enhancer_open);
+                enhancer(
+                    ui,
+                    &mut dsp,
+                    &mut mine,
+                    &mut enhancer_naming,
+                    Some(&mut enhancer_open),
+                );
             });
             out.textures_delta.clear();
             assert_eq!((bands_open, enhancer_open), (open, open));

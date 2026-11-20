@@ -99,6 +99,58 @@ impl Default for Enhancement {
     }
 }
 
+/// A built-in preset: its name in English and in Russian, its settings.
+pub struct Preset {
+    pub name: &'static str,
+    pub ru: &'static str,
+    pub settings: Enhancement,
+}
+
+/// A preset's settings: drive, the types, the levels, fidelity, ambience.
+const fn preset(
+    name: &'static str,
+    ru: &'static str,
+    (drive, bass_type, treble_type): (u8, i8, i8),
+    [bass, mid, treble]: [f32; 3],
+    (fidelity, ambience): (f32, f32),
+) -> Preset {
+    Preset {
+        name,
+        ru,
+        settings: Enhancement {
+            drive,
+            bass_type,
+            treble_type,
+            bass,
+            mid,
+            treble,
+            fidelity,
+            ambience,
+        },
+    }
+}
+
+/// The built-in presets: the standard settings, then those the modelled
+/// enhancer comes with (its Default, the settings at their middles, named
+/// Neutral here), as its window shows them.
+#[rustfmt::skip]
+pub const PRESETS: &[Preset] = &[
+    Preset {
+        name: "Standard",
+        ru: "Стандартный",
+        settings: Enhancement::STANDARD,
+    },
+    preset("Neutral", "Нейтральный", (100, 0, 0), [0.0, 0.0, 0.0], (0.0, 0.0)),
+    preset("Acoustic", "Акустика", (65, -35, 65), [-2.6, 1.2, -1.4], (8.5, 6.0)),
+    preset("Classical", "Классика", (60, -50, 55), [-1.8, 0.0, 0.0], (7.0, 7.5)),
+    preset("Electronic", "Электроника", (65, -90, -60), [0.0, 0.0, 0.0], (4.5, 1.0)),
+    preset("Jazz", "Джаз", (60, -35, -30), [-1.2, 0.0, -1.2], (3.5, 7.0)),
+    preset("New Age", "Нью-эйдж", (85, -80, 55), [-2.6, -0.8, -0.8], (2.5, 8.5)),
+    preset("Pop", "Поп", (85, 45, 60), [0.0, 0.0, -1.2], (4.0, 2.5)),
+    preset("Reggae", "Регги", (100, 55, -100), [1.4, 1.0, 0.0], (6.5, 0.0)),
+    preset("Rock", "Рок", (100, 55, -35), [0.0, 0.0, 0.6], (4.5, 1.5)),
+];
+
 /// The detectors' frequency regions: lower and upper edges in Hz, and
 /// what each of the six detectors hears of each region per unit of mean
 /// square signal.
@@ -639,6 +691,18 @@ mod tests {
                 .iter()
                 .all(|s| (s[0] + 4. * s[1]).abs() < 1e-6)
         );
+    }
+
+    #[test]
+    fn the_presets_are_within_range_and_apart() {
+        assert_eq!(PRESETS[0].settings, Enhancement::STANDARD);
+        for (i, p) in PRESETS.iter().enumerate() {
+            assert_eq!(p.settings.clamped(), p.settings, "{}", p.name);
+            for q in &PRESETS[i + 1..] {
+                assert_ne!(p.settings, q.settings, "{} {}", p.name, q.name);
+                assert_ne!(p.name, q.name);
+            }
+        }
     }
 
     #[test]
