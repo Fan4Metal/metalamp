@@ -236,6 +236,9 @@ const OUTPUT_TRIM_DB: f32 = -6.0;
 /// The share of the way a changed control's curve and drive go per hop
 /// (a quarter window): about 25 ms at 44.1 and 48 kHz.
 const GLIDE: f32 = 0.25;
+/// The drive at which a stage's detectors hear the stages before it (the
+/// Loud settings', those the law was recorded at).
+const HEAR_DRIVE: f32 = 1.35;
 
 /// Piecewise-linear interpolation of a value given at increasing `xs`.
 fn interp(x: f32, xs: &[f32], ys: &[f32]) -> f32 {
@@ -532,7 +535,13 @@ impl Enhancer {
             *now += GLIDE * (to - *now);
         }
         let d = self.drive_now;
-        // Each stage hears the sound with the stages before it applied.
+        // Each stage hears the sound with the stages before it applied, at
+        // the drive the law was recorded at, whatever the drive set: the
+        // detectors do not follow it, so the drive scales the whole gain in
+        // dB (at quiet moments on music the recorded player at drive 35, 70
+        // and 105 gave 74, 48 and 22 % less than at 135, as a straight line
+        // to drive 0; hearing at the drive set, the later stages made up
+        // part of the loss).
         let mut heard = power;
         let mut linear = [[1f32; K]; 3];
         for (s, lin) in self.law.stages.iter_mut().zip(&mut linear) {
@@ -550,7 +559,7 @@ impl Enhancer {
                 };
                 s.gain[k] += a * (target - s.gain[k]);
                 lin[k] = 10f32.powf(s.gain[k] / 20.);
-                heard[k] *= 10f32.powf(d * (s.gain[k] + s.own_base[k]) / 10.);
+                heard[k] *= 10f32.powf(HEAR_DRIVE * (s.gain[k] + s.own_base[k]) / 10.);
             }
         }
         let on = self.law.stages.map(|s| s.on);
@@ -636,11 +645,11 @@ mod tests {
     }
 
     #[test]
-    fn drive_scales_the_gain_of_quiet_sound() {
-        // Quiet, every detector is at its most: the gain is drive times
-        // one curve (louder, the stages compress what drive added, as the
-        // recorded player's did).
-        let at = |drive| {
+    fn drive_scales_the_gain() {
+        // The detectors do not follow the drive: the gain in dB is drive
+        // times what they make of the sound, quiet or loud (the stages
+        // compress loud sound whatever the drive).
+        let at = |drive, level| {
             gain_db(
                 &Enhancement {
                     drive,
@@ -650,11 +659,13 @@ mod tests {
                     ..Enhancement::LOUD
                 },
                 1000.,
-                -50.,
+                level,
             ) - f64::from(OUTPUT_TRIM_DB)
         };
-        let (half, full) = (at(70), at(140));
-        assert!(half > 3. && (full / half - 2.).abs() < 0.1, "{half} {full}");
+        for level in [-50., -20.] {
+            let (half, full) = (at(70, level), at(140, level));
+            assert!(half > 1. && (full / half - 2.).abs() < 0.05, "{level}: {half} {full}");
+        }
     }
 
     #[test]
