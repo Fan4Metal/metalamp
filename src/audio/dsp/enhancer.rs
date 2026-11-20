@@ -131,17 +131,17 @@ const fn preset(
     }
 }
 
-/// The built-in presets: Loud, the default, then those the modelled
-/// enhancer comes with (its Default, the settings at their middles, named
-/// Neutral here), as its window shows them.
+/// The built-in presets: Neutral (the modelled enhancer's Default, the
+/// settings at their middles), Loud (the default here), then the others
+/// the modelled enhancer comes with, as its window shows them.
 #[rustfmt::skip]
 pub const PRESETS: &[Preset] = &[
+    preset("Neutral", "Нейтральный", (100, 0, 0), [0.0, 0.0, 0.0], (0.0, 0.0)),
     Preset {
         name: "Loud",
         ru: "Громкий",
         settings: Enhancement::LOUD,
     },
-    preset("Neutral", "Нейтральный", (100, 0, 0), [0.0, 0.0, 0.0], (0.0, 0.0)),
     preset("Acoustic", "Акустика", (65, -35, 65), [-2.6, 1.2, -1.4], (8.5, 6.0)),
     preset("Classical", "Классика", (60, -50, 55), [-1.8, 0.0, 0.0], (7.0, 7.5)),
     preset("Electronic", "Электроника", (65, -90, -60), [0.0, 0.0, 0.0], (4.5, 1.0)),
@@ -696,7 +696,7 @@ mod tests {
 
     #[test]
     fn the_presets_are_within_range_and_apart() {
-        assert_eq!(PRESETS[0].settings, Enhancement::LOUD);
+        assert_eq!(PRESETS[1].settings, Enhancement::LOUD);
         for (i, p) in PRESETS.iter().enumerate() {
             assert_eq!(p.settings.clamped(), p.settings, "{}", p.name);
             for q in &PRESETS[i + 1..] {
