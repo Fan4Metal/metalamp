@@ -45,6 +45,9 @@ pub enum Cmd {
     Open,
     AddFolder,
     Rescan,
+    /// The file in Explorer: the playlist's selection when it has the
+    /// keys, else the tracks' table's, else the track heard (as `Info`).
+    ShowInFolder,
     Info,
     EditTags,
     /// The library's album (true) or artist (false) of a track: the
@@ -416,7 +419,8 @@ actions! {
     Search "search" Library Cmd::Search, [Chord::ctrl(Key::F)];
     Open "open" Library Cmd::Open, [Chord::ctrl(Key::O)];
     AddFolder "add_folder" Library Cmd::AddFolder, [Chord::of(Press::Key(Key::O), true, false, true)];
-    Rescan "rescan" Library Cmd::Rescan, [Chord::ctrl(Key::R)];
+    Rescan "rescan" Library Cmd::Rescan, [];
+    ShowInFolder "show_in_folder" Library Cmd::ShowInFolder, [Chord::ctrl(Key::R)];
     Info "info" Library Cmd::Info, [Chord::key(Key::I), Chord::alt(Key::Num3)];
     EditTags "edit_tags" Library Cmd::EditTags, [Chord::ctrl(Key::E)];
     GoToAlbum "go_to_album" Library Cmd::GoTo(true), [Chord::key(Key::G)];
@@ -496,6 +500,10 @@ impl Action {
             ),
             Action::AddFolder => tr!("Add a folder to the library", "Добавить папку в библиотеку"),
             Action::Rescan => tr!("Read the folders again", "Перечитать папки"),
+            Action::ShowInFolder => tr!(
+                "Show the file in Explorer (the one selected, else the one heard)",
+                "Показать файл в проводнике (выбранный, иначе звучащий)"
+            ),
             Action::Info => tr!("File info", "Сведения о файле"),
             Action::EditTags => tr!("Edit tags", "Изменить теги"),
             Action::GoToAlbum => tr!(

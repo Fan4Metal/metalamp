@@ -676,7 +676,10 @@ pub fn show(
             if ui
                 .add_enabled(
                     first.is_some(),
-                    egui::Button::new(tr!("Show in folder", "Показать в папке")),
+                    egui::Button::new(with_key(
+                        tr!("Show in folder", "Показать в папке"),
+                        Cmd::ShowInFolder,
+                    )),
                 )
                 .clicked()
                 && let Some(i) = first

@@ -67,7 +67,7 @@ On the first start the window offers to add a music folder: `Ctrl+Shift+O`, or *
 - **Folders**: the folders' button in the library bar lists the folders and removes one. The folders are read on a thread of their own: the tags of each file (title, artist, album artist, album, year, track and disc numbers, genre, length, bit rate) and, where a tag lacks something, what the folders say in the usual layout `Artist\(Year) Album\NN - Title.mp3`. The library fills as it is read; a first reading of 4942 MP3 files on a hard disk took about 50 seconds.
 - **Index**: the result is kept in an index, so later starts show the library at once and read again only the files whose size or time changed.
 - **Watching**: the folders are watched while the program runs: files added, changed or removed are taken in about three seconds after the folders come to rest (a copied album is read once, at the end).
-- **Reading again**: `Ctrl+R` or the bar's button reads the folders again by hand, for example after a disk is plugged in. **Read all the tags again** in the folders' menu reads every file, also those whose size and time did not change (a tagger may keep the files' time).
+- **Reading again**: the bar's button reads the folders again by hand (a key can be given to it on the settings' Keyboard shortcuts page), for example after a disk is plugged in. **Read all the tags again** in the folders' menu reads every file, also those whose size and time did not change (a tagger may keep the files' time).
 
 </details>
 
@@ -370,7 +370,7 @@ The keys below are the defaults; those of the player's actions can be changed in
 | `Ctrl+1` … `Ctrl+9` | The whole library (`1`) or one of its views, in the order of the views' menu |
 | `Ctrl+O` | Open files |
 | `Ctrl+Shift+O` | Add a music folder |
-| `Ctrl+R` | Read the library's folders again |
+| `Ctrl+R` | Show the selected file in Explorer (else the one playing) |
 | `Alt+E` | Show or hide the playlist |
 | `I`, `Alt+3` | File info of the selected track (else of the one playing) |
 | `Ctrl+E` | Edit the tags of the selected tracks (in the playlist when it was clicked last) |

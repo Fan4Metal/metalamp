@@ -2354,7 +2354,10 @@ fn context_menu(
             item(
                 ui,
                 MenuChoice::ShowInFolder,
-                tr!("Show in folder", "Показать в папке"),
+                &with_key(
+                    tr!("Show in folder", "Показать в папке"),
+                    Cmd::ShowInFolder,
+                ),
             );
             if extras.contains(&MenuChoice::EditTags) {
                 // An album's: its tracks at once, which Ctrl+E (the

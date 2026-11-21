@@ -331,7 +331,7 @@ impl App {
         }
     }
 
-    /// Scan the library's folders again (Ctrl+R, a folder added or removed),
+    /// Scan the library's folders again (the bar's button, a folder added or removed),
     /// keeping the tags of unchanged files. A scan under way is dropped.
     pub(crate) fn rescan(&mut self) {
         self.start_scan(false);
@@ -1016,6 +1016,11 @@ impl App {
             Cmd::Open => self.open_files(ctx),
             Cmd::AddFolder => self.pick_folder(ctx),
             Cmd::Rescan => self.rescan(),
+            Cmd::ShowInFolder => {
+                if let Some(path) = self.info_path() {
+                    win::show_in_folder(&path);
+                }
+            }
             Cmd::Info => self.info_request = self.info_path(),
             // The selection of the playlist when it has the keys, else of
             // the tracks' table.
