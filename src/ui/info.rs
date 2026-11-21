@@ -2318,7 +2318,7 @@ fn genre_menu(ui: &mut Ui, f: &mut Field, library: &[String]) {
                                 .color(palette::text_weak()),
                         );
                         for g in list {
-                            let current = g.eq_ignore_ascii_case(value);
+                            let current = g.to_lowercase() == value.to_lowercase();
                             if ui.selectable_label(current, g).clicked() {
                                 chosen = Some(g.to_owned());
                             }
@@ -2347,14 +2347,15 @@ fn genre_lists<'a>(
 ) -> (Vec<&'a str>, Vec<&'static str>) {
     let common = crate::library::genres::common_besides(library);
     let ours: Vec<&str> = library.iter().map(String::as_str).collect();
+    // Any case, Cyrillic too (the library's genres are grouped so).
+    let typed = value.to_lowercase();
     let known = ours
         .iter()
         .chain(&common)
-        .any(|g| g.eq_ignore_ascii_case(value));
+        .any(|g| g.to_lowercase() == typed);
     if !touched || known || value.is_empty() {
         return (ours, common);
     }
-    let typed = value.to_lowercase();
     let has = |g: &&str| g.to_lowercase().contains(&typed);
     let narrowed = (
         ours.iter().copied().filter(has).collect::<Vec<_>>(),
@@ -3412,6 +3413,10 @@ mod tests {
         let (ours, usual) = genre_lists("zzz", true, &library);
         assert_eq!(ours.len(), 2);
         assert!(usual.len() > 100);
+        // A Cyrillic genre in another case is one of them.
+        let library = vec!["Русский рок".to_owned(), "Шансон".to_owned()];
+        let (ours, _) = genre_lists("русский РОК", true, &library);
+        assert_eq!(ours, ["Русский рок", "Шансон"]);
     }
 
     /// The genre's field and its button in a modal, as `main_cell` lays
