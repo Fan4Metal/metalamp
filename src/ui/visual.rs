@@ -1366,6 +1366,57 @@ mod tests {
         (x >> 8) as f32 / (1 << 24) as f32 * 2.0 - 1.0
     }
 
+    /// Every visualization fed music, paused and stopped in displays from a
+    /// point to a wide window's, at a low rate and the usual one, painted
+    /// and tessellated: nothing panics (a display squeezed by the narrow
+    /// bar, the mini player's least window, a strip being resized).
+    #[test]
+    fn every_visualization_takes_any_size() {
+        use std::time::Duration;
+        let sizes = [
+            Vec2::new(1.0, 1.0),
+            Vec2::new(7.0, 3.0),
+            Vec2::new(40.0, 12.0),
+            Vec2::new(176.0, 58.0),
+            Vec2::new(30.0, 300.0),
+            Vec2::new(1600.0, 160.0),
+        ];
+        const FRAMES: usize = 36;
+        let ctx = egui::Context::default();
+        for rate in [8000u32, 48_000] {
+            let step = rate as usize / 50;
+            // Playing for 20 frames, then paused (the same frames), then
+            // stopped (none).
+            let sound: Vec<f32> = (0..FETCH + 20 * step)
+                .map(|i| music(i * 48_000 / rate as usize))
+                .collect();
+            for visual in Visual::ALL {
+                for size in sizes {
+                    let rect = Rect::from_min_size(pos2(5.0, 5.0), size);
+                    let mut v = Visualizer::new();
+                    for frame in 0..FRAMES {
+                        let end = FETCH + frame.min(20) * step;
+                        let s = &sound[end - FETCH..end];
+                        let heard = (frame < 28).then_some((
+                            s,
+                            Heard {
+                                rate,
+                                end: end as u64,
+                            },
+                        ));
+                        v.last = Instant::now() - Duration::from_millis(20);
+                        v.feed(visual, heard, heard.map(|h| h.0), Some(size));
+                        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                            v.paint(ui.painter(), rect);
+                        });
+                        out.textures_delta.clear();
+                        ctx.tessellate(out.shapes, out.pixels_per_point);
+                    }
+                }
+            }
+        }
+    }
+
     /// Frames of a visualization fed `music`, drawn by hand into a PNG
     /// sheet to look at: `METALAMP_FRAMES=<file.png>
     /// METALAMP_VISUAL=<settings name> cargo test --release visual_frames --
