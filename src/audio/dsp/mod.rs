@@ -3,10 +3,10 @@
 //! the ten-band equalizer, the enhancer, the balance and mono
 //! (`channels.rs`, on whether the rest is or not), and a look-ahead
 //! limiter after them whenever any of the first three is on, so nothing
-//! clips (unless `limiter` is
-//! turned off: then what goes past full scale is clipped by Windows, as in
-//! the players of old, and a raised preamp is heard; the enhancer always
-//! keeps it). `DspSettings` is
+//! clips (unless its switch in effect is off, `limiter_enabled`: then what
+//! goes past full scale is clipped by Windows, as in the players of old,
+//! and a raised preamp is heard; while the enhancer is on the switch is
+//! `enhancer_limiter`, off by default). `DspSettings` is
 //! what the settings window edits (`settings.dsp`); the engine gets a
 //! copy with `Cmd::Dsp` and keeps the filters' state across changes.
 //! Dry and processed sound share a fixed delay, including in bypass:
@@ -455,6 +455,43 @@ mod tests {
         let peak = s.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
         assert!(peak <= db_to_gain(CEILING_DB) + 1e-6, "{peak}");
         assert_eq!(s[s.len() - 1], 0.5);
+    }
+
+    /// Every stage on, at the low rates of MPEG-2.5 and audiobooks and
+    /// the high ones, mono to 5.1: nothing panics, the sound stays finite.
+    #[test]
+    fn every_stage_runs_at_any_rate_and_channel_count() {
+        let settings = DspSettings {
+            normalize: true,
+            eq: true,
+            preamp: 3.0,
+            bands: [6.0, -6.0, 3.0, 0.0, 12.0, -12.0, 6.0, 6.0, 12.0, 12.0],
+            enhancer: true,
+            enhancer_limiter: true,
+            balance: 30,
+            mono: true,
+            ..Default::default()
+        };
+        for rate in [8000, 11025, 12000, 16000, 22050, 32000, 44100, 88200, 176400, 384000] {
+            for channels in [1u16, 2, 6] {
+                let mut c = Chain::new(rate, channels, &settings);
+                c.begin_track(2.0);
+                let n = rate as usize / 2;
+                let mut s: Vec<f32> = (0..n)
+                    .flat_map(|i| {
+                        let x = 0.8 * (i as f32 * 0.37).sin() + 0.1 * (i as f32 * 0.011).sin();
+                        std::iter::repeat_n(x, usize::from(channels))
+                    })
+                    .collect();
+                for part in s.chunks_mut(usize::from(channels) * 441) {
+                    c.process(part, 2.0);
+                }
+                assert!(
+                    s.iter().all(|x| x.is_finite() && x.abs() < 4.0),
+                    "{rate} Hz, {channels} channels"
+                );
+            }
+        }
     }
 
     /// The peak in dBFS of a stereo 1 kHz sine at `level` dBFS through a
