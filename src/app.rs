@@ -1022,6 +1022,16 @@ impl App {
                 }
             }
             Cmd::Info => self.info_request = self.info_path(),
+            Cmd::Spectrum => {
+                if let Some(path) = self.info_path() {
+                    let track = match self.library.track_at(&path) {
+                        Some(id) => self.library.tracks.get(id as usize),
+                        None => self.outside.track(&path),
+                    };
+                    let (heading, facts) = crate::ui::track_spectrum::about(&path, track);
+                    self.file_info.open_spectrum(ctx, &path, heading, facts);
+                }
+            }
             // The selection of the playlist when it has the keys, else of
             // the tracks' table.
             Cmd::EditTags => {

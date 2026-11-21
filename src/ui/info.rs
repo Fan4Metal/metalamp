@@ -771,6 +771,18 @@ impl InfoView {
         }
     }
 
+    /// `path`'s spectrum in its window (the key of "Spectrum" outside
+    /// this window), with `heading` and `facts` over it.
+    pub fn open_spectrum(
+        &mut self,
+        ctx: &egui::Context,
+        path: &Path,
+        heading: String,
+        facts: String,
+    ) {
+        self.spectrum.open(ctx, path, heading, facts);
+    }
+
     /// The text file chosen in the dialog `pick_lyrics` asked for.
     pub fn lyrics_from(&mut self, path: PathBuf) {
         self.lyrics_file = Some(path);
@@ -1169,9 +1181,14 @@ impl InfoView {
             if ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Enter)) {
                 acts.push(Act::Close);
             }
-            let chords = keys.chords(Action::EditTags);
-            if crate::keymap::take(ctx, keys, |c| chords.contains(c)).contains(&Cmd::EditTags) {
+            let mut chords = keys.chords(Action::EditTags).to_vec();
+            chords.extend_from_slice(keys.chords(Action::Spectrum));
+            let cmds = crate::keymap::take(ctx, keys, |c| chords.contains(c));
+            if cmds.contains(&Cmd::EditTags) {
                 acts.push(Act::Edit);
+            }
+            if cmds.contains(&Cmd::Spectrum) {
+                acts.push(Act::Spectrum);
             }
         }
     }
@@ -2959,9 +2976,12 @@ fn spectrum_chip(ui: &mut Ui) -> bool {
         .galley(rect.min + vec2(9.0, 4.0), galley, palette::accent());
     response
         .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(tr!(
-            "The spectrum of the whole track in a window of its own",
-            "Спектр всего трека в отдельном окне"
+        .on_hover_text(crate::keymap::with_key(
+            tr!(
+                "The spectrum of the whole track in a window of its own",
+                "Спектр всего трека в отдельном окне"
+            ),
+            Cmd::Spectrum,
         ))
         .clicked()
 }

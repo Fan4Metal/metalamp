@@ -282,6 +282,49 @@ impl SpectrumWindow {
     }
 }
 
+/// The heading and the facts of `path` as the library (or the file heard
+/// outside it) knows it: "Artist – Title", and the format, length, bit
+/// rate, sample rate, channels and size; else the file's name and format.
+pub fn about(path: &Path, track: Option<&crate::library::Track>) -> (String, String) {
+    use crate::format;
+    let name = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut facts = Vec::new();
+    if let Some(ext) = path.extension() {
+        facts.push(ext.to_string_lossy().to_uppercase());
+    }
+    let Some(t) = track else {
+        return (name, facts.join("  ·  "));
+    };
+    let title = if t.title.is_empty() {
+        name
+    } else {
+        t.title.clone()
+    };
+    let heading = match t.artist.as_str() {
+        "" => title,
+        artist => format!("{artist} – {title}"),
+    };
+    if t.duration_ms > 0 {
+        facts.push(format::time(u64::from(t.duration_ms)));
+    }
+    if t.bitrate > 0 {
+        facts.push(format::bitrate(t.bitrate));
+    }
+    if t.sample_rate > 0 {
+        facts.push(format::sample_rate(t.sample_rate));
+    }
+    if let Some(c) = format::channels(t.channels) {
+        facts.push(c);
+    }
+    if t.size > 0 {
+        facts.push(format::size(t.size));
+    }
+    (heading, facts.join("  ·  "))
+}
+
 fn viewport() -> egui::ViewportId {
     egui::ViewportId::from_hash_of("track_spectrum_window")
 }

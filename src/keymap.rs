@@ -49,6 +49,9 @@ pub enum Cmd {
     /// keys, else the tracks' table's, else the track heard (as `Info`).
     ShowInFolder,
     Info,
+    /// The track's spectrum in a window of its own: the file as `Info`
+    /// takes it, or the one the file info shows.
+    Spectrum,
     EditTags,
     /// The library's album (true) or artist (false) of a track: the
     /// playlist's selection when it has the keys, the tracks' table's
@@ -422,6 +425,7 @@ actions! {
     Rescan "rescan" Library Cmd::Rescan, [];
     ShowInFolder "show_in_folder" Library Cmd::ShowInFolder, [Chord::ctrl(Key::R)];
     Info "info" Library Cmd::Info, [Chord::key(Key::I), Chord::alt(Key::Num3)];
+    Spectrum "spectrum" Library Cmd::Spectrum, [Chord::shift(Key::I)];
     EditTags "edit_tags" Library Cmd::EditTags, [Chord::ctrl(Key::E)];
     GoToAlbum "go_to_album" Library Cmd::GoTo(true), [Chord::key(Key::G)];
     GoToArtist "go_to_artist" Library Cmd::GoTo(false), [Chord::shift(Key::G)];
@@ -505,6 +509,10 @@ impl Action {
                 "Показать файл в проводнике (выбранный, иначе звучащий)"
             ),
             Action::Info => tr!("File info", "Сведения о файле"),
+            Action::Spectrum => tr!(
+                "Spectrum of the track (the one selected, else the one heard)",
+                "Спектр трека (выбранного, иначе звучащего)"
+            ),
             Action::EditTags => tr!("Edit tags", "Изменить теги"),
             Action::GoToAlbum => tr!(
                 "Go to the track's album (the one selected, else the one heard)",
