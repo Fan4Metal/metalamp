@@ -32,6 +32,7 @@ pub mod dsp;
 pub mod mf;
 pub mod mp3gap;
 pub mod output;
+pub mod track_spectrum;
 pub mod vis;
 
 use std::collections::VecDeque;

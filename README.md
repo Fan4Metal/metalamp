@@ -148,6 +148,7 @@ A click on the cover in the player bar or a double click on the track's name the
 - **Additional**: the tag's other fields (publisher, copyright, BPM, track gain and the like), only those it has; for all the files at once, every field any of them has, with *(different)* where they differ.
 - **Lyrics** in a section of their own.
 - **File**: the file's path, the encoder delay and padding of an MP3's LAME tag and the pictures in the tag with their sizes; **Show in folder** in its heading selects the file in Explorer.
+- **Spectrum**: the chip after the audio properties opens the spectrum of the whole track in a window of its own, as Spek draws it: the time across, the frequency from 0 Hz to half the sample rate upwards, the level in colour from black at −120 dB through blue, purple, red and yellow to white at 0 dB, with their scales. The file is decoded in the background, and the picture fills from the left; the pointer over it shows the time, the frequency and the level there. A lossy file shows where its encoder cut the highs (an MP3 of 320 kbps at about 20 kHz, of 128 kbps at about 16 kHz). The window is resized at will and stays open after the file info closes; the cross or `Esc` closes it.
 
 Their text can be selected and copied.
 

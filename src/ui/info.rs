@@ -150,6 +150,9 @@ pub struct InfoView {
     cover_note: Option<(String, bool)>,
     /// The cover shown large over the window (a click on it).
     zoom: Option<Zoom>,
+    /// The track's spectrum in a window of its own (the "Spectrum" chip),
+    /// which stays open when this one closes.
+    spectrum: super::track_spectrum::SpectrumWindow,
 }
 
 /// The cover shown large: the window's preview at first, then the picture
@@ -210,6 +213,8 @@ enum Act {
     Zoom,
     /// The lyrics from a text file chosen in a dialog.
     PickLyrics,
+    /// The file's spectrum in a window of its own.
+    Spectrum,
 }
 
 #[derive(Default, PartialEq)]
@@ -752,6 +757,17 @@ impl InfoView {
             Act::Cover(act) => self.cover_act(ctx, act),
             Act::Zoom => self.zoom_in(ctx),
             Act::PickLyrics => self.pick_lyrics = true,
+            Act::Spectrum => {
+                if let Some((path, Ok(d))) = &self.shown {
+                    let top = Top::of(d);
+                    let heading = match top.artist.as_str() {
+                        "" => top.title,
+                        artist => format!("{artist} – {}", top.title),
+                    };
+                    let facts = top.chips.join("  ·  ");
+                    self.spectrum.open(ctx, path, heading, facts);
+                }
+            }
         }
     }
 
@@ -1172,6 +1188,7 @@ impl InfoView {
     /// Draws the window while it is open; whether files were written (the
     /// library reads them again).
     pub fn show(&mut self, ctx: &egui::Context, owner: Option<isize>, keys: &Keymap) -> bool {
+        self.spectrum.show(ctx, owner);
         self.poll(ctx);
         self.poll_cover(ctx);
         let written = self.poll_form(ctx);
@@ -1455,6 +1472,8 @@ struct Top {
     artist: String,
     album: String,
     chips: Vec<String>,
+    /// The "Spectrum" chip after them (one file, read).
+    spectrum: bool,
 }
 
 impl Top {
@@ -1473,6 +1492,7 @@ impl Top {
             artist: value(d, &[ItemKey::TrackArtist, ItemKey::AlbumArtist]).to_owned(),
             album: joined(&album),
             chips: chips(d),
+            spectrum: true,
         }
     }
 
@@ -1483,6 +1503,7 @@ impl Top {
             artist: String::new(),
             album: String::new(),
             chips: Vec::new(),
+            spectrum: false,
         }
     }
 
@@ -1510,6 +1531,7 @@ impl Top {
             artist: artist.to_owned(),
             album: joined(&album),
             chips: Vec::new(),
+            spectrum: false,
         }
     }
 }
@@ -1593,6 +1615,9 @@ fn hero(
                     ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
                     for text in &top.chips {
                         chip(ui, text);
+                    }
+                    if top.spectrum && spectrum_chip(ui) {
+                        acts.push(Act::Spectrum);
                     }
                 });
             }
@@ -2905,6 +2930,40 @@ fn chip(ui: &mut Ui, text: &str) {
         .rect_filled(rect, size.y / 2.0, palette::card_bg());
     ui.painter()
         .galley(rect.min + vec2(9.0, 4.0), galley, palette::text());
+}
+
+/// The chip that opens the spectrum: a chip in the accent, lit under the
+/// pointer; whether it was clicked.
+fn spectrum_chip(ui: &mut Ui) -> bool {
+    let text = tr!("Spectrum", "Спектр");
+    let galley = ui.painter().layout_no_wrap(
+        text.to_owned(),
+        egui::FontId::proportional(12.0),
+        palette::accent(),
+    );
+    let size = galley.size() + vec2(18.0, 8.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let fill = if response.hovered() {
+        palette::hover()
+    } else {
+        palette::card_bg()
+    };
+    ui.painter().rect_filled(rect, size.y / 2.0, fill);
+    ui.painter().rect_stroke(
+        rect,
+        size.y / 2.0,
+        egui::Stroke::new(1.0, palette::accent().gamma_multiply(0.6)),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter()
+        .galley(rect.min + vec2(9.0, 4.0), galley, palette::accent());
+    response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(tr!(
+            "The spectrum of the whole track in a window of its own",
+            "Спектр всего трека в отдельном окне"
+        ))
+        .clicked()
 }
 
 /// The chips of the hero: the format, the length, the bit rate, the

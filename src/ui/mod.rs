@@ -36,6 +36,7 @@ pub mod synthwave;
 pub mod test_render;
 pub mod table;
 pub mod title;
+pub mod track_spectrum;
 pub mod view_editor;
 pub mod visual;
 pub mod vortex;
