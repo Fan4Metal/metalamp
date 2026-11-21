@@ -2236,6 +2236,7 @@ impl eframe::App for App {
             id3v1: self.settings.id3v1,
             ape: self.settings.ape,
         };
+        self.file_info.set_library(&self.library);
         if self.file_info.show(&ctx, self.hwnd, &self.settings.keys) {
             // The files written: their tags read again.
             self.rescan();

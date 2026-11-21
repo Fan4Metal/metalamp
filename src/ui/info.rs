@@ -126,6 +126,10 @@ pub struct InfoView {
     /// How an MP3's tags are written: the settings', set by the app each
     /// frame.
     pub write_tags: edit::WriteTags,
+    /// The library's genres, offered by the genre's field (`set_library`),
+    /// and the library they are of.
+    genres: Vec<String>,
+    genres_of: Option<u64>,
     /// A picture is to be chosen for the cover: the app shows the dialog
     /// and hands its answer to `cover_from`.
     pub pick_cover: bool,
@@ -1158,6 +1162,15 @@ impl InfoView {
 
     /// Draws the window while it is open; whether files were written (the
     /// library reads them again).
+    /// The library whose genres the genre's field offers: they are
+    /// gathered again when it is another (each frame while editing).
+    pub fn set_library(&mut self, library: &crate::library::Library) {
+        if self.editing && self.genres_of != Some(library.generation) {
+            self.genres = crate::library::genres::of_library(library);
+            self.genres_of = Some(library.generation);
+        }
+    }
+
     pub fn show(&mut self, ctx: &egui::Context, owner: Option<isize>, keys: &Keymap) -> bool {
         self.poll(ctx);
         self.poll_cover(ctx);
@@ -1360,6 +1373,7 @@ impl InfoView {
             (h - 2.0 * 20.0 - COVER - 60.0 - footer).max(120.0)
         });
         let editing = self.editing;
+        let genres = &self.genres;
         let reading = |ui: &mut Ui| {
             ui.add_space(16.0);
             ui.horizontal(|ui| {
@@ -1372,7 +1386,9 @@ impl InfoView {
                 Some(form) => {
                     let paths = &self.paths;
                     scrolled(ui, room, |ui| {
-                        ui.add_enabled_ui(!saving, |ui| body_all(ui, form, paths, editing, acts));
+                        ui.add_enabled_ui(!saving, |ui| {
+                            body_all(ui, form, paths, editing, genres, acts)
+                        });
                     });
                 }
                 None => reading(ui),
@@ -1397,7 +1413,7 @@ impl InfoView {
                     .as_mut()
                     .filter(|f| editing && f.paths.first() == Some(&d.path));
                 scrolled(ui, room, |ui| {
-                    ui.add_enabled_ui(!saving, |ui| body_one(ui, d, form, acts));
+                    ui.add_enabled_ui(!saving, |ui| body_one(ui, d, form, genres, acts));
                 });
             }
         }
@@ -1651,7 +1667,13 @@ enum Mode<'a> {
 /// One file's sections: the main fields, the tag's other fields (only
 /// those it has), the lyrics, then the file. The names of every section
 /// in one column. Editing (`form`), the fields of `edit` in text fields.
-fn body_one(ui: &mut Ui, d: &Details, form: Option<&mut Form>, acts: &mut Vec<Act>) {
+fn body_one(
+    ui: &mut Ui,
+    d: &Details,
+    form: Option<&mut Form>,
+    genres: &[String],
+    acts: &mut Vec<Act>,
+) {
     ui.add_space(18.0);
     ui.spacing_mut().item_spacing.y = 6.0;
     let editing = form.is_some();
@@ -1712,9 +1734,9 @@ fn body_one(ui: &mut Ui, d: &Details, form: Option<&mut Form>, acts: &mut Vec<Ac
     });
     let mut form = form;
     match form.as_mut() {
-        Some(f) => main_lines(ui, width, pad, &mut Mode::Edit(f)),
+        Some(f) => main_lines(ui, width, pad, &mut Mode::Edit(f), genres),
         // Editing, until the fields are read: as shown.
-        None => main_lines(ui, width, pad, &mut Mode::Read(d)),
+        None => main_lines(ui, width, pad, &mut Mode::Read(d), genres),
     }
 
     if !more.is_empty() || !addable.is_empty() {
@@ -1813,7 +1835,14 @@ impl Other<'_> {
 /// All the files at once: the main fields (the value they share, or
 /// "(different)"), the files that could not be read, the files' names
 /// (a click shows that file).
-fn body_all(ui: &mut Ui, form: &mut Form, paths: &[PathBuf], editing: bool, acts: &mut Vec<Act>) {
+fn body_all(
+    ui: &mut Ui,
+    form: &mut Form,
+    paths: &[PathBuf],
+    editing: bool,
+    genres: &[String],
+    acts: &mut Vec<Act>,
+) {
     ui.add_space(18.0);
     ui.spacing_mut().item_spacing.y = 6.0;
     let others = form.other.iter().map(|(k, _)| field_name(*k));
@@ -1826,9 +1855,9 @@ fn body_all(ui: &mut Ui, form: &mut Form, paths: &[PathBuf], editing: bool, acts
     });
     // Until the files are read, empty boxes of the same size.
     if editing && form.state != State::Reading {
-        main_lines(ui, width, EDIT_PAD, &mut Mode::Edit(form));
+        main_lines(ui, width, EDIT_PAD, &mut Mode::Edit(form), genres);
     } else {
-        main_lines(ui, width, EDIT_PAD, &mut Mode::All(form));
+        main_lines(ui, width, EDIT_PAD, &mut Mode::All(form), genres);
         errors(ui, &form.errors);
     }
     if form.state != State::Reading {
@@ -1917,8 +1946,9 @@ fn main_name(key: edit::Key) -> String {
 /// A name beside a text field is lowered to the text in it, in points.
 const EDIT_PAD: f32 = 3.0;
 
-/// The main fields, `pad` the names lowered.
-fn main_lines(ui: &mut Ui, width: f32, pad: f32, mode: &mut Mode) {
+/// The main fields, `pad` the names lowered; `genres` the library's, for
+/// the genre's menu.
+fn main_lines(ui: &mut Ui, width: f32, pad: f32, mode: &mut Mode, genres: &[String]) {
     let second = names_width(
         ui,
         MAIN.iter().filter_map(|l| match l {
@@ -1929,25 +1959,33 @@ fn main_lines(ui: &mut Ui, width: f32, pad: f32, mode: &mut Mode) {
     for l in &MAIN {
         match l {
             Line::One(k) => line(ui, width, &main_name(*k), pad, |ui| {
-                main_cell(ui, mode, *k, None);
+                main_cell(ui, mode, *k, None, genres);
             }),
             Line::Two(first, then) => line(ui, width, &main_name(*first), pad, |ui| {
-                cell(ui, SHORT, |ui| main_cell(ui, mode, *first, Some(SHORT - 12.0)));
+                cell(ui, SHORT, |ui| {
+                    main_cell(ui, mode, *first, Some(SHORT - 12.0), genres)
+                });
                 cell(ui, second, |ui| {
                     ui.vertical(|ui| {
                         ui.add_space(pad);
                         name(ui, &main_name(*then));
                     });
                 });
-                main_cell(ui, mode, *then, None);
+                main_cell(ui, mode, *then, None, genres);
             }),
         }
     }
 }
 
 /// A main field's value, `width` points wide in a text field (else the
-/// room left).
-fn main_cell(ui: &mut Ui, mode: &mut Mode, key: edit::Key, width: Option<f32>) {
+/// room left). The genre's, while editing, has a menu of genres beside it.
+fn main_cell(
+    ui: &mut Ui,
+    mode: &mut Mode,
+    key: edit::Key,
+    width: Option<f32>,
+    genres: &[String],
+) {
     let comment = key == edit::Key::Comment;
     let rows = comment.then_some(2);
     match mode {
@@ -1962,7 +2000,13 @@ fn main_cell(ui: &mut Ui, mode: &mut Mode, key: edit::Key, width: Option<f32>) {
             let focus = key == edit::Key::Title && std::mem::take(&mut form.focus_first);
             if let Some(f) = form.main.get_mut(key as usize) {
                 let valid = !f.touched || key.takes(&f.value);
-                text_field(ui, f, comment, valid, width, focus);
+                if key == edit::Key::Genre {
+                    let room = ui.available_width() - MENU_BUTTON - ui.spacing().item_spacing.x;
+                    text_field(ui, f, comment, valid, Some(room), focus);
+                    genre_menu(ui, f, genres);
+                } else {
+                    text_field(ui, f, comment, valid, width, focus);
+                }
             }
         }
     }
@@ -2005,6 +2049,118 @@ fn text_field(
         resp.scroll_to_me(Some(egui::Align::Center));
     }
     super::take_leaving_key(ui, &resp);
+}
+
+/// The width of the button beside the genre's field.
+const MENU_BUTTON: f32 = 24.0;
+
+/// The button beside the genre's field: a menu of the library's genres,
+/// then the usual ones it lacks (`genres::COMMON`), narrowed to those
+/// containing what was typed (unless it is one of them); the one chosen
+/// goes into the field.
+fn genre_menu(ui: &mut Ui, f: &mut Field, library: &[String]) {
+    let height = ui.spacing().interact_size.y;
+    let (rect, resp) = ui.allocate_exact_size(vec2(MENU_BUTTON, height), egui::Sense::click());
+    let colour = if resp.hovered() {
+        palette::text_bright()
+    } else {
+        palette::text()
+    };
+    if resp.hovered() {
+        ui.painter().rect_filled(rect, 4.0, palette::hover());
+    }
+    let c = rect.center();
+    ui.painter().add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(c.x - 4.0, c.y - 2.0),
+            egui::pos2(c.x + 4.0, c.y - 2.0),
+            egui::pos2(c.x, c.y + 2.5),
+        ],
+        colour,
+        egui::Stroke::NONE,
+    ));
+    let resp = resp.on_hover_text(tr!("Genres", "Жанры"));
+
+    let value = f.value.trim();
+    let (ours, usual) = genre_lists(value, f.touched, library);
+    let mut chosen = None;
+    // An id of its own (see Conventions: the tooltip's area takes the
+    // default one).
+    let shown = egui::Popup::menu(&resp)
+        .id(resp.id.with("genre_menu"))
+        .show(|ui| {
+            ui.set_min_width(220.0);
+            let most = (ui.ctx().content_rect().height() - 120.0).clamp(160.0, 420.0);
+            egui::ScrollArea::vertical()
+                .max_height(most)
+                .show(ui, |ui| {
+                    let lists = [
+                        (tr!("In the library", "В библиотеке"), ours),
+                        (tr!("Common", "Распространённые"), usual),
+                    ];
+                    let mut first = true;
+                    for (heading, list) in lists {
+                        if list.is_empty() {
+                            continue;
+                        }
+                        if !first {
+                            ui.separator();
+                        }
+                        first = false;
+                        ui.label(
+                            RichText::new(heading.to_uppercase())
+                                .size(10.5)
+                                .strong()
+                                .color(palette::text_weak()),
+                        );
+                        for g in list {
+                            let current = g.eq_ignore_ascii_case(value);
+                            if ui.selectable_label(current, g).clicked() {
+                                chosen = Some(g.to_owned());
+                            }
+                        }
+                    }
+                });
+        });
+    // Kept over the modal, as the cover's menu (see Conventions).
+    if let Some(shown) = shown {
+        ui.ctx()
+            .set_sublayer(ui.layer_id(), shown.response.layer_id);
+    }
+    if let Some(g) = chosen {
+        f.value = g;
+        f.touched = f.value != f.shown;
+    }
+}
+
+/// The genre menu's lists: the library's genres and the usual ones it
+/// lacks, those containing `value` when it was typed (`touched`) and is
+/// none of them; all when none contains it.
+fn genre_lists<'a>(
+    value: &str,
+    touched: bool,
+    library: &'a [String],
+) -> (Vec<&'a str>, Vec<&'static str>) {
+    let common = crate::library::genres::common_besides(library);
+    let ours: Vec<&str> = library.iter().map(String::as_str).collect();
+    let known = ours
+        .iter()
+        .chain(&common)
+        .any(|g| g.eq_ignore_ascii_case(value));
+    if !touched || known || value.is_empty() {
+        return (ours, common);
+    }
+    let typed = value.to_lowercase();
+    let has = |g: &&str| g.to_lowercase().contains(&typed);
+    let narrowed = (
+        ours.iter().copied().filter(has).collect::<Vec<_>>(),
+        common.iter().copied().filter(has).collect::<Vec<_>>(),
+    );
+    if narrowed.0.is_empty() && narrowed.1.is_empty() {
+        (ours, common)
+    } else {
+        narrowed
+    }
 }
 
 /// The lyrics in a text field of several lines (Enter starts a line).
@@ -2997,5 +3153,98 @@ mod tests {
             c.click(at, egui::PointerButton::Secondary);
             assert!(c.menu_seen(at), "opened again over the window");
         }
+    }
+
+    #[test]
+    fn the_genre_lists_narrow_to_what_was_typed() {
+        let library = vec!["Heavy Metal".to_owned(), "Rock".to_owned()];
+        // Shown as read, or one of the genres chosen: all of them.
+        for (value, touched) in [("Rock", false), ("rock", true), ("Jazz", true), ("", true)] {
+            let (ours, usual) = genre_lists(value, touched, &library);
+            assert_eq!(ours, ["Heavy Metal", "Rock"], "{value}");
+            assert!(usual.contains(&"Jazz") && !usual.contains(&"Rock"));
+        }
+        let (ours, usual) = genre_lists("meta", true, &library);
+        assert_eq!(ours, ["Heavy Metal"]);
+        assert!(usual.contains(&"Death Metal") && !usual.contains(&"Jazz"));
+        // Nothing contains it: all.
+        let (ours, usual) = genre_lists("zzz", true, &library);
+        assert_eq!(ours.len(), 2);
+        assert!(usual.len() > 100);
+    }
+
+    /// The genre's field and its button in a modal, as `main_cell` lays
+    /// them out: the line's rect.
+    fn genre_frame(
+        ctx: &egui::Context,
+        time: f64,
+        events: Vec<egui::Event>,
+        field: &mut Field,
+    ) -> egui::Rect {
+        let library = vec!["Rock".to_owned()];
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                vec2(1000.0, 800.0),
+            )),
+            time: Some(time),
+            events,
+            ..Default::default()
+        };
+        let mut rect = egui::Rect::NOTHING;
+        let mut out = ctx.run_ui(input, |ui| {
+            let ctx = ui.ctx().clone();
+            egui::Modal::new(egui::Id::new("file_info")).show(&ctx, |ui| {
+                ui.set_width(WIDTH);
+                rect = ui
+                    .horizontal_top(|ui| {
+                        let room =
+                            ui.available_width() - MENU_BUTTON - ui.spacing().item_spacing.x;
+                        text_field(ui, field, false, true, Some(room), false);
+                        genre_menu(ui, field, &library);
+                    })
+                    .response
+                    .rect;
+                ui.add_space(300.0);
+            });
+        });
+        out.textures_delta.clear();
+        rect
+    }
+
+    #[test]
+    fn the_genre_menu_opens_over_the_window() {
+        let ctx = egui::Context::default();
+        let mut field = Field::of([String::from("Rock")].iter());
+        let mut time = 0.0;
+        let mut frame = |events: Vec<egui::Event>| {
+            time += 0.05;
+            genre_frame(&ctx, time, events, &mut field)
+        };
+        for _ in 0..3 {
+            frame(vec![]);
+        }
+        let line = frame(vec![]);
+        // The button beside the field, on its line.
+        assert!(line.height() < 30.0, "{line:?}");
+        let at = egui::pos2(line.right() - MENU_BUTTON / 2.0, line.center().y);
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        frame(vec![egui::Event::PointerMoved(at), press(true)]);
+        frame(vec![press(false)]);
+        for _ in 0..4 {
+            frame(vec![]);
+        }
+        assert!(egui::Popup::is_any_open(&ctx));
+        let under = egui::pos2(at.x - 40.0, line.bottom() + 40.0);
+        assert!(
+            ctx.layer_id_at(under)
+                .is_some_and(|l| l.id != egui::Id::new("file_info")),
+            "over the window"
+        );
     }
 }
