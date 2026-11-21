@@ -2427,7 +2427,17 @@ fn bands(ui: &mut Ui, dsp: &mut DspSettings) {
                             )
                             .to_owned(),
                         };
+                        // A vertical slider lays itself out in `ui.vertical`,
+                        // at the left of the column: it gets a rect of its
+                        // own width in the column's middle, under the gain
+                        // and over the label.
+                        let thickness = ui
+                            .text_style_height(&egui::TextStyle::Body)
+                            .max(ui.spacing().interact_size.y);
+                        let size = vec2(thickness, ui.spacing().slider_width);
+                        let (place, _) = ui.allocate_exact_size(size, Sense::hover());
                         let response = ui
+                            .new_child(egui::UiBuilder::new().max_rect(place))
                             .add(
                                 egui::Slider::new(value, -eq::RANGE_DB..=eq::RANGE_DB)
                                     .vertical()
