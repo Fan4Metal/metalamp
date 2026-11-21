@@ -7,11 +7,13 @@
 //! 50 ms, the newest line in front at the bottom and the older ones
 //! behind it, higher, narrower and fainter, each hiding what is behind
 //! it, as the cover of "Unknown Pleasures"); a waveform rolling from the
-//! right (each column 20 ms of sound: its peak, and its RMS inside it, as
-//! an editor draws a track), an oscilloscope (25 ms of the wave, started
-//! at a rising zero crossing so a steady tone stands still), a
-//! spectrogram (the analyzer's bands as a column of colours every 20 ms,
-//! rolling from the right: the loud ones bright), three scenes: a
+//! right as DJ software draws a track (`waveform`: the bass, the middle
+//! and the treble as layers of their own colours), an oscilloscope (25 ms
+//! of the wave, started at a rising zero crossing so a steady tone stands
+//! still), a spectrogram (the analyzer's bands as a column of colours
+//! every 20 ms, the loud ones bright, rolling left out of the live
+//! spectrum drawn as bars on the right; brighter on the beats), three
+//! scenes: a
 //! synthwave flight (`synthwave`) and lightning striking on the beats
 //! (`lightning`) of the analyzer's levels, a vortex of the waves heard
 //! (`vortex`, a picture with feedback as MilkDrop's), strata (`strata`:
@@ -39,6 +41,7 @@ use crate::audio::vis::Heard;
 use crate::palette;
 use crate::settings::Visual;
 use crate::ui::aurora::{self, Aurora};
+use crate::ui::beat::Beat;
 use crate::ui::cloth::{self, Cloth};
 use crate::ui::fire::{self, Fire};
 use crate::ui::goniometer::Goniometer;
@@ -53,14 +56,13 @@ use crate::ui::strata::Strata;
 use crate::ui::strings::Strings;
 use crate::ui::synthwave::{self, Synthwave};
 use crate::ui::vortex::{self, Vortex};
+use crate::ui::waveform::{self, Waveform};
 
 /// The frames asked of the tap each frame: the analyzer's window, and
 /// what is heard between two frames at 50 frames a second up to 192 kHz.
 pub const FETCH: usize = 8192;
-/// The time of a column of the waveform and of the spectrogram.
+/// The time of a column of the spectrogram, and its width in points.
 const COLUMN_S: f32 = 0.02;
-/// Points per column of the waveform and of the spectrogram.
-const WAVE_PITCH: f32 = 2.0;
 const GRAM_PITCH: f32 = 2.0;
 /// The oscilloscope's span, and how far back it looks for a zero crossing.
 const SCOPE_S: f32 = 0.025;
@@ -68,7 +70,23 @@ const TRIGGER_S: f32 = 0.02;
 /// The spectrogram's colours: a level's place among the ground, the
 /// analyzer's foot, its top and its peaks.
 const GRAM_STOPS: [f32; 4] = [0.0, 0.4, 0.75, 1.0];
-const GRAM_CONTRAST: f32 = 2.2;
+const GRAM_CONTRAST: f32 = 1.8;
+/// The spectrogram's live spectrum on the right (the bands now, as bars
+/// from the history's edge, which it flows out of): its share of the
+/// width (within `GRAM_EMITTER`), rows a bar (one of them a gap), the
+/// bars falling the whole way in `GRAM_FALL_S`, their peaks held
+/// `GRAM_HOLD_S` and falling in `GRAM_PEAK_FALL_S`.
+const GRAM_EMITTER_SHARE: f32 = 0.09;
+const GRAM_EMITTER: [f32; 2] = [20.0, 64.0];
+const GRAM_BAR: usize = 3;
+const GRAM_FALL_S: f32 = 0.5;
+const GRAM_HOLD_S: f32 = 0.4;
+const GRAM_PEAK_FALL_S: f32 = 0.9;
+/// A beat (`beat::Beat`) brightens the columns written while its kick
+/// lasts by this share, and lights the live spectrum.
+const GRAM_KICK: f32 = 0.25;
+/// The share of the history's width on the left over which it fades.
+const GRAM_FADE: f32 = 0.2;
 /// The ridges: a line every `RIDGE_S`, points across every `RIDGE_PITCH`,
 /// a line every `RIDGE_SPACING` points of height; the front line's height
 /// as a share of the display's, the levels raised to `RIDGE_POWER` (music
@@ -121,10 +139,7 @@ pub struct Visualizer {
     /// Columns (or lines) owed to the history shown (fractions carried
     /// on).
     owed: f32,
-    /// The waveform's columns, oldest first: peak and RMS, 0 to 1.
-    wave: VecDeque<[f32; 2]>,
-    /// The column being gathered: its peak, sum of squares and frames.
-    gathering: (f32, f32, usize),
+    waveform: Waveform,
     /// The spectrogram's columns, oldest first: the bands' levels, the
     /// lowest band first.
     gram: VecDeque<Vec<f32>>,
@@ -133,6 +148,11 @@ pub struct Visualizer {
     /// anew.
     gram_drawn: Option<(u64, palette::VisualPalette, Color32, usize)>,
     gram_count: u64,
+    /// The spectrogram's beat, its live spectrum and the live peaks (level,
+    /// time left held).
+    gram_beat: Beat,
+    gram_live: Vec<f32>,
+    gram_peaks: Vec<(f32, f32)>,
     /// The oscilloscope's stretch of the wave.
     scope: Vec<f32>,
     /// The tap's end at the frame before (`None`: nothing heard then).
@@ -173,12 +193,14 @@ impl Visualizer {
             ridge_moved: 0.0,
             strata: Strata::new(),
             owed: 0.0,
-            wave: VecDeque::new(),
-            gathering: (0.0, 0.0, 0),
+            waveform: Waveform::default(),
             gram: VecDeque::new(),
             gram_texture: None,
             gram_drawn: None,
             gram_count: 0,
+            gram_beat: Beat::default(),
+            gram_live: Vec::new(),
+            gram_peaks: Vec::new(),
             scope: Vec::new(),
             end: None,
             idle: 0.0,
@@ -389,39 +411,21 @@ impl Visualizer {
                 self.strata.feed(heard, dt, size);
             }
             Visual::Waveform => {
-                let cap = columns(size.x, WAVE_PITCH);
-                match heard {
-                    Some((s, h)) => {
-                        let per_column = ((h.rate as f32 * COLUMN_S) as usize).max(1);
-                        for &x in &s[s.len() - new..] {
-                            let (peak, squares, n) = &mut self.gathering;
-                            *peak = peak.max(x.abs());
-                            *squares += x * x;
-                            *n += 1;
-                            if *n >= per_column {
-                                let rms = (*squares / *n as f32).sqrt();
-                                self.wave.push_back([peak.min(1.0), rms.min(1.0)]);
-                                self.gathering = (0.0, 0.0, 0);
-                            }
-                        }
-                        self.idle = 0.0;
-                    }
-                    None if self.wave.iter().any(|c| c[0] > 0.0) => {
-                        for _ in 0..self.idle_lines(dt, COLUMN_S) {
-                            self.wave.push_back([0.0; 2]);
-                        }
-                    }
-                    None => self.wave.clear(),
-                }
-                while self.wave.len() > cap {
-                    self.wave.pop_front();
-                }
+                let cap = columns(size.x, waveform::PITCH);
+                let fresh = heard.map(|(s, h)| (&s[s.len() - new..], h.rate));
+                self.waveform.feed(fresh, dt, cap);
             }
             Visual::Spectrogram => {
-                let cap = columns(size.x, GRAM_PITCH);
+                let cap = columns(size.x - gram_emitter(size.x), GRAM_PITCH);
                 let rows = (size.y.round() as usize).clamp(16, 256);
                 if self.gram.front().is_some_and(|c| c.len() != rows) {
                     self.gram.clear();
+                }
+                // The live spectrum falls, then takes the column heard.
+                self.gram_live.resize(rows, 0.0);
+                self.gram_peaks.resize(rows, (0.0, 0.0));
+                for l in &mut self.gram_live {
+                    *l = (*l - dt / GRAM_FALL_S).max(0.0);
                 }
                 let shown = self.gram.iter().any(|c| c.iter().any(|&l| l > 0.0));
                 match self.due(rate, new, COLUMN_S, dt, shown) {
@@ -437,8 +441,17 @@ impl Visualizer {
                                 }
                                 None => vec![0.0; rows],
                             };
+                            let heard_now = heard.is_some().then_some(column.as_slice());
+                            self.gram_beat.feed(heard_now, due as f32 * COLUMN_S);
+                            for (l, &c) in self.gram_live.iter_mut().zip(&column) {
+                                *l = l.max(c);
+                            }
+                            // Written brighter while a kick lasts.
+                            let boost = 1.0 + GRAM_KICK * self.gram_beat.kick;
+                            let lit: Vec<f32> =
+                                column.iter().map(|&l| (l * boost).min(1.0)).collect();
                             for _ in 0..due.min(cap) {
-                                self.gram.push_back(column.clone());
+                                self.gram.push_back(lit.clone());
                                 self.gram_count += 1;
                             }
                         }
@@ -447,6 +460,15 @@ impl Visualizer {
                         }
                     }
                     None => self.gram.clear(),
+                }
+                for (p, &l) in self.gram_peaks.iter_mut().zip(&self.gram_live) {
+                    if l >= p.0 {
+                        *p = (l, GRAM_HOLD_S);
+                    } else if p.1 > 0.0 {
+                        p.1 -= dt;
+                    } else {
+                        p.0 = (p.0 - dt / GRAM_PEAK_FALL_S).max(0.0);
+                    }
                 }
             }
             Visual::Off => {}
@@ -517,8 +539,10 @@ impl Visualizer {
             Visual::Ripples => self.ripples.active(),
             Visual::Ribbons => self.ribbons.active(),
             Visual::Goniometer => self.goniometer.active(),
-            Visual::Waveform => !self.wave.is_empty(),
-            Visual::Spectrogram => !self.gram.is_empty(),
+            Visual::Waveform => self.waveform.active(),
+            Visual::Spectrogram => {
+                !self.gram.is_empty() || self.gram_live.iter().any(|&l| l > 0.0)
+            }
             Visual::Scope => !self.scope.is_empty(),
             Visual::Off => false,
         }
@@ -547,7 +571,7 @@ impl Visualizer {
             Visual::Strata => self.strata.paint(painter, rect),
             Visual::Chroma => self.paint_chroma(painter, rect),
             Visual::Piano => self.paint_piano(painter, rect),
-            Visual::Waveform => self.paint_wave(painter, rect),
+            Visual::Waveform => self.waveform.paint(painter, rect),
             Visual::Spectrogram => self.paint_gram(painter, rect),
             Visual::Scope => self.paint_scope(painter, rect),
             Visual::Off => self.paint_logo(painter, rect),
@@ -821,35 +845,6 @@ impl Visualizer {
         }
     }
 
-    fn paint_wave(&self, painter: &Painter, rect: Rect) {
-        let cy = rect.center().y;
-        let half = rect.height() / 2.0;
-        painter.hline(rect.x_range(), cy, Stroke::new(1.0, palette::line()));
-        let mut mesh = Mesh::default();
-        let n = self.wave.len();
-        let colours = palette::visual_for(Visual::Waveform);
-        for (i, &[peak, rms]) in self.wave.iter().enumerate() {
-            let x1 = rect.right() - WAVE_PITCH * (n - 1 - i) as f32;
-            let x0 = (x1 - WAVE_PITCH).max(rect.left());
-            if x1 <= rect.left() {
-                continue;
-            }
-            // The peak's shade around the RMS's: by their levels when the
-            // colours tell the level, else the floor's and the top's.
-            let place = (x0 - rect.left()) / rect.width();
-            let (outer, inner) = if colours.by_level() {
-                (colours.at(peak, place), colours.at(rms, place))
-            } else {
-                (colours.at(0.0, place), colours.at(1.0, place))
-            };
-            for (level, colour) in [(peak, outer), (rms, inner)] {
-                let h = (level * half).max(0.5);
-                quad(&mut mesh, x0, cy - h, x1, cy + h, colour);
-            }
-        }
-        painter.add(mesh);
-    }
-
     fn paint_scope(&self, painter: &Painter, rect: Rect) {
         let cy = rect.center().y;
         let half = rect.height() / 2.0 - 1.0;
@@ -897,11 +892,21 @@ impl Visualizer {
         ));
     }
 
+    /// The spectrogram: the history rolling left out of the live spectrum
+    /// on the right (the bands now as bars from the history's edge, with
+    /// their peaks), moving smoothly between columns, fading out on the
+    /// left; the columns heard on a beat brighter, the live spectrum lit.
     fn paint_gram(&mut self, painter: &Painter, rect: Rect) {
-        let Some(rows) = self.gram.front().map(Vec::len) else {
+        let Some(rows) = self.gram.front().map(Vec::len).or_else(|| {
+            let n = self.gram_live.len();
+            (n > 0).then_some(n)
+        }) else {
             return;
         };
-        let cap = columns(rect.width(), GRAM_PITCH);
+        let painter = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
+        let emitter = gram_emitter(rect.width());
+        let edge = rect.right() - emitter;
+        let cap = columns(rect.width() - emitter, GRAM_PITCH);
         let visual = palette::visual_for(Visual::Spectrogram);
         let ground = palette::list_bg();
         // Each band's colours, from the ground up: the floor's, the top's
@@ -927,36 +932,134 @@ impl Visualizer {
                 }
             })
             .collect();
-        // Also the width: resized while paused, it is drawn anew.
-        let drawn = (self.gram_count, visual, ground, cap);
-        if self.gram_drawn != Some(drawn) || self.gram_texture.is_none() {
-            // Right-aligned: the newest column at the right edge, the top
-            // row the highest band.
-            let mut image = ColorImage::filled([cap, rows], ground);
-            let skip = cap.saturating_sub(self.gram.len());
-            for (i, column) in self.gram.iter().enumerate().take(cap) {
-                for (band, &level) in column.iter().enumerate() {
-                    let y = rows - 1 - band;
-                    image.pixels[y * cap + skip + i] = gram_colour(level, &colours[band]);
+        if !self.gram.is_empty() {
+            // Also the width: resized while paused, it is drawn anew.
+            let drawn = (self.gram_count, visual, ground, cap);
+            if self.gram_drawn != Some(drawn) || self.gram_texture.is_none() {
+                // Right-aligned: the newest column at the right edge, the
+                // top row the highest band.
+                let mut image = ColorImage::filled([cap, rows], ground);
+                let skip = cap.saturating_sub(self.gram.len());
+                for (i, column) in self.gram.iter().enumerate().take(cap) {
+                    for (band, &level) in column.iter().enumerate().take(rows) {
+                        let y = rows - 1 - band;
+                        image.pixels[y * cap + skip + i] = gram_colour(level, &colours[band]);
+                    }
                 }
-            }
-            match &mut self.gram_texture {
-                Some(t) => t.set(image, TextureOptions::LINEAR),
-                None => {
-                    self.gram_texture = Some(painter.ctx().load_texture(
-                        "spectrogram",
-                        image,
-                        TextureOptions::LINEAR,
-                    ));
+                match &mut self.gram_texture {
+                    Some(t) => t.set(image, TextureOptions::LINEAR),
+                    None => {
+                        self.gram_texture = Some(painter.ctx().load_texture(
+                            "spectrogram",
+                            image,
+                            TextureOptions::LINEAR,
+                        ));
+                    }
                 }
+                self.gram_drawn = Some(drawn);
             }
-            self.gram_drawn = Some(drawn);
+            if let Some(t) = &self.gram_texture {
+                // Moved left by the share of the next column due, so it
+                // rolls smoothly rather than a column at a time.
+                let part = if self.end.is_some() { self.owed } else { self.idle };
+                let right = edge - part.clamp(0.0, 1.0) * GRAM_PITCH;
+                let image = Rect::from_min_max(
+                    pos2(right - cap as f32 * GRAM_PITCH, rect.top()),
+                    pos2(right, rect.bottom()),
+                );
+                let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+                painter
+                    .with_clip_rect(painter.clip_rect().intersect(Rect::from_min_max(
+                        rect.min,
+                        pos2(edge, rect.bottom()),
+                    )))
+                    .image(t.id(), image, uv, Color32::WHITE);
+            }
+            // The oldest fade into the ground on the left.
+            let fade = Rect::from_min_max(
+                rect.min,
+                pos2(rect.left() + (edge - rect.left()) * GRAM_FADE, rect.bottom()),
+            );
+            let mut mesh = Mesh::default();
+            mesh.colored_vertex(fade.left_top(), ground);
+            mesh.colored_vertex(fade.right_top(), Color32::TRANSPARENT);
+            mesh.colored_vertex(fade.right_bottom(), Color32::TRANSPARENT);
+            mesh.colored_vertex(fade.left_bottom(), ground);
+            mesh.add_triangle(0, 1, 2);
+            mesh.add_triangle(0, 2, 3);
+            painter.add(mesh);
         }
-        if let Some(t) = &self.gram_texture {
-            let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-            painter.image(t.id(), rect, uv, Color32::WHITE);
+        // The live spectrum: a bar a few rows, from the edge to the right.
+        let kick = self.gram_beat.kick;
+        let dark = visual.is_dark();
+        let row_h = rect.height() / rows as f32;
+        let mut mesh = Mesh::default();
+        if kick > 0.0 {
+            let lit = visual.peak(0.5).gamma_multiply(0.14 * kick);
+            let lit = if dark {
+                Color32::from_rgba_premultiplied(lit.r(), lit.g(), lit.b(), 0)
+            } else {
+                lit
+            };
+            let glow = Rect::from_min_max(pos2(edge, rect.top()), rect.max);
+            mesh.colored_vertex(glow.left_top(), lit);
+            mesh.colored_vertex(glow.right_top(), Color32::TRANSPARENT);
+            mesh.colored_vertex(glow.right_bottom(), Color32::TRANSPARENT);
+            mesh.colored_vertex(glow.left_bottom(), lit);
+            mesh.add_triangle(0, 1, 2);
+            mesh.add_triangle(0, 2, 3);
         }
+        let length = emitter - 3.0;
+        for first in (0..rows).step_by(GRAM_BAR) {
+            let last = (first + GRAM_BAR - 1).min(rows);
+            let band = first + (last - first) / 2;
+            let level = self.gram_live[first..last.max(first + 1)]
+                .iter()
+                .copied()
+                .fold(0.0, f32::max);
+            let peak = self.gram_peaks[first..last.max(first + 1)]
+                .iter()
+                .map(|p| p.0)
+                .fold(0.0, f32::max);
+            // The rows from the top: the highest band first.
+            let y1 = rect.bottom() - first as f32 * row_h;
+            let y0 = rect.bottom() - last as f32 * row_h;
+            let shown = level.powf(GRAM_CONTRAST);
+            if shown > 0.01 {
+                let colour = gram_colour(level, &colours[band]);
+                let tip = colour.lerp_to_gamma(colours[band][3], 0.35 + 0.4 * kick);
+                let bar = Rect::from_min_max(pos2(edge, y0), pos2(edge + shown * length, y1));
+                let i = mesh.vertices.len() as u32;
+                mesh.colored_vertex(bar.left_top(), colour);
+                mesh.colored_vertex(bar.right_top(), tip);
+                mesh.colored_vertex(bar.right_bottom(), tip);
+                mesh.colored_vertex(bar.left_bottom(), colour);
+                mesh.add_triangle(i, i + 1, i + 2);
+                mesh.add_triangle(i, i + 2, i + 3);
+            }
+            let peak_shown = peak.powf(GRAM_CONTRAST);
+            if peak_shown > 0.05 {
+                let x = edge + peak_shown * length;
+                mesh.add_colored_rect(
+                    Rect::from_min_max(pos2(x, y0), pos2(x + 1.5, y1)),
+                    colours[band][3].gamma_multiply(0.85),
+                );
+            }
+        }
+        painter.add(mesh);
+        // The seam the history flows out of.
+        painter.vline(
+            edge,
+            rect.y_range(),
+            Stroke::new(1.0, visual.at(0.5, 0.5).gamma_multiply(0.6 + 0.4 * kick)),
+        );
     }
+}
+
+/// The width of the spectrogram's live spectrum in a display `width`
+/// points wide.
+fn gram_emitter(width: f32) -> f32 {
+    (width * GRAM_EMITTER_SHARE).clamp(GRAM_EMITTER[0], GRAM_EMITTER[1])
 }
 
 /// `levels` each averaged with its neighbours (1 2 3 2 1), so a ridge
@@ -987,10 +1090,6 @@ fn ridge_lines(height: f32) -> usize {
 /// How many columns of `pitch` points fit in `width`.
 fn columns(width: f32, pitch: f32) -> usize {
     ((width / pitch) as usize).clamp(8, 2048)
-}
-
-fn quad(mesh: &mut Mesh, x0: f32, y0: f32, x1: f32, y1: f32, colour: Color32) {
-    mesh.add_colored_rect(Rect::from_min_max(pos2(x0, y0), pos2(x1, y1)), colour);
 }
 
 /// A level's colour among `colours` at `GRAM_STOPS`; raised to
@@ -1058,6 +1157,8 @@ mod tests {
             Visual::Goniometer,
             Visual::Strings,
             Visual::Harp,
+            Visual::Waveform,
+            Visual::Spectrogram,
         ] {
             let mut v = Visualizer::new();
             let ctx = egui::Context::default();
@@ -1133,7 +1234,7 @@ mod tests {
             size,
         );
         // The first frame only learns where the sound is.
-        assert!(v.wave.is_empty());
+        assert!(v.waveform.columns.is_empty());
         // 100 ms later: five columns of 20 ms, each peaking at 0.5 with
         // the RMS of a sine.
         v.feed(
@@ -1142,10 +1243,10 @@ mod tests {
             None,
             size,
         );
-        assert_eq!(v.wave.len(), 5);
-        for &[peak, rms] in &v.wave {
-            assert!((peak - 0.5).abs() < 0.01, "{peak}");
-            assert!((rms - 0.5 / 2f32.sqrt()).abs() < 0.01, "{rms}");
+        assert_eq!(v.waveform.columns.len(), 5);
+        for c in &v.waveform.columns {
+            assert!((c.peak - 0.5).abs() < 0.01, "{}", c.peak);
+            assert!((c.rms - 0.5 / 2f32.sqrt()).abs() < 0.01, "{}", c.rms);
         }
         // Paused: the same end, nothing new.
         v.feed(
@@ -1154,11 +1255,11 @@ mod tests {
             None,
             size,
         );
-        assert_eq!(v.wave.len(), 5);
+        assert_eq!(v.waveform.columns.len(), 5);
         assert!(v.active());
         // Another visualization starts afresh.
         v.feed(Visual::Spectrum, None, None, size);
-        assert!(v.wave.is_empty());
+        assert!(v.waveform.columns.is_empty());
     }
 
     #[test]
@@ -1284,5 +1385,82 @@ mod tests {
             ),
             Color32::WHITE
         );
+    }
+
+    /// A few bars of made-up music at 48 kHz, sample `i`: a kick on every
+    /// beat (125 a minute), a snare on two and four, hi-hats on the eighths,
+    /// a bass line and a chord changing every bar.
+    fn music(i: usize) -> f32 {
+        let rate = 48_000.0;
+        let t = i as f32 / rate;
+        let beat = 60.0 / 125.0;
+        let in_beat = t % beat;
+        let beat_no = (t / beat) as usize;
+        let bar = beat_no / 4;
+        let noise = music_noise(i);
+        let kick = {
+            let f = 50.0 + 90.0 * (-in_beat * 30.0).exp();
+            (2.0 * PI * f * in_beat).sin() * (-in_beat * 7.0).exp() * 0.7
+        };
+        let snare = if beat_no % 2 == 1 {
+            (noise * 0.5 + (2.0 * PI * 190.0 * in_beat).sin() * 0.3) * (-in_beat * 14.0).exp()
+        } else {
+            0.0
+        };
+        let in_eighth = t % (beat / 2.0);
+        // Noise less its neighbour's: mostly treble.
+        let hat = (noise - music_noise(i + 1)) * (-in_eighth * 45.0).exp() * 0.18;
+        let roots = [55.0, 73.4, 61.7, 49.0];
+        let root = roots[bar % 4];
+        let bass = ((t * root).fract() * 2.0 - 1.0) * 0.18 * (0.6 + 0.4 * (-in_beat * 4.0).exp());
+        let chord: f32 = [4.0, 5.0, 6.0]
+            .iter()
+            .map(|k| (2.0 * PI * root * k * t).sin() * 0.06)
+            .sum();
+        kick + snare + hat + bass + chord
+    }
+
+    fn music_noise(i: usize) -> f32 {
+        let mut x = (i as u32).wrapping_mul(0x9e37_79b9) ^ 0x85eb_ca6b;
+        x ^= x >> 15;
+        x = x.wrapping_mul(0x2c1b_3c6d);
+        x ^= x >> 12;
+        (x >> 8) as f32 / (1 << 24) as f32 * 2.0 - 1.0
+    }
+
+    /// Frames of a visualization fed `music`, drawn by hand into a PNG
+    /// sheet to look at: `METALAMP_FRAMES=<file.png>
+    /// METALAMP_VISUAL=<settings name> cargo test --release visual_frames --
+    /// --ignored` (`METALAMP_THEME=light` for the light theme).
+    #[test]
+    #[ignore]
+    fn visual_frames() {
+        use std::time::Duration;
+        let out = std::env::var("METALAMP_FRAMES").expect("METALAMP_FRAMES=<file.png>");
+        let name = std::env::var("METALAMP_VISUAL").unwrap_or_else(|_| "waveform".into());
+        let visual: Visual = serde_json::from_str(&format!("\"{name}\"")).unwrap();
+        if std::env::var("METALAMP_THEME").is_ok_and(|t| t == "light") {
+            palette::set(palette::Look {
+                theme: palette::Theme::Light,
+                ..Default::default()
+            });
+        }
+        let rate = 48_000;
+        let size = Vec2::new(760.0, 118.0);
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), size);
+        let mut v = Visualizer::new();
+        let mut renderer = crate::ui::test_render::Renderer::new(2.0);
+        let mut frames = Vec::new();
+        let mut end = FETCH as u64;
+        for frame in 0..=400 {
+            end += 960;
+            let s: Vec<f32> = (end as usize - FETCH..end as usize).map(music).collect();
+            v.last = Instant::now() - Duration::from_millis(20);
+            v.feed(visual, Some((&s, Heard { rate, end })), Some(&s), Some(size));
+            if frame >= 250 && frame % 25 == 0 {
+                frames.push(renderer.frame(rect, palette::list_bg(), |p| v.paint(p, rect)));
+            }
+        }
+        crate::ui::test_render::save(&out, &frames, renderer.pixels(size));
     }
 }

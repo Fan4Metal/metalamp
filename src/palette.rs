@@ -324,13 +324,14 @@ fn scheme(visual: Visual) -> Scheme {
             peak: &[0xffe0e8, 0xfff4d8, 0xe0faff],
             by_level: false,
         },
-        // Indigo peaks round an ice-blue middle.
+        // DJ software's three bands: a deep blue bass, an amber middle, a
+        // white treble.
         Visual::Waveform => Scheme {
             rows: &[
-                (0.0, &[0x5a2ee0, 0x3a5ef0, 0x1e8ef0]),
-                (1.0, &[0xb48cff, 0x7cc8ff, 0x7ff6ff]),
+                (0.0, &[0x10265e, 0x5a3008, 0x3c4a56]),
+                (1.0, &[0x3d7bff, 0xffa53a, 0xeef7ff]),
             ],
-            peak: &[0xffffff],
+            peak: &[0xdce8ff, 0xfff0d6, 0xffffff],
             by_level: false,
         },
         // An oscilloscope's green phosphor, brighter as it swings.

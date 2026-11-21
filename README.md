@@ -28,7 +28,7 @@ MetalAMP is an audio player for Windows built around a media library: the music 
 - **Gapless playback**: the next track is opened before the current one ends, and MP3 files are cut to their music by their LAME tags (see [Playback](#playback)).
 - **Formats of Windows**: MP3, AAC (M4A), FLAC, WMA and WAV, decoded by Media Foundation; M3U and M3U8 playlists.
 - **Sound processing**: the same loudness for every track, a ten-band equalizer, an enhancer, crossfade and a limiter, all off by default (see [Sound processing](#sound-processing)).
-- **Visualizations**: spectrum analyzers, ridges, a spectrogram, synthwave, lightning, a vortex, fire, sparks, an aurora, a cloth, ripples, ribbons, a waveform, an oscilloscope, a goniometer, the notes, a piano, guitar strings and a harp (see [Visualizations](#visualizations)).
+- **Visualizations**: spectrum analyzers, ridges, a spectrogram, synthwave, lightning, a vortex, fire, fireworks, an aurora, a cloth, ripples, ribbons, a waveform, an oscilloscope, a goniometer, the notes, a piano, guitar strings and a harp (see [Visualizations](#visualizations)).
 - **A playlist** beside the library, kept between runs, and saved playlists (see [The playlist](#the-playlist)).
 - **Library statistics**: the numbers of tracks, albums, artists and genres, the length and size, the plays, and charts of the bit rates, formats, years, genres, artists and the tracks played most (see [Statistics](#statistics)).
 - **File info and tags**: every field of a track's tag, its cover and its audio properties, in a window opened by a click on the player's cover or `I`, where the tags of one file or of several are also edited (see [File info](#file-info)).
@@ -225,17 +225,17 @@ The display right of the player shows the sound heard. A click on it goes on to 
 - **Spectrum analyzer** with peaks that hold and fall: as bars, as LED segments, as a smooth curve, or mirrored about the middle line.
 - **Ridges**: the spectra of the last moments as lines one behind the other, as on the cover of "Unknown Pleasures".
 - **Strata**: a string per frequency band, the bass in front, held at a nut on the left and fanning out to the right; the loudness runs along them as vibrating swells, and the beats pluck them.
-- **Spectrogram**.
+- **Spectrogram**: the spectrum's history flowing left out of the spectrum heard now, drawn as bars with their peaks on the right; the columns heard on a beat are brighter.
 - **Synthwave**: a flight over a grid towards a striped sun, between mountains raised by the spectrum.
 - **Lightning**: bolts striking from a glowing core on the beats.
 - **Vortex**: the waves heard flying out from the middle in swirling trails that fade, thrown outwards on the beats, as the pictures of Winamp's MilkDrop.
 - **Fire**: flames rising from the spectrum along the bottom, as the fire of Doom, thrown higher on the beats.
-- **Sparks**: a fountain of sparks, each band of the spectrum throwing them its own way (the bass to the left), and a sheaf on each beat; they fall back, bounce and cool.
+- **Fireworks**: rockets go up as notes start in the bands (the bass on the left) and burst at the top of their climb; each beat bursts the rocket highest up as a large shell (a peony, a chrysanthemum, a willow, a ring, a crackle or a palm) and lights the sky.
 - **Aurora**: curtains of light swaying over the spectrum, streaked by drifting rays, swaying faster as the music is louder; each beat makes them flash and leap and sends a surge of light across.
 - **Cloth**: a sheet stretched in a frame, seen in perspective: the spectrum pushes its near edge, each beat drops a stone on it and the treble rains on it, the waves reflecting from the frame and passing through one another.
 - **Ripples**: a pond at night: drops fall on it as notes start in the bands, the bass on the left in wide slow rings, the treble on the right in small quick ones; where the rings cross they light up, and each beat sends a great wave over the whole pond.
 - **Ribbons**: three ribbons of light, the bass, the middle and the treble, winding across and turning about their length; each band's loudness flows along its ribbon from the left, widening and lighting it, and each beat sends a sharp bend running along them.
-- **Waveform** rolling from the right, and an **oscilloscope**.
+- **Waveform** rolling from the right as DJ software draws a track: the bass, the middle and the treble as layers of their own colours, the bass at the back; a kick lights its place up. And an **oscilloscope**.
 - **Goniometer**: the stereo field as a studio's meter shows it, a glowing trace (a mono sound is a line straight up, a wide one a cloud), with the balance of the channels and their correlation beside it.
 - **Notes**: the twelve notes with their octaves added up (which notes sound now), or a **piano**'s keys lit by the notes heard, or **guitar strings**: the loudest notes played on a guitar's neck, a string to a note as a hand would play them, each ringing from its fret.
 - **Harp**: a string per frequency band between a soundboard and a curved neck, the bass on the left; a string is plucked when a note starts in its band and rings out as a real one, the bass strings slower and longer.

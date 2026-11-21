@@ -1067,11 +1067,9 @@ mod tests {
         let rect = Rect::from_min_size(Pos2::ZERO, SIZE);
         let mut f = Fireworks::new();
         let mut rng = Rng::default();
-        let ctx = egui::Context::default();
-        let scale = 2.0;
-        let (w, h) = ((SIZE.x * scale) as usize, (SIZE.y * scale) as usize);
+        let mut renderer = crate::ui::test_render::Renderer::new(2.0);
         let shots: Vec<usize> = (0..8).map(|k| 150 + k * 37).collect();
-        let mut sheet = vec![0u8; w * h * shots.len() * 3];
+        let mut frames = Vec::new();
         let mut notes = [0.0f32; BANDS];
         for frame in 0..=*shots.last().unwrap() {
             let t = frame as f32 * 0.02;
@@ -1095,79 +1093,11 @@ mod tests {
                 })
                 .collect();
             f.feed(Some(&levels), true, 0.02, SIZE);
-            let Some(k) = shots.iter().position(|&s| s == frame) else {
-                continue;
-            };
-            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| f.paint(ui.painter(), rect));
-            out.textures_delta.clear();
-            let prims = ctx.tessellate(out.shapes, 1.0);
-            let vertices: usize = prims
-                .iter()
-                .map(|p| match &p.primitive {
-                    egui::epaint::Primitive::Mesh(m) => m.vertices.len(),
-                    _ => 0,
-                })
-                .sum();
-            println!("{} stars, {vertices} vertices", f.sparks.len());
-            let ground = palette::list_bg().to_array().map(|c| c as f32 / 255.0);
-            let mut img = vec![[ground[0], ground[1], ground[2]]; w * h];
-            for p in &prims {
-                if let egui::epaint::Primitive::Mesh(m) = &p.primitive {
-                    raster(&mut img, w, h, scale, m);
-                }
-            }
-            for (i, c) in img.iter().enumerate() {
-                let o = (k * w * h + i) * 3;
-                for j in 0..3 {
-                    sheet[o + j] = (c[j].clamp(0.0, 1.0) * 255.0) as u8;
-                }
+            if shots.contains(&frame) {
+                println!("{} stars", f.sparks.len());
+                frames.push(renderer.frame(rect, palette::list_bg(), |p| f.paint(p, rect)));
             }
         }
-        image::save_buffer(
-            &out,
-            &sheet,
-            w as u32,
-            (h * shots.len()) as u32,
-            image::ColorType::Rgb8,
-        )
-        .unwrap();
-    }
-
-    /// A mesh's triangles blended into `img` as premultiplied colours.
-    fn raster(img: &mut [[f32; 3]], w: usize, h: usize, scale: f32, m: &Mesh) {
-        for tri in m.indices.chunks(3) {
-            let v = [0, 1, 2].map(|i| &m.vertices[tri[i] as usize]);
-            let p = v.map(|v| v.pos.to_vec2() * scale);
-            let area = (p[1] - p[0]).x * (p[2] - p[0]).y - (p[1] - p[0]).y * (p[2] - p[0]).x;
-            if area.abs() < 1e-6 {
-                continue;
-            }
-            let lo = p.iter().fold(vec2(f32::MAX, f32::MAX), |a, b| a.min(*b));
-            let hi = p.iter().fold(vec2(f32::MIN, f32::MIN), |a, b| a.max(*b));
-            let (x0, x1) = (lo.x.max(0.0) as usize, (hi.x.ceil() as usize).min(w));
-            let (y0, y1) = (lo.y.max(0.0) as usize, (hi.y.ceil() as usize).min(h));
-            for y in y0..y1 {
-                for x in x0..x1 {
-                    let q = vec2(x as f32 + 0.5, y as f32 + 0.5);
-                    let edge = |a: Vec2, b: Vec2| (b - a).x * (q - a).y - (b - a).y * (q - a).x;
-                    let l =
-                        [edge(p[1], p[2]), edge(p[2], p[0]), edge(p[0], p[1])].map(|e| e / area);
-                    if l.iter().any(|&l| l < 0.0) {
-                        continue;
-                    }
-                    let c = |i: usize| -> [f32; 4] {
-                        let c = v[i].color.to_array();
-                        c.map(|x| x as f32 / 255.0)
-                    };
-                    let (a, b, cc) = (c(0), c(1), c(2));
-                    let s: [f32; 4] =
-                        std::array::from_fn(|j| a[j] * l[0] + b[j] * l[1] + cc[j] * l[2]);
-                    let d = &mut img[y * w + x];
-                    for j in 0..3 {
-                        d[j] = s[j] + d[j] * (1.0 - s[3]);
-                    }
-                }
-            }
-        }
+        crate::ui::test_render::save(&out, &frames, renderer.pixels(SIZE));
     }
 }

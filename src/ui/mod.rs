@@ -31,11 +31,14 @@ pub mod status;
 pub mod strata;
 pub mod strings;
 pub mod synthwave;
+#[cfg(test)]
+pub mod test_render;
 pub mod table;
 pub mod title;
 pub mod view_editor;
 pub mod visual;
 pub mod vortex;
+pub mod waveform;
 
 use egui::{Response, TextureHandle, TextureOptions, Ui};
 use icons::Icon;
