@@ -28,6 +28,8 @@ pub enum Ask {
     ViewFolder(usize),
     /// A picture for the file info's cover.
     Cover,
+    /// A text file for the file info's lyrics.
+    Lyrics,
 }
 
 impl Ask {
@@ -39,6 +41,7 @@ impl Ask {
             Ask::SavePlaylist => "the playlist",
             Ask::ViewFolder(_) => "a view's folder",
             Ask::Cover => "a cover",
+            Ask::Lyrics => "lyrics",
         }
     }
 }

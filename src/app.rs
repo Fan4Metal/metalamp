@@ -1117,6 +1117,7 @@ impl App {
             }
             Ask::ViewFolder(rule) => self.view_editor.set_folder(rule, &path),
             Ask::Cover => self.file_info.cover_from(path),
+            Ask::Lyrics => self.file_info.lyrics_from(path),
         }
     }
 
@@ -2250,6 +2251,16 @@ impl eframe::App for App {
             let owner = self.file_info.owner().or(self.hwnd);
             self.dialogs
                 .start(&ctx, owner, Ask::Cover, make, dialog::pick_file);
+        }
+        if std::mem::take(&mut self.file_info.pick_lyrics) {
+            let make = || {
+                rfd::FileDialog::new()
+                    .set_title(tr!("The lyrics from a file", "Текст песни из файла"))
+                    .add_filter(tr!("Text", "Текст"), &["txt", "lrc"])
+            };
+            let owner = self.file_info.owner().or(self.hwnd);
+            self.dialogs
+                .start(&ctx, owner, Ask::Lyrics, make, dialog::pick_file);
         }
         if let Some(folder) = self.file_info.folder_saved.take() {
             self.library_view

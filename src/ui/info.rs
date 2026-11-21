@@ -131,6 +131,11 @@ pub struct InfoView {
     pub pick_cover: bool,
     /// The picture chosen in that dialog, taken in `show`.
     cover_file: Option<PathBuf>,
+    /// A text file is to be chosen for the lyrics: the app shows the
+    /// dialog and hands its answer to `lyrics_from`.
+    pub pick_lyrics: bool,
+    /// The text file chosen in that dialog, taken in `show`.
+    lyrics_file: Option<PathBuf>,
     /// A `folder.jpg` was saved into this folder: the app makes its
     /// albums' covers again.
     pub folder_saved: Option<PathBuf>,
@@ -199,6 +204,8 @@ enum Act {
     Cover(CoverAct),
     /// The cover shown large.
     Zoom,
+    /// The lyrics from a text file chosen in a dialog.
+    PickLyrics,
 }
 
 #[derive(Default, PartialEq)]
@@ -241,6 +248,55 @@ impl Field {
     }
 }
 
+/// The other fields of the files read: each key any of them has, in the
+/// order they come, a file without it counting as empty (so a field some
+/// of them lack shows "(different)").
+fn other_fields(read: &[&Values]) -> Vec<(ItemKey, Field)> {
+    let mut keys: Vec<ItemKey> = Vec::new();
+    for v in read {
+        for (k, _) in &v.other {
+            if !keys.contains(k) {
+                keys.push(*k);
+            }
+        }
+    }
+    let none = String::new();
+    keys.into_iter()
+        .map(|k| {
+            let values = read.iter().map(|v| {
+                v.other
+                    .iter()
+                    .find(|(o, _)| *o == k)
+                    .map_or(&none, |(_, s)| s)
+            });
+            (k, Field::of(values))
+        })
+        .collect()
+}
+
+/// The text of a lyrics file: UTF-8 or UTF-16 by its BOM, else UTF-8,
+/// else the ANSI code page of Windows (an old `.txt` or `.lrc`); its lines
+/// ending with `\n`.
+fn text_of_file(bytes: &[u8]) -> String {
+    let utf16 = |bytes: &[u8], read: fn([u8; 2]) -> u16| {
+        let units: Vec<u16> = bytes.as_chunks::<2>().0.iter().map(|c| read(*c)).collect();
+        String::from_utf16_lossy(&units)
+    };
+    let text = match bytes {
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+        [0xFF, 0xFE, rest @ ..] => utf16(rest, u16::from_le_bytes),
+        [0xFE, 0xFF, rest @ ..] => utf16(rest, u16::from_be_bytes),
+        _ => match std::str::from_utf8(bytes) {
+            Ok(text) => text.to_owned(),
+            Err(_) => crate::win::from_ansi(bytes),
+        },
+    };
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+/// The largest lyrics file read, in bytes.
+const LYRICS_MOST: u64 = 1 << 20;
+
 /// The tags of the files shown as `edit` has them: read on a thread,
 /// changed in the text fields, written on a thread.
 struct Form {
@@ -249,11 +305,14 @@ struct Form {
     rx: Receiver<Msg>,
     /// In `edit::Key::ALL`'s order.
     main: Vec<Field>,
-    /// The other fields of one file (all the files at once: none).
+    /// The other fields: of one file, or of all the files at once (each
+    /// key any of them has, a file without it counting as empty).
     other: Vec<(ItemKey, Field)>,
-    /// The usual fields that file's tag lacks and can hold, by group
-    /// (`edit::Values::addable`); those added are among `other`.
+    /// The usual fields every file's tag can hold, by group
+    /// (`edit::Values::standard`); those not in `other` can be added.
     addable: Vec<(edit::Group, ItemKey)>,
+    /// The lyrics of one file (all the files at once: none).
+    lyrics: Option<Field>,
     /// A field just added takes the keys.
     focus_other: Option<ItemKey>,
     /// The files that could not be read or written, with why.
@@ -301,6 +360,7 @@ impl Form {
             main: Vec::new(),
             other: Vec::new(),
             addable: Vec::new(),
+            lyrics: None,
             focus_other: None,
             errors: Vec::new(),
             focus_first: false,
@@ -318,17 +378,23 @@ impl Form {
                     self.main = (0..edit::MAIN)
                         .map(|i| Field::of(ok.iter().map(|v| &v.main[i])))
                         .collect();
-                    self.other = match ok.as_slice() {
-                        [one] if self.paths.len() == 1 => one
-                            .other
+                    self.other = other_fields(&ok);
+                    self.addable = match ok.first() {
+                        Some(first) => first
+                            .standard
                             .iter()
-                            .map(|(k, v)| (*k, Field::of(std::iter::once(v))))
+                            .filter(|(_, k)| {
+                                ok.iter().all(|v| v.standard.iter().any(|(_, s)| s == k))
+                            })
+                            .copied()
                             .collect(),
-                        _ => Vec::new(),
+                        None => Vec::new(),
                     };
-                    self.addable = match ok.as_slice() {
-                        [one] if self.paths.len() == 1 => one.addable.clone(),
-                        _ => Vec::new(),
+                    self.lyrics = match ok.as_slice() {
+                        [one] if self.paths.len() == 1 => {
+                            Some(Field::of(std::iter::once(&one.lyrics)))
+                        }
+                        _ => None,
                     };
                     self.state = State::Ready;
                 }
@@ -346,7 +412,10 @@ impl Form {
     }
 
     fn fields(&self) -> impl Iterator<Item = &Field> {
-        self.main.iter().chain(self.other.iter().map(|(_, f)| f))
+        self.main
+            .iter()
+            .chain(self.other.iter().map(|(_, f)| f))
+            .chain(self.lyrics.iter())
     }
 
     fn touched(&self) -> bool {
@@ -364,7 +433,7 @@ impl Form {
     /// The fields as they were read.
     fn reset(&mut self) {
         let other = self.other.iter_mut().map(|(_, f)| f);
-        for f in self.main.iter_mut().chain(other) {
+        for f in self.main.iter_mut().chain(other).chain(self.lyrics.iter_mut()) {
             f.value = f.shown.clone();
             f.touched = false;
         }
@@ -386,6 +455,11 @@ impl Form {
             .filter(|(_, f)| f.touched)
             .map(|(k, f)| (*k, f.value.trim().to_owned()))
             .collect();
+        changes.lyrics = self
+            .lyrics
+            .as_ref()
+            .filter(|f| f.touched)
+            .map(|f| f.value.clone());
         changes.cover = self.cover.as_ref().map(|c| c.change.clone());
         changes
     }
@@ -673,6 +747,42 @@ impl InfoView {
             Act::Go(to) => self.go(ctx, to),
             Act::Cover(act) => self.cover_act(ctx, act),
             Act::Zoom => self.zoom_in(ctx),
+            Act::PickLyrics => self.pick_lyrics = true,
+        }
+    }
+
+    /// The text file chosen in the dialog `pick_lyrics` asked for.
+    pub fn lyrics_from(&mut self, path: PathBuf) {
+        self.lyrics_file = Some(path);
+    }
+
+    /// The lyrics read from `path` into the field (a file too large or
+    /// that cannot be read: an error under the fields).
+    fn take_lyrics_file(&mut self, path: &Path) {
+        let Some(form) = self.form.as_mut().filter(|f| f.state == State::Ready) else {
+            return;
+        };
+        let Some(field) = form.lyrics.as_mut() else {
+            return;
+        };
+        let read = std::fs::metadata(path)
+            .and_then(|m| {
+                if m.len() > LYRICS_MOST {
+                    Err(std::io::Error::other(tr!(
+                        "the file is larger than 1 MB",
+                        "файл больше 1 МБ"
+                    )))
+                } else {
+                    std::fs::read(path)
+                }
+            })
+            .map(|bytes| text_of_file(&bytes));
+        match read {
+            Ok(text) => {
+                field.value = text.trim_end().to_owned();
+                field.touched = field.value != field.shown;
+            }
+            Err(e) => form.errors.push(format!("{}: {e}", path.display())),
         }
     }
 
@@ -1057,6 +1167,9 @@ impl InfoView {
         }
         if let Some(path) = self.cover_file.take() {
             self.cover_act(ctx, CoverAct::File(path));
+        }
+        if let Some(path) = self.lyrics_file.take() {
+            self.take_lyrics_file(&path);
         }
         // `METALAMP_INFO_ZOOM=1`: the cover large once it is read (GUI
         // checks, with `METALAMP_INFO`).
@@ -1639,7 +1752,30 @@ fn body_one(ui: &mut Ui, d: &Details, form: Option<&mut Form>, acts: &mut Vec<Ac
 
     // The lyrics apart: many lines, which the fields' grid would stretch.
     let lyrics = value(d, &[ItemKey::UnsyncLyrics, ItemKey::Lyrics]);
-    if !lyrics.is_empty() {
+    if let Some(field) = form.as_mut().and_then(|f| f.lyrics.as_mut()) {
+        ui.add_space(14.0);
+        section(ui, tr!("Lyrics", "Текст"), |ui| {
+            let clear = egui::Button::new(tr!("Clear", "Очистить")).small();
+            if ui
+                .add_enabled(!field.value.is_empty(), clear)
+                .clicked()
+            {
+                field.value.clear();
+                field.touched = field.value != field.shown;
+            }
+            if ui
+                .small_button(tr!("From a file…", "Из файла…"))
+                .on_hover_text(tr!(
+                    "The lyrics from a text file (.txt, .lrc)",
+                    "Текст из текстового файла (.txt, .lrc)"
+                ))
+                .clicked()
+            {
+                acts.push(Act::PickLyrics);
+            }
+        });
+        lyrics_field(ui, field);
+    } else if !lyrics.is_empty() {
         ui.add_space(14.0);
         section(ui, tr!("Lyrics", "Текст"), |_| {});
         ui.add(egui::Label::new(RichText::new(lyrics).color(palette::text())).wrap());
@@ -1680,7 +1816,8 @@ impl Other<'_> {
 fn body_all(ui: &mut Ui, form: &mut Form, paths: &[PathBuf], editing: bool, acts: &mut Vec<Act>) {
     ui.add_space(18.0);
     ui.spacing_mut().item_spacing.y = 6.0;
-    let width = names_width(ui, main_names());
+    let others = form.other.iter().map(|(k, _)| field_name(*k));
+    let width = names_width(ui, main_names().chain(others));
     section(ui, tr!("Main", "Основное"), |ui| {
         if !editing {
             let reading = form.state != State::Ready;
@@ -1693,6 +1830,9 @@ fn body_all(ui: &mut Ui, form: &mut Form, paths: &[PathBuf], editing: bool, acts
     } else {
         main_lines(ui, width, EDIT_PAD, &mut Mode::All(form));
         errors(ui, &form.errors);
+    }
+    if form.state != State::Reading {
+        other_lines_all(ui, form, width, editing);
     }
     ui.add_space(14.0);
     section(ui, tr!("Files", "Файлы"), |_| {});
@@ -1712,6 +1852,54 @@ fn body_all(ui: &mut Ui, form: &mut Form, paths: &[PathBuf], editing: bool, acts
         if resp.clicked() {
             acts.push(Act::Go(Some(i)));
         }
+    }
+}
+
+/// All the files' other fields ("(different)" where they differ or some
+/// lack it); editing, in text fields, a value typed in written to every
+/// file, and the usual fields all of them can hold to be added.
+fn other_lines_all(ui: &mut Ui, form: &mut Form, width: f32, editing: bool) {
+    let addable: Vec<(edit::Group, ItemKey)> = if editing {
+        form.addable
+            .iter()
+            .filter(|(_, k)| !form.other.iter().any(|(o, _)| o == k))
+            .copied()
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if form.other.is_empty() && addable.is_empty() {
+        return;
+    }
+    ui.add_space(14.0);
+    let mut added = None;
+    section(ui, tr!("Additional", "Дополнительно"), |ui| {
+        if !addable.is_empty() {
+            added = add_field_button(ui, &addable);
+        }
+    });
+    if let Some(key) = added {
+        form.other.push((key, Field::default()));
+        form.focus_other = Some(key);
+        ui.ctx().request_repaint();
+    }
+    let Form {
+        other, focus_other, ..
+    } = form;
+    for (key, field) in other.iter_mut() {
+        line(ui, width, &field_name(*key), EDIT_PAD, |ui| {
+            if editing {
+                let focus = *focus_other == Some(*key);
+                if focus {
+                    *focus_other = None;
+                }
+                text_field(ui, field, false, true, None, focus);
+            } else if field.mixed {
+                boxed(ui, "", tr!("(different)", "(разные)"), Some(1), None);
+            } else {
+                boxed(ui, &field.shown, "", Some(1), None);
+            }
+        });
     }
 }
 
@@ -1815,6 +2003,20 @@ fn text_field(
     if focus {
         resp.request_focus();
         resp.scroll_to_me(Some(egui::Align::Center));
+    }
+    super::take_leaving_key(ui, &resp);
+}
+
+/// The lyrics in a text field of several lines (Enter starts a line).
+fn lyrics_field(ui: &mut Ui, f: &mut Field) {
+    let resp = ui.add(
+        egui::TextEdit::multiline(&mut f.value)
+            .hint_text(tr!("No lyrics", "Текста нет"))
+            .desired_rows(8)
+            .desired_width(ui.available_width()),
+    );
+    if resp.changed() {
+        f.touched = f.value != f.shown;
     }
     super::take_leaving_key(ui, &resp);
 }
@@ -2543,6 +2745,43 @@ fn picture_name(kind: PictureType) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A lyrics file in UTF-8 (with or without a BOM) or UTF-16 (either
+    /// order), its lines ending with `\n`.
+    #[test]
+    fn lyrics_files_read() {
+        let lines = "Первая\nВторая";
+        assert_eq!(text_of_file("Первая\r\nВторая".as_bytes()), lines);
+        let mut bom = vec![0xEF, 0xBB, 0xBF];
+        bom.extend_from_slice("Первая\rВторая".as_bytes());
+        assert_eq!(text_of_file(&bom), lines);
+        let mut le = vec![0xFF, 0xFE];
+        let mut be = vec![0xFE, 0xFF];
+        for unit in "Первая\r\nВторая".encode_utf16() {
+            le.extend_from_slice(&unit.to_le_bytes());
+            be.extend_from_slice(&unit.to_be_bytes());
+        }
+        assert_eq!(text_of_file(&le), lines);
+        assert_eq!(text_of_file(&be), lines);
+    }
+
+    /// All the files' other fields: each key once; one all share shown,
+    /// one they differ in or some lack "(different)".
+    #[test]
+    fn other_fields_of_several_files() {
+        let values = |other: &[(ItemKey, &str)]| Values {
+            other: other.iter().map(|(k, v)| (*k, v.to_string())).collect(),
+            ..Default::default()
+        };
+        let a = values(&[(ItemKey::Publisher, "Hansa"), (ItemKey::Mood, "Calm")]);
+        let b = values(&[(ItemKey::Publisher, "Hansa"), (ItemKey::Isrc, "X")]);
+        let fields = other_fields(&[&a, &b]);
+        let keys: Vec<ItemKey> = fields.iter().map(|(k, _)| *k).collect();
+        assert_eq!(keys, [ItemKey::Publisher, ItemKey::Mood, ItemKey::Isrc]);
+        assert!(!fields[0].1.mixed && fields[0].1.value == "Hansa");
+        assert!(fields[1].1.mixed && fields[1].1.value.is_empty());
+        assert!(fields[2].1.mixed);
+    }
 
     #[test]
     fn names_in_words() {

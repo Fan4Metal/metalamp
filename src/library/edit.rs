@@ -251,8 +251,12 @@ pub struct Values {
     /// The other text fields ([`is_other`]), several values of a key
     /// joined with "; ".
     pub other: Vec<(ItemKey, String)>,
-    /// The usual fields the tag lacks and can hold, by group, to be added.
-    pub addable: Vec<(Group, ItemKey)>,
+    /// The usual fields the tag can hold, by group ([`STANDARD`]), those
+    /// it lacks to be added.
+    pub standard: Vec<(Group, ItemKey)>,
+    /// The lyrics (the first lyrics item: one language's), lines ending
+    /// with `\n`; empty: none.
+    pub lyrics: String,
 }
 
 /// What to write.
@@ -263,6 +267,8 @@ pub struct Changes {
     pub main: [Option<String>; MAIN],
     /// Other fields to put (values split at "; "; empty: removed).
     pub other: Vec<(ItemKey, String)>,
+    /// The lyrics put (empty: removed), or `None` to leave them.
+    pub lyrics: Option<String>,
     /// The cover put or removed, or `None` to leave it as it is.
     pub cover: Option<CoverChange>,
 }
@@ -285,23 +291,71 @@ pub fn read(path: &Path, version: Id3Version) -> Result<Values, String> {
     with_tag(
         path,
         |tag, kind| {
-            let other: Vec<(ItemKey, String)> = super::details::fields_of(tag)
-                .into_iter()
-                .filter(|(k, _)| is_other(*k))
-                .collect();
-            let addable = standard_for(kind)
-                .into_iter()
-                .filter(|(_, k)| !other.iter().any(|(o, _)| o == k))
-                .collect();
+            let lyrics = LYRICS
+                .iter()
+                .find_map(|k| tag.get_strings(*k).next())
+                .map(|t| t.replace("\r\n", "\n").replace('\r', "\n"))
+                .unwrap_or_default();
             Ok(Values {
                 main: values(tag),
-                other,
-                addable,
+                other: super::details::fields_of(tag)
+                    .into_iter()
+                    .filter(|(k, _)| is_other(*k))
+                    .collect(),
+                standard: standard_for(kind),
+                lyrics,
             })
         },
         None,
         version,
     )
+}
+
+/// The keys lyrics are read from, in this order: ID3v2's USLT, a FLAC's
+/// `UNSYNCEDLYRICS` and `LYRICS`, MP4's `©lyr` (either).
+const LYRICS: [ItemKey; 2] = [ItemKey::UnsyncLyrics, ItemKey::Lyrics];
+
+/// The lyrics put as the tag's first lyrics item (its language and
+/// description kept; a new one's key the first of [`LYRICS`] the tag's
+/// type holds), its line ends as the item before had them, else Windows'
+/// (as the taggers there write them); the other items (other languages)
+/// kept. Empty: every lyrics item removed.
+fn put_lyrics(tag: &mut Tag, text: &str) {
+    let text = text.trim_end();
+    if text.is_empty() {
+        for key in LYRICS {
+            tag.remove_key(key);
+        }
+        return;
+    }
+    let first = LYRICS.iter().find_map(|k| tag.get(*k).cloned());
+    let key = match &first {
+        Some(item) => item.key(),
+        None => match LYRICS.iter().find(|k| k.map_key(tag.tag_type()).is_some()) {
+            Some(k) => *k,
+            None => return,
+        },
+    };
+    let unix = first
+        .as_ref()
+        .and_then(|i| i.value().text())
+        .is_some_and(|t| t.contains('\n') && !t.contains('\r'));
+    let text = if unix {
+        text.to_owned()
+    } else {
+        text.replace('\n', "\r\n")
+    };
+    let rest: Vec<TagItem> = tag.get_items(key).skip(1).cloned().collect();
+    tag.remove_key(key);
+    let mut item = TagItem::new(key, ItemValue::Text(text));
+    if let Some(first) = &first {
+        item.set_lang(*first.lang());
+        item.set_description(first.description().to_owned());
+    }
+    tag.push(item);
+    for item in rest {
+        tag.push(item);
+    }
 }
 
 /// Writes `changes` to `path`'s tag (one is made when it has none), and
@@ -750,6 +804,9 @@ fn apply(tag: &mut Tag, changes: &Changes) -> Result<(), String> {
                 }
             }
         }
+    }
+    if let Some(lyrics) = &changes.lyrics {
+        put_lyrics(tag, lyrics);
     }
     if let Some(change) = &changes.cover {
         put_cover(tag, change);
@@ -1224,7 +1281,7 @@ mod tests {
         for (name, bytes, version) in cases {
             let file = dir.join(name);
             std::fs::write(&file, bytes).unwrap();
-            let offered = read(&file, version).unwrap().addable;
+            let offered = read(&file, version).unwrap().standard;
             assert!(offered.len() >= 20, "{name}: {offered:?}");
             if version == Id3Version::V23 {
                 assert!(!offered.iter().any(|(_, k)| *k == ItemKey::Mood));
@@ -1248,7 +1305,68 @@ mod tests {
                     back.other
                 );
             }
-            assert!(back.addable.is_empty(), "{name}: {:?}", back.addable);
+            assert_eq!(back.standard, offered, "{name}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Lyrics written into an MP3 (USLT) and a FLAC, read back with `\n`
+    /// line ends; an MP3's language and description kept when changed, its
+    /// lines ending as Windows' taggers end them; then removed.
+    #[test]
+    fn lyrics_written() {
+        let dir = std::env::temp_dir().join(format!("metalamp_lyrics_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut mp3 = Vec::new();
+        for _ in 0..4 {
+            mp3.extend_from_slice(&[0xFF, 0xFB, 0x90, 0x64]);
+            mp3.extend_from_slice(&[0; 413]);
+        }
+        let uslt = |path: &Path| {
+            let mut f = std::fs::File::open(path).unwrap();
+            let file = lofty::mpeg::MpegFile::read_from(&mut f, ParseOptions::new()).unwrap();
+            file.id3v2()
+                .unwrap()
+                .into_iter()
+                .filter_map(|frame| match frame {
+                    Frame::UnsynchronizedText(u) => {
+                        Some((u.language, u.description.to_string(), u.content.to_string()))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let lyrics = |text: &str| Changes {
+            lyrics: Some(text.to_owned()),
+            ..Default::default()
+        };
+        let mut flac = flac_with_cover();
+        flac.extend_from_slice(&b"\xFF\xF8 the frames that follow".repeat(40));
+        for (name, bytes) in [("song.mp3", mp3), ("song.flac", flac)] {
+            let file = dir.join(name);
+            std::fs::write(&file, bytes).unwrap();
+            assert_eq!(read(&file, Id3Version::default()).unwrap().lyrics, "");
+            write(&file, &lyrics("First line\nSecond line\n"), WriteTags::default()).unwrap();
+            assert_eq!(
+                read(&file, Id3Version::default()).unwrap().lyrics,
+                "First line\nSecond line"
+            );
+            if name.ends_with(".mp3") {
+                let mut tag = Tag::new(TagType::Id3v2);
+                let mut item =
+                    TagItem::new(ItemKey::UnsyncLyrics, ItemValue::Text("Old".into()));
+                item.set_lang(*b"rus");
+                item.set_description("Слова".into());
+                tag.push(item);
+                tag.save_to_path(&file, WriteOptions::default()).unwrap();
+                write(&file, &lyrics("Новая\nстрока"), WriteTags::default()).unwrap();
+                assert_eq!(
+                    uslt(&file),
+                    [(*b"rus", "Слова".to_owned(), "Новая\r\nстрока".to_owned())]
+                );
+            }
+            write(&file, &lyrics(""), WriteTags::default()).unwrap();
+            assert_eq!(read(&file, Id3Version::default()).unwrap().lyrics, "");
         }
         std::fs::remove_dir_all(&dir).unwrap();
     }
