@@ -1160,8 +1160,6 @@ impl InfoView {
         }
     }
 
-    /// Draws the window while it is open; whether files were written (the
-    /// library reads them again).
     /// The library whose genres the genre's field offers: they are
     /// gathered again when it is another (each frame while editing).
     pub fn set_library(&mut self, library: &crate::library::Library) {
@@ -1171,6 +1169,8 @@ impl InfoView {
         }
     }
 
+    /// Draws the window while it is open; whether files were written (the
+    /// library reads them again).
     pub fn show(&mut self, ctx: &egui::Context, owner: Option<isize>, keys: &Keymap) -> bool {
         self.poll(ctx);
         self.poll_cover(ctx);
@@ -1761,7 +1761,7 @@ fn body_one(
                         f.focus_other = None;
                     }
                     if let Some((_, field)) = f.other.get_mut(*i) {
-                        text_field(ui, field, false, true, None, focus);
+                        text_field(ui, field, false, true, None, focus, None);
                     }
                 }),
                 (Other::Shown(_, text), _) => line(ui, width, &n, pad, |ui| {
@@ -1922,7 +1922,7 @@ fn other_lines_all(ui: &mut Ui, form: &mut Form, width: f32, editing: bool) {
                 if focus {
                     *focus_other = None;
                 }
-                text_field(ui, field, false, true, None, focus);
+                text_field(ui, field, false, true, None, focus, None);
             } else if field.mixed {
                 boxed(ui, "", tr!("(different)", "(разные)"), Some(1), None);
             } else {
@@ -2001,11 +2001,9 @@ fn main_cell(
             if let Some(f) = form.main.get_mut(key as usize) {
                 let valid = !f.touched || key.takes(&f.value);
                 if key == edit::Key::Genre {
-                    let room = ui.available_width() - MENU_BUTTON - ui.spacing().item_spacing.x;
-                    text_field(ui, f, comment, valid, Some(room), focus);
-                    genre_menu(ui, f, genres);
+                    genre_field(ui, f, valid, genres);
                 } else {
-                    text_field(ui, f, comment, valid, width, focus);
+                    text_field(ui, f, comment, valid, width, focus, None);
                 }
             }
         }
@@ -2013,7 +2011,8 @@ fn main_cell(
 }
 
 /// A field in a text field: "(different)" as a hint while the files differ
-/// in it and nothing was typed; red while not what the field takes.
+/// in it and nothing was typed; red while not what the field takes. `id`:
+/// its own, else egui's.
 fn text_field(
     ui: &mut Ui,
     f: &mut Field,
@@ -2021,7 +2020,8 @@ fn text_field(
     valid: bool,
     width: Option<f32>,
     focus: bool,
-) {
+    id: Option<egui::Id>,
+) -> egui::Response {
     let hint = if f.mixed && !f.touched {
         tr!("(different)", "(разные)")
     } else {
@@ -2038,6 +2038,9 @@ fn text_field(
     if !valid {
         edit = edit.text_color(palette::error());
     }
+    if let Some(id) = id {
+        edit = edit.id(id);
+    }
     let resp = ui.add(edit);
     // Typed back to what it was (a mixed field emptied again): left
     // alone, not written empty to every file.
@@ -2049,6 +2052,165 @@ fn text_field(
         resp.scroll_to_me(Some(egui::Align::Center));
     }
     super::take_leaving_key(ui, &resp);
+    resp
+}
+
+/// The most genres suggested under the genre's field as it is typed in.
+const SUGGESTIONS: usize = 8;
+
+/// What the genre's field remembers between frames: the suggestion chosen
+/// with the arrows, the text the suggestions were hidden for (Esc, or one
+/// taken), where they were shown (a click on them takes the field's
+/// focus away before it is a click).
+#[derive(Clone, Default)]
+struct Suggest {
+    chosen: Option<usize>,
+    hidden: Option<String>,
+    rect: Option<egui::Rect>,
+}
+
+/// The genre's field while editing: under it, as it is typed in, the
+/// genres that start with the text, then those with a word starting with
+/// it, then those containing it (`suggestions`); Up and Down choose one,
+/// Enter or a click takes it, Esc hides them. Beside it, the menu of all
+/// of them (`genre_menu`).
+fn genre_field(ui: &mut Ui, f: &mut Field, valid: bool, genres: &[String]) {
+    let room = ui.available_width() - MENU_BUTTON - ui.spacing().item_spacing.x;
+    let id = ui.make_persistent_id("genre_field");
+    let memory = id.with("suggest");
+    let mut state: Suggest = ui.data(|d| d.get_temp(memory)).unwrap_or_default();
+    let focused = ui.memory(|m| m.has_focus(id));
+    let pointer = ui.input(|i| i.pointer.hover_pos());
+    let over = state
+        .rect
+        .zip(pointer)
+        .is_some_and(|(r, p)| r.contains(p));
+    let offered = |f: &Field, state: &Suggest| -> Vec<&str> {
+        let hidden = state.hidden.as_deref() == Some(f.value.as_str());
+        if f.touched && !hidden {
+            suggestions(&f.value, genres)
+        } else {
+            Vec::new()
+        }
+    };
+    let list = if focused || over {
+        offered(f, &state)
+    } else {
+        Vec::new()
+    };
+    if state.chosen.is_some_and(|c| c >= list.len()) {
+        state.chosen = None;
+    }
+    let mut take = None;
+    // Taken before the field sees them: the arrows would move its cursor,
+    // Enter and Esc take its focus away (and Esc would end the editing).
+    if focused && !list.is_empty() {
+        let n = list.len();
+        ui.input_mut(|i| {
+            let none = egui::Modifiers::NONE;
+            if i.consume_key(none, Key::ArrowDown) {
+                state.chosen = Some(state.chosen.map_or(0, |c| (c + 1) % n));
+            }
+            if i.consume_key(none, Key::ArrowUp) {
+                state.chosen = Some(state.chosen.map_or(n - 1, |c| (c + n - 1) % n));
+            }
+            if let Some(c) = state.chosen
+                && i.consume_key(none, Key::Enter)
+            {
+                take = Some(list[c].to_owned());
+            }
+            if i.consume_key(none, Key::Escape) {
+                state.hidden = Some(f.value.clone());
+            }
+        });
+    }
+    let resp = text_field(ui, f, false, valid, Some(room), false, Some(id));
+    if resp.changed() {
+        state.chosen = None;
+    }
+    genre_menu(ui, f, genres);
+
+    let list = if take.is_none() && (focused || over || resp.has_focus()) {
+        offered(f, &state)
+    } else {
+        Vec::new()
+    };
+    state.rect = None;
+    if !list.is_empty() {
+        let width = resp.rect.width();
+        let shown = egui::Area::new(memory.with("list"))
+            // Over the modal (a foreground area) without being its
+            // sublayer.
+            .order(egui::Order::Tooltip)
+            .fixed_pos(resp.rect.left_bottom() + vec2(0.0, 2.0))
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_width(width - 12.0);
+                    for (i, g) in list.iter().enumerate() {
+                        let item = egui::Button::selectable(state.chosen == Some(i), *g)
+                            .min_size(vec2(ui.available_width(), 0.0));
+                        if ui.add(item).clicked() {
+                            take = Some((*g).to_owned());
+                        }
+                    }
+                });
+            });
+        state.rect = Some(shown.response.rect);
+    }
+    if let Some(g) = take {
+        f.value = g;
+        f.touched = f.value != f.shown;
+        state.chosen = None;
+        state.hidden = Some(f.value.clone());
+        state.rect = None;
+        // Back to the field, its cursor at the end.
+        ui.memory_mut(|m| m.request_focus(id));
+        if let Some(mut edit) = egui::text_edit::TextEditState::load(ui.ctx(), id) {
+            let end = egui::text::CCursor::new(f.value.chars().count());
+            edit.cursor
+                .set_char_range(Some(egui::text::CCursorRange::one(end)));
+            edit.store(ui.ctx(), id);
+        }
+    }
+    ui.data_mut(|d| d.insert_temp(memory, state));
+}
+
+/// The genres suggested for `typed`: those starting with it, then those
+/// with a word starting with it, then those containing it, the library's
+/// before the usual ones, at most `SUGGESTIONS`; not the one typed itself.
+fn suggestions<'a>(typed: &str, library: &'a [String]) -> Vec<&'a str> {
+    let typed = typed.trim().to_lowercase();
+    if typed.is_empty() {
+        return Vec::new();
+    }
+    let common = crate::library::genres::common_besides(library);
+    let mut found: Vec<(u8, usize, &str)> = library
+        .iter()
+        .map(String::as_str)
+        .chain(common)
+        .enumerate()
+        .filter_map(|(order, g)| {
+            let lower = g.to_lowercase();
+            let rank = if lower == typed {
+                return None;
+            } else if lower.starts_with(&typed) {
+                0
+            } else if lower
+                .split(|c: char| !c.is_alphanumeric())
+                .any(|w| w.starts_with(&typed))
+            {
+                1
+            } else if lower.contains(&typed) {
+                2
+            } else {
+                return None;
+            };
+            Some((rank, order, g))
+        })
+        .collect();
+    found.sort();
+    found.truncate(SUGGESTIONS);
+    found.into_iter().map(|(_, _, g)| g).collect()
 }
 
 /// The width of the button beside the genre's field.
@@ -3197,12 +3359,7 @@ mod tests {
             egui::Modal::new(egui::Id::new("file_info")).show(&ctx, |ui| {
                 ui.set_width(WIDTH);
                 rect = ui
-                    .horizontal_top(|ui| {
-                        let room =
-                            ui.available_width() - MENU_BUTTON - ui.spacing().item_spacing.x;
-                        text_field(ui, field, false, true, Some(room), false);
-                        genre_menu(ui, field, &library);
-                    })
+                    .horizontal_top(|ui| genre_field(ui, field, true, &library))
                     .response
                     .rect;
                 ui.add_space(300.0);
@@ -3246,5 +3403,81 @@ mod tests {
                 .is_some_and(|l| l.id != egui::Id::new("file_info")),
             "over the window"
         );
+    }
+
+    #[test]
+    fn genres_are_suggested_as_they_are_typed() {
+        let library = vec!["Death Metal | Doom Metal".to_owned(), "Rock".to_owned()];
+        // Starting with it, then a word starting with it, then containing
+        // it; the library's first.
+        let s = suggestions("death", &library);
+        assert_eq!(s[0], "Death Metal | Doom Metal");
+        assert_eq!(s[1], "Death Metal");
+        assert!(s.contains(&"Melodic Death Metal"));
+        assert_eq!(suggestions("roc", &library)[0], "Rock");
+        assert!(suggestions("rock", &library).iter().all(|g| *g != "Rock"));
+        assert!(suggestions("  ", &library).is_empty());
+        assert!(suggestions("metal", &library).len() <= SUGGESTIONS);
+
+        // Typed in the field: Down chooses the first, Enter takes it.
+        let ctx = egui::Context::default();
+        let mut field = Field::of([String::new()].iter());
+        let mut time = 0.0;
+        let mut frame = |events: Vec<egui::Event>| {
+            time += 0.05;
+            genre_frame(&ctx, time, events, &mut field)
+        };
+        for _ in 0..3 {
+            frame(vec![]);
+        }
+        let line = frame(vec![]);
+        let at = egui::pos2(line.left() + 40.0, line.center().y);
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        frame(vec![egui::Event::PointerMoved(at), press(true)]);
+        frame(vec![press(false)]);
+        frame(vec![egui::Event::Text("roc".to_owned())]);
+        let key = |key, pressed| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: Default::default(),
+        };
+        frame(vec![key(Key::ArrowDown, true), key(Key::ArrowDown, false)]);
+        frame(vec![key(Key::Enter, true), key(Key::Enter, false)]);
+        frame(vec![]);
+        drop(frame);
+        assert_eq!(field.value, "Rock");
+        assert!(field.touched);
+
+        // A click on a suggestion takes it, though the press takes the
+        // field's focus away first.
+        let mut field = Field::of([String::new()].iter());
+        let mut frame = |events: Vec<egui::Event>| {
+            time += 0.05;
+            genre_frame(&ctx, time, events, &mut field)
+        };
+        frame(vec![egui::Event::PointerMoved(at), press(true)]);
+        frame(vec![press(false)]);
+        frame(vec![egui::Event::Text("roc".to_owned())]);
+        frame(vec![]);
+        let item = egui::pos2(line.left() + 40.0, line.bottom() + 16.0);
+        let click = |pressed| egui::Event::PointerButton {
+            pos: item,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        frame(vec![egui::Event::PointerMoved(item)]);
+        frame(vec![click(true)]);
+        frame(vec![click(false)]);
+        frame(vec![]);
+        drop(frame);
+        assert_eq!(field.value, "Rock");
     }
 }
