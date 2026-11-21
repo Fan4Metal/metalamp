@@ -225,13 +225,16 @@ const INDEX: [[f32; 2]; 38] = [
 ];
 /// The output against the recorded enhancer's: its peaks went up to
 /// 3.7 dB over full scale, and the player's volume after it (167 of 255,
-/// about -6 dB) took them back under it, with no limiter. Here the same
-/// 6 dB come off at once, so the final limiter only catches what is left:
-/// with 2 dB off it worked nearly all the time on rock (94-100 % of the
-/// time, 2.4-3.1 dB on average), and its 10 ms recovery moved the bass's
-/// gain within a note, heard as a gurgle; with 6 dB, 0.3-10 % of the time,
-/// 0.05-0.2 dB on average, the bass's gain moving no faster than the
-/// recorded one's.
+/// linear: -3.7 dB) took them back to it, with no limiter. Here 6 dB come
+/// off, so the final limiter, which keeps true peaks under -1 dB, only
+/// catches what is left. On rock, of the time it worked and the bass's
+/// gain movement (15-40 Hz, against the recorded one's 0.52-0.73): with
+/// 2 dB off 94-100 %, 2.4-3.1 dB on average, and its 10 ms recovery moved
+/// the bass's gain within a note, heard as a gurgle; with 3.7 dB (as loud
+/// as the recorded player at 167) 76-95 %, 1.2-1.9 dB, and on a quieter
+/// song the bass moved twice as much as the recorded one's; with 5 dB
+/// 28-64 %, 0.5-0.9 dB, most of the dB gained taken back; with 6 dB 8-21 %,
+/// 0.2-0.3 dB, the bass's gain moving less than the recorded one's.
 const OUTPUT_TRIM_DB: f32 = -6.0;
 /// The share of the way a changed control's curve and drive go per hop
 /// (a quarter window): about 25 ms at 44.1 and 48 kHz.
