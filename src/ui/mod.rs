@@ -22,6 +22,7 @@ pub mod player_bar;
 pub mod playlist;
 pub mod ribbons;
 pub mod ripples;
+pub mod scope;
 pub mod settings;
 pub mod fireworks;
 pub mod spectrum;

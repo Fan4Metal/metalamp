@@ -8,9 +8,9 @@
 //! behind it, higher, narrower and fainter, each hiding what is behind
 //! it, as the cover of "Unknown Pleasures"); a waveform rolling from the
 //! right as DJ software draws a track (`waveform`: the bass, the middle
-//! and the treble as layers of their own colours), an oscilloscope (25 ms
-//! of the wave, started at a rising zero crossing so a steady tone stands
-//! still), a spectrogram (the analyzer's bands as a column of colours
+//! and the treble as layers of their own colours), an oscilloscope (`scope`:
+//! 25 ms of the wave as a tube's trace with an afterglow, held still on a
+//! tone), a spectrogram (the analyzer's bands as a column of colours
 //! every 20 ms, the loud ones bright, rolling left out of the live
 //! spectrum drawn as bars on the right; brighter on the beats), three
 //! scenes: a
@@ -50,6 +50,7 @@ use crate::ui::lightning::{self, Lightning};
 use crate::ui::notes::{self, Notes};
 use crate::ui::ribbons::{self, Ribbons};
 use crate::ui::ripples::{self, Ripples};
+use crate::ui::scope::Scope;
 use crate::ui::fireworks::{self, Fireworks};
 use crate::ui::spectrum::{self, Analyzer};
 use crate::ui::strata::Strata;
@@ -64,9 +65,6 @@ pub const FETCH: usize = 8192;
 /// The time of a column of the spectrogram, and its width in points.
 const COLUMN_S: f32 = 0.02;
 const GRAM_PITCH: f32 = 2.0;
-/// The oscilloscope's span, and how far back it looks for a zero crossing.
-const SCOPE_S: f32 = 0.025;
-const TRIGGER_S: f32 = 0.02;
 /// The spectrogram's colours: a level's place among the ground, the
 /// analyzer's foot, its top and its peaks.
 const GRAM_STOPS: [f32; 4] = [0.0, 0.4, 0.75, 1.0];
@@ -153,8 +151,7 @@ pub struct Visualizer {
     gram_beat: Beat,
     gram_live: Vec<f32>,
     gram_peaks: Vec<(f32, f32)>,
-    /// The oscilloscope's stretch of the wave.
-    scope: Vec<f32>,
+    scope: Scope,
     /// The tap's end at the frame before (`None`: nothing heard then).
     end: Option<u64>,
     /// Silence owed while nothing is heard, in seconds.
@@ -201,7 +198,7 @@ impl Visualizer {
             gram_beat: Beat::default(),
             gram_live: Vec::new(),
             gram_peaks: Vec::new(),
-            scope: Vec::new(),
+            scope: Scope::default(),
             end: None,
             idle: 0.0,
             last: Instant::now(),
@@ -472,22 +469,10 @@ impl Visualizer {
                 }
             }
             Visual::Off => {}
-            Visual::Scope => match heard {
-                Some((s, h)) => {
-                    let span = ((h.rate as f32 * SCOPE_S) as usize).clamp(16, s.len() / 2);
-                    let reach = ((h.rate as f32 * TRIGGER_S) as usize).min(s.len() - span);
-                    // The rising zero crossing nearest the end that leaves
-                    // the span after it, else the last span.
-                    let latest = s.len() - span;
-                    let start = (latest - reach + 1..=latest)
-                        .rev()
-                        .find(|&i| s[i - 1] < 0.0 && s[i] >= 0.0)
-                        .unwrap_or(latest);
-                    self.scope.clear();
-                    self.scope.extend_from_slice(&s[start..start + span]);
-                }
-                None => self.scope.clear(),
-            },
+            Visual::Scope => {
+                let heard = heard.map(|(s, h)| (s, h.rate));
+                self.scope.feed(heard, new > 0, dt, size.x);
+            }
         }
     }
 
@@ -543,7 +528,7 @@ impl Visualizer {
             Visual::Spectrogram => {
                 !self.gram.is_empty() || self.gram_live.iter().any(|&l| l > 0.0)
             }
-            Visual::Scope => !self.scope.is_empty(),
+            Visual::Scope => self.scope.active(),
             Visual::Off => false,
         }
     }
@@ -573,7 +558,7 @@ impl Visualizer {
             Visual::Piano => self.paint_piano(painter, rect),
             Visual::Waveform => self.waveform.paint(painter, rect),
             Visual::Spectrogram => self.paint_gram(painter, rect),
-            Visual::Scope => self.paint_scope(painter, rect),
+            Visual::Scope => self.scope.paint(painter, rect),
             Visual::Off => self.paint_logo(painter, rect),
         }
     }
@@ -845,53 +830,6 @@ impl Visualizer {
         }
     }
 
-    fn paint_scope(&self, painter: &Painter, rect: Rect) {
-        let cy = rect.center().y;
-        let half = rect.height() / 2.0 - 1.0;
-        painter.hline(rect.x_range(), cy, Stroke::new(1.0, palette::line()));
-        if self.scope.len() < 2 {
-            return;
-        }
-        // About two points a pixel: a span at 192 kHz is thinned out.
-        let step = (self.scope.len() as f32 / (rect.width() * 2.0))
-            .ceil()
-            .max(1.0) as usize;
-        let last = (self.scope.len() - 1) as f32;
-        let points: Vec<_> = (0..self.scope.len())
-            .step_by(step)
-            .map(|i| {
-                let x = rect.left() + rect.width() * i as f32 / last;
-                let y = cy - self.scope[i].clamp(-1.0, 1.0) * half;
-                pos2(x, y)
-            })
-            .collect();
-        // A glow under the line, as a tube's trace; each point coloured by
-        // its place (a rainbow along the line) or, when the colours tell
-        // the level, by how far it swings.
-        let colours = palette::visual_for(Visual::Scope);
-        let colour_at = move |p: egui::Pos2, top: bool| {
-            let place = (p.x - rect.left()) / rect.width();
-            let level = if colours.by_level() {
-                ((p.y - cy).abs() / half.max(1.0)).sqrt()
-            } else if top {
-                1.0
-            } else {
-                0.0
-            };
-            colours.at(level, place)
-        };
-        painter.add(Shape::line(
-            points.clone(),
-            egui::epaint::PathStroke::new_uv(4.0, move |_, p| {
-                colour_at(p, false).gamma_multiply(0.35)
-            }),
-        ));
-        painter.add(Shape::line(
-            points,
-            egui::epaint::PathStroke::new_uv(1.5, move |_, p| colour_at(p, true)),
-        ));
-    }
-
     /// The spectrogram: the history rolling left out of the live spectrum
     /// on the right (the bands now as bars from the history's edge, with
     /// their peaks), moving smoothly between columns, fading out on the
@@ -1159,6 +1097,7 @@ mod tests {
             Visual::Harp,
             Visual::Waveform,
             Visual::Spectrogram,
+            Visual::Scope,
         ] {
             let mut v = Visualizer::new();
             let ctx = egui::Context::default();
@@ -1312,27 +1251,26 @@ mod tests {
     }
 
     #[test]
-    fn the_scope_starts_at_a_rising_zero_crossing() {
+    fn the_scope_shows_a_sweep_then_its_afterglow_fades() {
         let mut v = Visualizer::new();
         let rate = 48000;
-        // 1 kHz: a period of 48 frames; started off its zero.
         let s = sine(1000.0, rate, FETCH, 7);
-        v.feed(
-            Visual::Scope,
-            Some((
-                &s,
-                Heard {
-                    rate,
-                    end: FETCH as u64,
-                },
-            )),
-            None,
-            Some(Vec2::new(300.0, 80.0)),
-        );
-        assert_eq!(v.scope.len(), (rate as f32 * SCOPE_S) as usize);
-        assert!(v.scope[0] >= 0.0 && v.scope[0] < 0.07, "{}", v.scope[0]);
-        assert!(v.scope[1] > v.scope[0]);
-        v.feed(Visual::Scope, None, None, Some(Vec2::new(300.0, 80.0)));
+        // The first frame only learns where the sound is; the next one,
+        // with frames new, sweeps.
+        for end in [FETCH as u64, FETCH as u64 + 960] {
+            v.feed(
+                Visual::Scope,
+                Some((&s, Heard { rate, end })),
+                None,
+                Some(Vec2::new(300.0, 80.0)),
+            );
+        }
+        assert!(v.active());
+        // Stopped: the afterglow fades.
+        for _ in 0..20 {
+            v.last = Instant::now() - std::time::Duration::from_millis(20);
+            v.feed(Visual::Scope, None, None, Some(Vec2::new(300.0, 80.0)));
+        }
         assert!(!v.active());
     }
 
