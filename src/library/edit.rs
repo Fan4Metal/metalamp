@@ -1,5 +1,6 @@
 //! Writing a track's tag (the file info window's editing, `ui::info`):
-//! the main fields, and the other text fields the tag already has. The
+//! the main fields, the other text fields the tag already has, and the
+//! usual ones it can hold added (`Values::addable`, `STANDARD`). The
 //! file's own tag is read (an MP3's first ID3v2
 //! tag, as the library reads it: `tags::first_tag_view`), split into the
 //! fields every tag has and the rest (`SplitTag`), the fields changed, and
@@ -131,6 +132,108 @@ pub fn is_other(key: ItemKey) -> bool {
         )
 }
 
+/// The groups the fields that can be added are offered in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Group {
+    People,
+    Release,
+    Music,
+    Links,
+}
+
+impl Group {
+    pub const ALL: [Group; 4] = [Group::People, Group::Release, Group::Music, Group::Links];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Group::People => tr!("People", "Участники"),
+            Group::Release => tr!("Release", "Издание"),
+            Group::Music => tr!("Music", "Музыка"),
+            Group::Links => tr!("Links", "Ссылки"),
+        }
+    }
+}
+
+/// The usual fields of taggers beyond the main ones, offered to be added
+/// to a tag that lacks them ([`addable`]): those the file's tag can hold.
+/// Not the sort orders, nor the podcasts' and the videos' fields.
+const STANDARD: &[(Group, ItemKey)] = &[
+    (Group::People, ItemKey::OriginalArtist),
+    (Group::People, ItemKey::Conductor),
+    (Group::People, ItemKey::Lyricist),
+    (Group::People, ItemKey::OriginalLyricist),
+    (Group::People, ItemKey::Remixer),
+    (Group::People, ItemKey::Arranger),
+    (Group::People, ItemKey::Producer),
+    (Group::People, ItemKey::Engineer),
+    (Group::Release, ItemKey::Publisher),
+    (Group::Release, ItemKey::Label),
+    (Group::Release, ItemKey::CopyrightMessage),
+    (Group::Release, ItemKey::OriginalAlbumTitle),
+    (Group::Release, ItemKey::SetSubtitle),
+    (Group::Release, ItemKey::OriginalReleaseDate),
+    (Group::Release, ItemKey::ReleaseDate),
+    (Group::Release, ItemKey::Isrc),
+    (Group::Release, ItemKey::CatalogNumber),
+    (Group::Release, ItemKey::Barcode),
+    (Group::Release, ItemKey::EncodedBy),
+    (Group::Release, ItemKey::InternetRadioStationName),
+    (Group::Music, ItemKey::ContentGroup),
+    (Group::Music, ItemKey::TrackSubtitle),
+    (Group::Music, ItemKey::Bpm),
+    (Group::Music, ItemKey::IntegerBpm),
+    (Group::Music, ItemKey::InitialKey),
+    (Group::Music, ItemKey::Mood),
+    (Group::Music, ItemKey::Language),
+    (Group::Links, ItemKey::AudioFileUrl),
+    (Group::Links, ItemKey::TrackArtistUrl),
+    (Group::Links, ItemKey::AudioSourceUrl),
+    (Group::Links, ItemKey::RadioStationUrl),
+    (Group::Links, ItemKey::CommercialInformationUrl),
+    (Group::Links, ItemKey::PublisherUrl),
+    (Group::Links, ItemKey::CopyrightUrl),
+    (Group::Links, ItemKey::PaymentUrl),
+];
+
+/// ID3v2.4's frames lofty leaves out of a tag written as 2.3.
+const NOT_IN_23: &[&str] = &["TDRL", "TMOO", "TSST", "TSOA", "TSOP", "TSOT"];
+
+/// What the tag edited is: its type, and for ID3v2 whether it is written
+/// as 2.3 (`Id3Version::writes_23`).
+#[derive(Clone, Copy, Debug)]
+struct Kind {
+    tag: TagType,
+    id3v23: bool,
+}
+
+/// The [`STANDARD`] fields a tag of `kind` can hold, as the key it is read
+/// back as (ID3v2's TPUB is the publisher, not the label), each once.
+fn standard_for(kind: Kind) -> Vec<(Group, ItemKey)> {
+    let mut out: Vec<(Group, ItemKey)> = Vec::new();
+    for &(group, key) in STANDARD {
+        let Some(mapped) = key.map_key(kind.tag) else {
+            continue;
+        };
+        if kind.tag == TagType::Id3v2 && kind.id3v23 && NOT_IN_23.contains(&mapped) {
+            continue;
+        }
+        // MP4's `tmpo` holds a number, which lofty writes from text as
+        // text: its freeform BPM instead.
+        if kind.tag == TagType::Mp4Ilst && key == ItemKey::IntegerBpm {
+            continue;
+        }
+        // The people ID3v2 lists in TIPL are keys of their own.
+        let read_as = match ItemKey::from_key(kind.tag, mapped) {
+            Some(k) if mapped != "TIPL" => k,
+            _ => key,
+        };
+        if !out.iter().any(|&(_, k)| k == read_as) {
+            out.push((group, read_as));
+        }
+    }
+    out
+}
+
 /// The files whose tags can be written (`with_tag`'s formats), by the
 /// extension.
 pub fn writable(path: &Path) -> bool {
@@ -148,6 +251,8 @@ pub struct Values {
     /// The other text fields ([`is_other`]), several values of a key
     /// joined with "; ".
     pub other: Vec<(ItemKey, String)>,
+    /// The usual fields the tag lacks and can hold, by group, to be added.
+    pub addable: Vec<(Group, ItemKey)>,
 }
 
 /// What to write.
@@ -173,21 +278,29 @@ pub enum CoverChange {
     Remove,
 }
 
-/// The values of `path`'s tag (all empty when it has none).
-pub fn read(path: &Path) -> Result<Values, String> {
+/// The values of `path`'s tag (all empty when it has none); `version`
+/// the ID3v2 version it would be written in, which decides the fields
+/// that can be added.
+pub fn read(path: &Path, version: Id3Version) -> Result<Values, String> {
     with_tag(
         path,
-        |tag| {
+        |tag, kind| {
+            let other: Vec<(ItemKey, String)> = super::details::fields_of(tag)
+                .into_iter()
+                .filter(|(k, _)| is_other(*k))
+                .collect();
+            let addable = standard_for(kind)
+                .into_iter()
+                .filter(|(_, k)| !other.iter().any(|(o, _)| o == k))
+                .collect();
             Ok(Values {
                 main: values(tag),
-                other: super::details::fields_of(tag)
-                    .into_iter()
-                    .filter(|(k, _)| is_other(*k))
-                    .collect(),
+                other,
+                addable,
             })
         },
         None,
-        Id3Version::default(),
+        version,
     )
 }
 
@@ -202,7 +315,7 @@ pub fn write(path: &Path, changes: &Changes, how: WriteTags) -> Result<(), Strin
             number_text(*key, v)?;
         }
     }
-    with_tag(path, |tag| apply(tag, changes), Some(changes), how.id3v2)?;
+    with_tag(path, |tag, _| apply(tag, changes), Some(changes), how.id3v2)?;
     if FileType::from_path(path) == Some(FileType::Mpeg) {
         other_tags(path, changes, how)?;
     }
@@ -259,7 +372,7 @@ fn other_tags(path: &Path, changes: &Changes, how: WriteTags) -> Result<(), Stri
             super::id3v1::remove(path).map_err(|e| failed(&e))?;
         }
         Id3v1Tag::Always | Id3v1Tag::Update if how.id3v1 == Id3v1Tag::Always || has_id3v1 => {
-            let values = read(path)?;
+            let values = read(path, how.id3v2)?;
             let field = |key: Key| values.main[key as usize].as_str();
             let fields = super::id3v1::Fields {
                 title: field(Key::Title),
@@ -281,7 +394,7 @@ fn other_tags(path: &Path, changes: &Changes, how: WriteTags) -> Result<(), Stri
 /// and when it writes `changes`, writes it back with the rest of it kept.
 fn with_tag<R>(
     path: &Path,
-    f: impl FnOnce(&mut Tag) -> Result<R, String>,
+    f: impl FnOnce(&mut Tag, Kind) -> Result<R, String>,
     changes: Option<&Changes>,
     version: Id3Version,
 ) -> Result<R, String> {
@@ -295,21 +408,33 @@ fn with_tag<R>(
     let mut reader = BufReader::new(view);
     let options = ParseOptions::new().read_properties(false);
     let err = |e: lofty::error::FileParseError| described(&e);
-    // The version the ID3v2 tag is written in, by the one it had.
-    let id3 = |tag: Option<&Id3v2Tag>| {
+    // Whether the ID3v2 tag is written as 2.3, by the version it had.
+    let id3v23 = |tag: Option<&Id3v2Tag>| {
         let original = tag.map(|t| match t.original_version() {
             lofty::id3::v2::Id3v2Version::V2 => 2,
             lofty::id3::v2::Id3v2Version::V3 => 3,
             lofty::id3::v2::Id3v2Version::V4 => 4,
         });
-        WriteOptions::default().use_id3v23(version.writes_23(original))
+        version.writes_23(original)
+    };
+    let id3 = |v23: bool| {
+        let kind = Kind {
+            tag: TagType::Id3v2,
+            id3v23: v23,
+        };
+        (WriteOptions::default().use_id3v23(v23), kind)
+    };
+    let of = |tag: TagType| Kind {
+        tag,
+        id3v23: false,
     };
     let write = WriteOptions::default();
     match file_type {
         Some(FileType::Mpeg) => {
             let file = lofty::mpeg::MpegFile::read_from(&mut reader, options).map_err(err)?;
             drop(reader);
-            let write = id3(file.id3v2());
+            let (write, kind) = id3(id3v23(file.id3v2()));
+            let f = move |t: &mut Tag| f(t, kind);
             let tag = file.id3v2().cloned().unwrap_or_else(|| {
                 seeded(
                     [
@@ -325,7 +450,8 @@ fn with_tag<R>(
         Some(FileType::Wav) => {
             let file = lofty::iff::wav::WavFile::read_from(&mut reader, options).map_err(err)?;
             drop(reader);
-            let write = id3(file.id3v2());
+            let (write, kind) = id3(id3v23(file.id3v2()));
+            let f = move |t: &mut Tag| f(t, kind);
             let tag = file
                 .id3v2()
                 .cloned()
@@ -342,14 +468,16 @@ fn with_tag<R>(
             for (picture, info) in file.pictures() {
                 let _ = tag.insert_picture(picture.clone(), Some(*info));
             }
-            edit(tag, f, save, path, write, |_| {})
+            let kind = of(TagType::VorbisComments);
+            edit(tag, move |t| f(t, kind), save, path, write, |_| {})
         }
         Some(FileType::Mp4) => {
             let file = lofty::mp4::Mp4File::read_from(&mut reader, options).map_err(err)?;
             drop(reader);
+            let kind = of(TagType::Mp4Ilst);
             edit(
                 file.ilst().cloned().unwrap_or_default(),
-                f,
+                move |t| f(t, kind),
                 save,
                 path,
                 write,
@@ -759,7 +887,7 @@ mod tests {
         changes.main[Key::Genre as usize] = Some("Metal".into());
         changes.main[Key::Track as usize] = Some("03/12".into());
         write(&file, &changes, WriteTags::default()).unwrap();
-        let main = read(&file).unwrap().main;
+        let main = read(&file, Id3Version::default()).unwrap().main;
         assert_eq!(main[Key::Genre as usize], "Metal");
         // lofty reads a FLAC's numbers as numbers; the comment keeps them
         // as typed.
@@ -973,13 +1101,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("old.mp3");
         std::fs::write(&file, &bytes).unwrap();
-        let before = read(&file).unwrap().main;
+        let before = read(&file, Id3Version::default()).unwrap().main;
         assert_eq!(before[Key::Title as usize], "Old title");
         assert_eq!(before[Key::Album as usize], "Old album");
         let mut changes: Changes = Default::default();
         changes.main[Key::AlbumArtist as usize] = Some("Old band".into());
         write(&file, &changes, WriteTags::default()).unwrap();
-        let after = read(&file).unwrap().main;
+        let after = read(&file, Id3Version::default()).unwrap().main;
         assert_eq!(after[Key::AlbumArtist as usize], "Old band");
         assert_eq!(after[Key::Title as usize], "Old title");
         assert_eq!(after[Key::Artist as usize], "Old artist");
@@ -1053,7 +1181,7 @@ mod tests {
         assert_ne!(&written[written.len() - 128..written.len() - 125], b"TAG");
         assert!(read_ape().is_none());
         assert_eq!(
-            read(&file).unwrap().main[Key::Title as usize],
+            read(&file, Id3Version::default()).unwrap().main[Key::Title as usize],
             "Newer title"
         );
         std::fs::remove_dir_all(&dir).unwrap();
@@ -1067,6 +1195,62 @@ mod tests {
         let file24 = Id3Version::File24;
         assert!(!file24.writes_23(None) && file24.writes_23(Some(3)) && !file24.writes_23(Some(4)));
         assert!(Id3Version::V23.writes_23(Some(4)) && !Id3Version::V24.writes_23(Some(3)));
+    }
+
+    /// Every field offered to be added, written into an MP3's ID3v2 (2.3
+    /// and 2.4) and a FLAC's comments, is read back as that field with
+    /// that value, and is no longer offered; 2.3 is not offered what it
+    /// cannot hold.
+    #[test]
+    fn the_fields_added_are_read_back() {
+        let value = |key: ItemKey| match key {
+            ItemKey::OriginalReleaseDate | ItemKey::ReleaseDate => "2001".to_owned(),
+            ItemKey::Bpm | ItemKey::IntegerBpm => "120".to_owned(),
+            k if format!("{k:?}").ends_with("Url") => format!("http://example.com/{k:?}"),
+            k => format!("{k:?} value"),
+        };
+        let dir = std::env::temp_dir().join(format!("metalamp_added_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut mp3 = Vec::new();
+        for _ in 0..4 {
+            mp3.extend_from_slice(&[0xFF, 0xFB, 0x90, 0x64]);
+            mp3.extend_from_slice(&[0; 413]);
+        }
+        let cases = [
+            ("v23.mp3", mp3.clone(), Id3Version::V23),
+            ("v24.mp3", mp3, Id3Version::V24),
+            ("comments.flac", flac_with_cover(), Id3Version::default()),
+        ];
+        for (name, bytes, version) in cases {
+            let file = dir.join(name);
+            std::fs::write(&file, bytes).unwrap();
+            let offered = read(&file, version).unwrap().addable;
+            assert!(offered.len() >= 20, "{name}: {offered:?}");
+            if version == Id3Version::V23 {
+                assert!(!offered.iter().any(|(_, k)| *k == ItemKey::Mood));
+            }
+            let changes = Changes {
+                other: offered.iter().map(|&(_, k)| (k, value(k))).collect(),
+                ..Default::default()
+            };
+            let how = WriteTags {
+                id3v2: version,
+                ..Default::default()
+            };
+            write(&file, &changes, how).unwrap();
+            let back = read(&file, version).unwrap();
+            for &(_, key) in &offered {
+                let found = back.other.iter().find(|(k, _)| *k == key);
+                assert_eq!(
+                    found.map(|(_, v)| v.as_str()),
+                    Some(value(key).as_str()),
+                    "{name}: {key:?} in {:?}",
+                    back.other
+                );
+            }
+            assert!(back.addable.is_empty(), "{name}: {:?}", back.addable);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// The other fields: several values split at "; ", a link kept a
@@ -1121,7 +1305,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let copy = dir.join("copy.mp3");
         std::fs::copy(&sample, &copy).unwrap();
-        let before = read(&copy).unwrap().main;
+        let before = read(&copy, Id3Version::default()).unwrap().main;
         let v23 = is_id3v23(&copy);
         let frames_before = id3_frames(&copy);
         let mut changes: Changes = Default::default();
@@ -1174,7 +1358,7 @@ mod tests {
             .collect();
         assert_eq!(front, [cover]);
         drop(f);
-        let read_back = read(&copy).unwrap();
+        let read_back = read(&copy, Id3Version::default()).unwrap();
         assert!(
             read_back
                 .other

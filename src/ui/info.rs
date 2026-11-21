@@ -46,7 +46,7 @@ use crate::keymap::{Action, Cmd, Keymap};
 use crate::library::details::{self, Details};
 use crate::library::edit::{self, Changes, CoverChange, Values};
 use crate::palette;
-use crate::settings::CoverSide;
+use crate::settings::{CoverSide, Id3Version};
 
 type Read = (PathBuf, Result<Details, String>);
 
@@ -251,6 +251,11 @@ struct Form {
     main: Vec<Field>,
     /// The other fields of one file (all the files at once: none).
     other: Vec<(ItemKey, Field)>,
+    /// The usual fields that file's tag lacks and can hold, by group
+    /// (`edit::Values::addable`); those added are among `other`.
+    addable: Vec<(edit::Group, ItemKey)>,
+    /// A field just added takes the keys.
+    focus_other: Option<ItemKey>,
     /// The files that could not be read or written, with why.
     errors: Vec<String>,
     /// The fields came while editing: the first one takes the keys.
@@ -271,7 +276,7 @@ enum Polled {
 }
 
 impl Form {
-    fn read(ctx: &egui::Context, paths: Vec<PathBuf>) -> Form {
+    fn read(ctx: &egui::Context, paths: Vec<PathBuf>, version: Id3Version) -> Form {
         let (tx, rx) = channel();
         let ctx = ctx.clone();
         let to_read = paths.clone();
@@ -279,7 +284,7 @@ impl Form {
             let read = to_read
                 .iter()
                 .map(|p| {
-                    crate::guard::catch(p, || edit::read(p))
+                    crate::guard::catch(p, || edit::read(p, version))
                         .unwrap_or_else(|| {
                             Err(tr!("cannot be read", "не удалось прочитать").to_owned())
                         })
@@ -295,6 +300,8 @@ impl Form {
             rx,
             main: Vec::new(),
             other: Vec::new(),
+            addable: Vec::new(),
+            focus_other: None,
             errors: Vec::new(),
             focus_first: false,
             cover: None,
@@ -317,6 +324,10 @@ impl Form {
                             .iter()
                             .map(|(k, v)| (*k, Field::of(std::iter::once(v))))
                             .collect(),
+                        _ => Vec::new(),
+                    };
+                    self.addable = match ok.as_slice() {
+                        [one] if self.paths.len() == 1 => one.addable.clone(),
                         _ => Vec::new(),
                     };
                     self.state = State::Ready;
@@ -466,8 +477,10 @@ impl InfoView {
             self.editing = false;
         }
         self.form = match to {
-            None => Some(Form::read(ctx, self.paths.clone())),
-            Some(_) if self.editing => Some(Form::read(ctx, vec![path.clone()])),
+            None => Some(Form::read(ctx, self.paths.clone(), self.write_tags.id3v2)),
+            Some(_) if self.editing => {
+                Some(Form::read(ctx, vec![path.clone()], self.write_tags.id3v2))
+            }
             Some(_) => None,
         };
         if let Some(form) = &mut self.form {
@@ -606,7 +619,7 @@ impl InfoView {
                 if !edit::writable(&path) {
                     return;
                 }
-                let mut form = Form::read(ctx, vec![path]);
+                let mut form = Form::read(ctx, vec![path], self.write_tags.id3v2);
                 form.focus_first = true;
                 self.form = Some(form);
             }
@@ -1553,6 +1566,18 @@ fn body_one(ui: &mut Ui, d: &Details, form: Option<&mut Form>, acts: &mut Vec<Ac
             }
         }
     }
+    // The usual fields the tag can hold and does not show yet.
+    let addable: Vec<(edit::Group, ItemKey)> = form
+        .as_ref()
+        .filter(|f| f.state == State::Ready)
+        .map(|f| {
+            f.addable
+                .iter()
+                .filter(|(_, k)| !more.iter().any(|o| o.key() == *k))
+                .copied()
+                .collect()
+        })
+        .unwrap_or_default();
     let file = file_lines(d);
     let names = main_names()
         .chain(more.iter().map(|o| field_name(o.key())))
@@ -1579,15 +1604,29 @@ fn body_one(ui: &mut Ui, d: &Details, form: Option<&mut Form>, acts: &mut Vec<Ac
         None => main_lines(ui, width, pad, &mut Mode::Read(d)),
     }
 
-    if !more.is_empty() {
+    if !more.is_empty() || !addable.is_empty() {
         ui.add_space(14.0);
-        section(ui, tr!("Additional", "Дополнительно"), |_| {});
+        let mut added = None;
+        section(ui, tr!("Additional", "Дополнительно"), |ui| {
+            if !addable.is_empty() {
+                added = add_field_button(ui, &addable);
+            }
+        });
+        if let (Some(key), Some(f)) = (added, form.as_mut()) {
+            f.other.push((key, Field::default()));
+            f.focus_other = Some(key);
+            ui.ctx().request_repaint();
+        }
         for o in &more {
             let n = field_name(o.key());
             match (o, &mut form) {
-                (Other::Edited(_, i), Some(f)) => line(ui, width, &n, pad, |ui| {
+                (Other::Edited(key, i), Some(f)) => line(ui, width, &n, pad, |ui| {
+                    let focus = f.focus_other == Some(*key);
+                    if focus {
+                        f.focus_other = None;
+                    }
                     if let Some((_, field)) = f.other.get_mut(*i) {
-                        text_field(ui, field, false, true, None, false);
+                        text_field(ui, field, false, true, None, focus);
                     }
                 }),
                 (Other::Shown(_, text), _) => line(ui, width, &n, pad, |ui| {
@@ -1775,8 +1814,64 @@ fn text_field(
     }
     if focus {
         resp.request_focus();
+        resp.scroll_to_me(Some(egui::Align::Center));
     }
     super::take_leaving_key(ui, &resp);
+}
+
+/// "Add a field" in the heading of "Additional" while editing: a menu of
+/// the usual fields the tag can hold and lacks (`addable`), by group;
+/// the one chosen.
+fn add_field_button(ui: &mut Ui, addable: &[(edit::Group, ItemKey)]) -> Option<ItemKey> {
+    let resp = ui
+        .small_button(tr!("+ Add a field", "+ Добавить поле"))
+        .on_hover_text(tr!(
+            "Fields the tag does not have yet, of those its format holds",
+            "Поля, которых в теге ещё нет, из тех, что поддерживает его формат"
+        ));
+    let mut chosen = None;
+    // An id of its own (see Conventions: the tooltip's area takes the
+    // default one).
+    let shown = egui::Popup::menu(&resp)
+        .id(resp.id.with("add_field_menu"))
+        .show(|ui| {
+            ui.set_min_width(220.0);
+            let most = (ui.ctx().content_rect().height() - 120.0).clamp(160.0, 520.0);
+            egui::ScrollArea::vertical()
+                .max_height(most)
+                .show(ui, |ui| {
+                    for group in edit::Group::ALL {
+                        let keys: Vec<ItemKey> = addable
+                            .iter()
+                            .filter(|(g, _)| *g == group)
+                            .map(|(_, k)| *k)
+                            .collect();
+                        if keys.is_empty() {
+                            continue;
+                        }
+                        if group != edit::Group::ALL[0] {
+                            ui.separator();
+                        }
+                        ui.label(
+                            RichText::new(group.label().to_uppercase())
+                                .size(10.5)
+                                .strong()
+                                .color(palette::text_weak()),
+                        );
+                        for key in keys {
+                            if ui.button(field_name(key)).clicked() {
+                                chosen = Some(key);
+                            }
+                        }
+                    }
+                });
+        });
+    // Kept over the modal, as the cover's menu (see Conventions).
+    if let Some(shown) = shown {
+        ui.ctx()
+            .set_sublayer(ui.layer_id(), shown.response.layer_id);
+    }
+    chosen
 }
 
 /// A value shown in a box as the text fields' while editing, but not
@@ -2339,7 +2434,9 @@ fn field_name(key: ItemKey) -> String {
         ItemKey::Comment => tr!("Comment", "Комментарий"),
         ItemKey::AlbumArtist => tr!("Album artist", "Исп. альбома"),
         ItemKey::Composer => tr!("Composer", "Композитор"),
-        ItemKey::Publisher | ItemKey::Label => tr!("Publisher", "Издатель"),
+        ItemKey::Publisher => tr!("Publisher", "Издатель"),
+        ItemKey::Label => tr!("Label", "Лейбл"),
+        ItemKey::InternetRadioStationName => tr!("Radio station", "Радиостанция"),
         ItemKey::OriginalArtist => tr!("Orig. artist", "Ориг. исп."),
         ItemKey::CopyrightMessage => tr!("Copyright", "Копирайт"),
         ItemKey::AudioFileUrl => "URL",
