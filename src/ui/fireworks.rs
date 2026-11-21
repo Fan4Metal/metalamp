@@ -30,29 +30,33 @@ pub const BANDS: usize = 24;
 const GROUPS: usize = 8;
 /// A group sends a rocket up at most this often; at most `MOST_ROCKETS`
 /// climb at once.
-const LAUNCH_GAP_S: f32 = 0.35;
-const MOST_ROCKETS: usize = 6;
+const LAUNCH_GAP_S: f32 = 0.2;
+const MOST_ROCKETS: usize = 10;
 /// With nothing sent up for `IDLE_S` while the level is over `IDLE_FROM`,
 /// a rocket goes up anyway (a passage without notes starting).
-const IDLE_S: f32 = 1.4;
+const IDLE_S: f32 = 0.7;
 const IDLE_FROM: f32 = 0.3;
 /// A rocket climbs this long to the top of its climb, which is this far
 /// under the display's top (shares of its height; the stronger the note,
 /// the higher), throwing `EMBERS` embers a second.
 const RISE_S: [f32; 2] = [0.75, 1.05];
-const APEX: [f32; 2] = [0.28, 0.45];
+const APEX: [f32; 2] = [0.32, 0.5];
 const EMBERS: f32 = 60.0;
 /// A beat bursts a rocket that has climbed this share of its way.
 const RISEN: f32 = 0.55;
+/// A beat over STRONG bursts the next rocket up too, at SECOND of
+/// the first's size.
+const STRONG: f32 = 0.7;
+const SECOND: f32 = 0.8;
 /// The stars fall at this many heights a second squared, times their
 /// weight, slowed by their drag.
 const GRAVITY: f32 = 0.6;
 /// A shell's radius, of the height: the smallest and the largest; at
 /// most `SHELL_WIDE` of the width.
-const SHELL: [f32; 2] = [0.12, 0.33];
-const SHELL_WIDE: f32 = 0.2;
+const SHELL: [f32; 2] = [0.2, 0.5];
+const SHELL_WIDE: f32 = 0.25;
 /// The stars kept at most (the oldest go).
-const MOST: usize = 1500;
+const MOST: usize = 2200;
 /// The time step of the flight at most (a slow frame takes several), and
 /// the most of a frame taken (after a stall the scene does not jump).
 const STEP_S: f32 = 1.0 / 60.0;
@@ -321,14 +325,7 @@ impl Fireworks {
     fn strike(&mut self, strength: f32, treble: f32) {
         let size = 0.55 + 0.45 * strength;
         let shell = self.large_shell(strength, treble);
-        let highest = self
-            .rockets
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| r.risen() > RISEN)
-            .min_by(|a, b| a.1.at.y.total_cmp(&b.1.at.y))
-            .map(|(i, _)| i);
-        let place = match highest {
+        let place = match self.highest_up() {
             Some(i) => {
                 let r = self.rockets.swap_remove(i);
                 self.burst(r.at, r.place, size, shell);
@@ -346,10 +343,28 @@ impl Fireworks {
                 place
             }
         };
+        // A strong beat bursts the next one up too, a little smaller.
+        if strength > STRONG
+            && let Some(i) = self.highest_up()
+        {
+            let r = self.rockets.swap_remove(i);
+            let shell = self.large_shell(strength, treble);
+            self.burst(r.at, r.place, SECOND * size, shell);
+        }
         if strength >= self.sky {
             self.sky_place = place;
         }
         self.sky = self.sky.max(strength);
+    }
+
+    /// The rocket highest up of those past `RISEN` of their climb.
+    fn highest_up(&self) -> Option<usize> {
+        self.rockets
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.risen() > RISEN)
+            .min_by(|a, b| a.1.at.y.total_cmp(&b.1.at.y))
+            .map(|(i, _)| i)
     }
 
     /// A place across away from the last bursts: the best of a few tried.
@@ -552,7 +567,7 @@ impl Fireworks {
             if self.rockets[i].speed.y >= 0.0 {
                 let r = self.rockets.swap_remove(i);
                 let shell = self.small_shell(r.place);
-                self.burst(r.at, r.place, 0.2 + 0.4 * r.strength, shell);
+                self.burst(r.at, r.place, 0.35 + 0.45 * r.strength, shell);
             } else {
                 i += 1;
             }
@@ -922,12 +937,26 @@ mod tests {
         for _ in 0..30 {
             f.feed(Some(&[0.1; BANDS]), true, 0.02, SIZE);
         }
-        let highest = f.rockets.iter().map(|r| r.at.y).fold(f32::MAX, f32::min);
-        f.feed(Some(&beat), true, 0.02, SIZE);
-        let up: Vec<&Rocket> = f.rockets.iter().filter(|r| r.risen() > 0.1).collect();
-        assert_eq!(up.len(), 1);
-        assert!(up[0].at.y > highest);
+        let mut heights: Vec<f32> = f.rockets.iter().map(|r| r.at.y).collect();
+        heights.sort_by(f32::total_cmp);
+        // A weak beat: the highest bursts, large.
+        f.strike(0.5, 0.0);
+        assert_eq!(f.rockets.len(), 1);
+        assert_eq!(f.rockets[0].at.y, heights[1]);
+        assert_eq!(f.flashes[0].at.y, heights[0]);
         assert!(!f.flashes[0].from_ground);
+        // A strong one bursts the next one up too.
+        let mut f = settled(0.1);
+        f.launch(0.3, 1.0);
+        f.launch(0.7, 0.4);
+        for _ in 0..30 {
+            f.feed(Some(&[0.1; BANDS]), true, 0.02, SIZE);
+        }
+        assert_eq!(f.rockets.len(), 2);
+        f.strike(1.0, 0.0);
+        assert!(f.rockets.is_empty());
+        assert_eq!(f.flashes.len(), 2);
+        assert!(f.flashes.iter().all(|f| !f.from_ground));
     }
 
     #[test]
