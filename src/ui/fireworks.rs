@@ -40,7 +40,7 @@ const IDLE_FROM: f32 = 0.3;
 /// under the display's top (shares of its height; the stronger the note,
 /// the higher), throwing `EMBERS` embers a second.
 const RISE_S: [f32; 2] = [0.75, 1.05];
-const APEX: [f32; 2] = [0.32, 0.5];
+const APEX: [f32; 2] = [0.4, 0.55];
 const EMBERS: f32 = 60.0;
 /// A beat bursts a rocket that has climbed this share of its way.
 const RISEN: f32 = 0.55;
@@ -50,11 +50,11 @@ const STRONG: f32 = 0.7;
 const SECOND: f32 = 0.8;
 /// The stars fall at this many heights a second squared, times their
 /// weight, slowed by their drag.
-const GRAVITY: f32 = 0.6;
+const GRAVITY: f32 = 0.9;
 /// A shell's radius, of the height: the smallest and the largest; at
 /// most `SHELL_WIDE` of the width.
-const SHELL: [f32; 2] = [0.2, 0.5];
-const SHELL_WIDE: f32 = 0.25;
+const SHELL: [f32; 2] = [0.35, 0.8];
+const SHELL_WIDE: f32 = 0.35;
 /// The stars kept at most (the oldest go).
 const MOST: usize = 2200;
 /// The time step of the flight at most (a slow frame takes several), and
@@ -76,13 +76,16 @@ const SKY_S: f32 = 0.25;
 const TRAIL: usize = 10;
 /// A star without a trail is a streak as long as its flight in
 /// `STREAK_S`, at most `STREAK_MOST` points.
-const STREAK_S: f32 = 0.045;
-const STREAK_MOST: f32 = 20.0;
+const STREAK_S: f32 = 0.06;
+const STREAK_MOST: f32 = 36.0;
 /// A willow's and a rocket's embers on a dark theme, whatever the colours.
 const GOLD: Color32 = Color32::from_rgb(255, 190, 100);
 /// The widths are for a display this high (the full bar's), thinner in a
 /// lower one.
 const REFERENCE_HEIGHT: f32 = 118.0;
+/// The stars this many times their widths: near, not far off (the user
+/// found them far at 1).
+const NEAR: f32 = 1.7;
 
 /// How a shell bursts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -663,7 +666,7 @@ impl Fireworks {
         let hot = Color32::from_rgb(255, 248, 232);
         // Glows lie over a light ground rather than adding to it: softer.
         let haze = if dark { 1.0 } else { 0.5 };
-        let thin = (rect.height() / REFERENCE_HEIGHT).clamp(0.6, 1.3);
+        let thin = NEAR * (rect.height() / REFERENCE_HEIGHT).clamp(0.6, 1.3);
         let offset = rect.min.to_vec2();
         let mut mesh = Mesh::default();
         if self.sky > 0.0 {
