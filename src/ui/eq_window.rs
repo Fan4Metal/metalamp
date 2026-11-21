@@ -67,20 +67,12 @@ fn limiter_state(ui: &mut egui::Ui, dsp: &mut DspSettings) {
         0.0,
         format(palette::text_weak()),
     );
-    let forced = dsp.limiter_required();
-    let (state, color) = if forced {
-        (tr!("on (enhancer)", "вкл. (улучшение)"), palette::accent())
-    } else if dsp.limiter {
+    let (state, color) = if dsp.limiter_enabled() {
         (tr!("on", "вкл."), palette::accent())
     } else {
         (tr!("off", "выкл."), palette::text_weak())
     };
     job.append(state, 0.0, format(color));
-    if forced {
-        ui.label(job)
-            .on_hover_text(crate::ui::settings::required_limiter_hint());
-        return;
-    }
     let response = ui
         .add(egui::Label::new(job).sense(egui::Sense::click()))
         .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -93,7 +85,8 @@ fn limiter_state(ui: &mut egui::Ui, dsp: &mut DspSettings) {
             )
         ));
     if response.clicked() {
-        dsp.limiter = !dsp.limiter;
+        let on = dsp.limiter_mut();
+        *on = !*on;
     }
 }
 

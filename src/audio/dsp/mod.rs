@@ -47,9 +47,15 @@ pub struct DspSettings {
     pub enhancer: bool,
     /// The enhancer's controls (the Loud preset's by default).
     pub enhancement: Enhancement,
-    /// The look-ahead limiter after the rest; on by default (and whenever
-    /// the enhancer works).
+    /// The look-ahead limiter after the rest while the enhancer is off; on
+    /// by default.
     pub limiter: bool,
+    /// The limiter while the enhancer is on; off by default. The enhancer
+    /// leaves `enhancer::OUTPUT_TRIM_DB` of room, and its rare peaks past
+    /// full scale are clipped by Windows: on the music it was fitted on,
+    /// fewer samples (0.002-0.07 %) than the modelled enhancer clips of its
+    /// own output, and no limiter's recovery moves the bass's gain.
+    pub enhancer_limiter: bool,
     /// -100 (the left alone) to 100 (the right alone); 0: both.
     pub balance: i8,
     /// Both channels carry their mean.
@@ -66,6 +72,7 @@ impl Default for DspSettings {
             enhancer: false,
             enhancement: Enhancement::LOUD,
             limiter: true,
+            enhancer_limiter: false,
             balance: 0,
             mono: false,
         }
@@ -79,14 +86,23 @@ impl DspSettings {
         self.normalize || self.eq || self.enhancer
     }
 
+    /// The limiter's switch in effect: the enhancer's own while it is on.
     pub fn limiter_enabled(&self) -> bool {
-        self.limiter || self.limiter_required()
+        if self.enhancer {
+            self.enhancer_limiter
+        } else {
+            self.limiter
+        }
     }
 
-    /// The enhancer raises quiet sound up to past full scale: the limiter
-    /// works with it whatever its switch says.
-    pub fn limiter_required(&self) -> bool {
-        self.enhancer
+    /// The switch the settings' and the sound tuning window's limiter
+    /// change: the one in effect.
+    pub fn limiter_mut(&mut self) -> &mut bool {
+        if self.enhancer {
+            &mut self.enhancer_limiter
+        } else {
+            &mut self.limiter
+        }
     }
 }
 
@@ -197,11 +213,10 @@ impl Chain {
         let s = &self.settings;
         // Gains can still be fading out after their switches were cleared.
         // Keep protecting those boosted frames for this entire block, even
-        // if they settle before its end. The enhancer raises quiet sound
-        // past full scale: the limiter works with it even when switched
-        // off (also while its tail drains).
-        let limiting = self.enhancer.active()
-            || s.limiter && (s.active() || self.gain > 1.0 || self.eq_mix > 0.0);
+        // if they settle before its end, and the enhancer's tail while it
+        // drains.
+        let limiting = s.limiter_enabled()
+            && (s.active() || self.gain > 1.0 || self.eq_mix > 0.0 || self.enhancer.active());
         let target = if s.normalize {
             f64::from(track_gain)
         } else {
@@ -255,28 +270,36 @@ mod tests {
     }
 
     #[test]
-    fn the_enhancer_keeps_the_limiter_and_its_peaks_under_the_ceiling() {
-        let s = DspSettings {
+    fn the_enhancer_has_a_limiter_switch_of_its_own() {
+        let mut s = DspSettings {
             enhancer: true,
-            limiter: false,
             ..Default::default()
         };
-        assert!(s.limiter_required() && s.limiter_enabled());
-        let mut chain = Chain::new(44100, 2, &s);
-        let mut samples: Vec<_> = (0..44100)
-            .flat_map(|i| {
-                let x = 0.9 * (i as f32 * 0.17).sin();
-                [x, -x]
-            })
-            .collect();
-        chain.process(&mut samples, 1.);
-        let peak = samples.iter().map(|s| s.abs()).fold(0., f32::max);
-        assert!(peak <= db_to_gain(CEILING_DB) + 1e-4 && peak > 0.1);
-        let off = DspSettings {
-            enhancer: false,
-            ..s
+        // Off with the enhancer by default, whatever the other switch says.
+        assert!(s.limiter && !s.limiter_enabled());
+        *s.limiter_mut() = true;
+        assert!(s.enhancer_limiter && s.limiter_enabled());
+        s.limiter = false;
+        assert!(s.limiter_enabled());
+        // Switched on, it keeps the enhancer's peaks under the ceiling.
+        let peak_of = |s: &DspSettings| {
+            let mut chain = Chain::new(44100, 2, s);
+            let mut samples: Vec<_> = (0..44100)
+                .flat_map(|i| {
+                    let x = 0.9 * (i as f32 * 0.17).sin();
+                    [x, -x]
+                })
+                .collect();
+            chain.process(&mut samples, 1.);
+            samples.iter().map(|s| s.abs()).fold(0., f32::max)
         };
-        assert!(!off.limiter_enabled());
+        let limited = peak_of(&s);
+        assert!(limited <= db_to_gain(CEILING_DB) + 1e-4 && limited > 0.1);
+        s.enhancer_limiter = false;
+        assert!(peak_of(&s) > limited);
+        // The enhancer off, the other switch applies again.
+        s.enhancer = false;
+        assert!(!s.limiter_enabled() && !*s.limiter_mut());
     }
 
     #[test]

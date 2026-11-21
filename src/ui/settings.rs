@@ -1455,24 +1455,12 @@ fn processing(
             |ui| switch(ui, &mut dsp.normalize),
         );
         divider(ui);
-        let forced = dsp.limiter_required();
         row(
             ui,
             tr!("Limiter", "Лимитер"),
-            Some(if forced {
-                required_limiter_hint()
-            } else {
-                limiter_hint()
-            }),
+            Some(limiter_hint()),
             50.0,
-            |ui| {
-                let mut on = dsp.limiter_enabled();
-                ui.add_enabled_ui(!forced, |ui| {
-                    if switch(ui, &mut on).changed() {
-                        dsp.limiter = on;
-                    }
-                });
-            },
+            |ui| switch(ui, dsp.limiter_mut()),
         );
     });
     section(ui, tr!("Channels", "Каналы"), |ui| {
@@ -2009,16 +1997,8 @@ fn enhancer_cell(ui: &mut Ui, c: &Control, e: &mut Enhancement, base: Enhancemen
 /// state in the equalizer's window (`ui::eq_window`).
 pub(crate) fn limiter_hint() -> &'static str {
     tr!(
-        "Uses 4x inter-sample peak detection and adaptive release to hold peaks near -1 dBTP after processing, so raised bands, preamp or enhancer never clip; a raised preamp then makes a loud track denser rather than louder. Turned off, a raise is heard in full, and what passes full scale is clipped by Windows.",
-        "Контролирует межсемпловые пики с передискретизацией 4× и адаптивным восстановлением, удерживая их около -1 dBTP после обработки, чтобы поднятые полосы, предусиление или улучшение звука не клиповали; поднятое предусиление тогда делает громкий трек плотнее, а не громче. Если его выключить, подъём слышен целиком, а то, что выходит за полную шкалу, обрезает Windows."
-    )
-}
-
-/// Why the limiter cannot be turned off now.
-pub(crate) fn required_limiter_hint() -> &'static str {
-    tr!(
-        "The enhancer raises quiet sound up past full scale and works with the limiter. When it is turned off, the limiter's own switch applies again.",
-        "Улучшение звука поднимает тихий звук выше полной шкалы и работает вместе с лимитером. После его выключения снова действует переключатель лимитера."
+        "Uses 4x inter-sample peak detection and adaptive release to hold peaks near -1 dBTP after processing, so raised bands, preamp or enhancer never clip; a raised preamp then makes a loud track denser rather than louder. Turned off, a raise is heard in full, and what passes full scale is clipped by Windows.\n\nWith the enhancer on, the switch is its own, off by default: the enhancer leaves room for its peaks, and the rare ones past full scale are clipped by Windows. It is worth turning on with the equalizer's bands raised or the enhancer's controls near their ends.",
+        "Контролирует межсемпловые пики с передискретизацией 4× и адаптивным восстановлением, удерживая их около -1 dBTP после обработки, чтобы поднятые полосы, предусиление или улучшение звука не клиповали; поднятое предусиление тогда делает громкий трек плотнее, а не громче. Если его выключить, подъём слышен целиком, а то, что выходит за полную шкалу, обрезает Windows.\n\nПри включённом улучшении звука у лимитера свой переключатель, по умолчанию выключенный: улучшение оставляет запас для своих пиков, а редкие пики за полной шкалой обрезает Windows. Его стоит включить, если подняты полосы эквалайзера или регуляторы улучшения стоят у краёв."
     )
 }
 
