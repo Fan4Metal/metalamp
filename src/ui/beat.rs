@@ -1,4 +1,4 @@
-//! What the scenes of fire and sparks share: the beats of the analyzer's
+//! What the newer scenes share: the beats of the analyzer's
 //! levels (the bass rising over its recent mean, as lightning's and the
 //! vortex's), and a small random generator (xorshift, no dependency).
 
@@ -58,7 +58,7 @@ const ONSET_MEAN_S: f32 = 0.3;
 const ONSET_GAP_S: f32 = 0.12;
 
 /// The notes starting in each band of the analyzer's levels (the harp's
-/// plucks, the ripples' drops).
+/// plucks, the ripples' drops, the fireworks' rockets).
 #[derive(Default)]
 pub struct Onsets {
     mean: Vec<f32>,

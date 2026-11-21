@@ -571,8 +571,10 @@ pub enum Visual {
     Vortex,
     /// Flames rising from the spectrum along the bottom, as Doom's fire.
     Fire,
-    /// Sparks thrown up by the spectrum and the beats, falling back.
-    Sparks,
+    /// Rockets sent up as notes start, shells bursting on the beats (the
+    /// sparks' place, which it takes in older settings).
+    #[serde(alias = "sparks")]
+    Fireworks,
     /// Curtains of light over the spectrum, swaying.
     Aurora,
     /// A sheet in a frame, its near edge pushed by the spectrum, stones
@@ -618,7 +620,7 @@ impl Visual {
         Visual::Lightning,
         Visual::Vortex,
         Visual::Fire,
-        Visual::Sparks,
+        Visual::Fireworks,
         Visual::Aurora,
         Visual::Cloth,
         Visual::Ripples,
@@ -646,7 +648,7 @@ impl Visual {
             Visual::Lightning => tr!("Lightning", "Молнии"),
             Visual::Vortex => tr!("Vortex", "Вихрь"),
             Visual::Fire => tr!("Fire", "Огонь"),
-            Visual::Sparks => tr!("Sparks", "Искры"),
+            Visual::Fireworks => tr!("Fireworks", "Фейерверк"),
             Visual::Aurora => tr!("Aurora", "Северное сияние"),
             Visual::Cloth => tr!("Cloth", "Полотно"),
             Visual::Ripples => tr!("Ripples", "Рябь"),
@@ -1090,7 +1092,7 @@ mod tests {
             (Visual::Strata, "strata"),
             (Visual::Chroma, "chroma"),
             (Visual::Fire, "fire"),
-            (Visual::Sparks, "sparks"),
+            (Visual::Fireworks, "fireworks"),
             (Visual::Aurora, "aurora"),
             (Visual::Cloth, "cloth"),
             (Visual::Ripples, "ripples"),
@@ -1101,10 +1103,15 @@ mod tests {
         ] {
             assert_eq!(serde_json::to_string(&v).unwrap(), format!("\"{name}\""));
         }
-        // The radial spectrum gave way to the lightning.
+        // The radial spectrum gave way to the lightning, the sparks to the
+        // fireworks.
         assert_eq!(
             serde_json::from_str::<Visual>("\"radial\"").unwrap(),
             Visual::Lightning
+        );
+        assert_eq!(
+            serde_json::from_str::<Visual>("\"sparks\"").unwrap(),
+            Visual::Fireworks
         );
         assert_eq!(
             serde_json::to_string(&Visual::Synthwave).unwrap(),

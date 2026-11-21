@@ -278,13 +278,14 @@ fn scheme(visual: Visual) -> Scheme {
             peak: &[0xfff8e6],
             by_level: true,
         },
-        // A welder's sparks: red-orange, amber, pale gold.
-        Visual::Sparks => Scheme {
+        // A firework's salts: strontium red, sodium gold, barium green,
+        // copper blue, violet.
+        Visual::Fireworks => Scheme {
             rows: &[
-                (0.0, &[0x5a1a04, 0x5a3604, 0x56501c]),
-                (1.0, &[0xff5a1f, 0xffb52e, 0xfff27a]),
+                (0.0, &[0x5a0a18, 0x5a3c06, 0x0a4a22, 0x0a2c5a, 0x3a0a5a]),
+                (1.0, &[0xff3b55, 0xffc23a, 0x4dff84, 0x3aa8ff, 0xc464ff]),
             ],
-            peak: &[0xfff6e6],
+            peak: &[0xffe2e6, 0xfff2d2, 0xe0ffea, 0xdcefff, 0xf2e0ff],
             by_level: false,
         },
         // The aurora's own: green, teal, violet higher up.

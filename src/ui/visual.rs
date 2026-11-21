@@ -47,7 +47,7 @@ use crate::ui::lightning::{self, Lightning};
 use crate::ui::notes::{self, Notes};
 use crate::ui::ribbons::{self, Ribbons};
 use crate::ui::ripples::{self, Ripples};
-use crate::ui::sparks::{self, Sparks};
+use crate::ui::fireworks::{self, Fireworks};
 use crate::ui::spectrum::{self, Analyzer};
 use crate::ui::strata::Strata;
 use crate::ui::strings::Strings;
@@ -102,7 +102,7 @@ pub struct Visualizer {
     synthwave: Synthwave,
     vortex: Vortex,
     fire: Fire,
-    sparks: Sparks,
+    fireworks: Fireworks,
     aurora: Aurora,
     cloth: Cloth,
     ripples: Ripples,
@@ -160,7 +160,7 @@ impl Visualizer {
             synthwave: Synthwave::new(),
             vortex: Vortex::new(),
             fire: Fire::new(),
-            sparks: Sparks::new(),
+            fireworks: Fireworks::new(),
             aurora: Aurora::new(),
             cloth: Cloth::new(),
             ripples: Ripples::new(),
@@ -271,10 +271,10 @@ impl Visualizer {
                         .feed(&self.notes.keys, heard.is_none() || new > 0, dt, size.x);
                 }
             }
-            Visual::Fire | Visual::Sparks | Visual::Aurora => {
+            Visual::Fire | Visual::Fireworks | Visual::Aurora => {
                 let bands = match visual {
                     Visual::Fire => fire::BANDS,
-                    Visual::Sparks => sparks::BANDS,
+                    Visual::Fireworks => fireworks::BANDS,
                     _ => aurora::BANDS,
                 };
                 let levels = heard.map(|(s, h)| {
@@ -285,7 +285,7 @@ impl Visualizer {
                 let moved = new > 0;
                 match visual {
                     Visual::Fire => self.fire.feed(levels, moved, dt, size),
-                    Visual::Sparks => self.sparks.feed(levels, moved, dt, size),
+                    Visual::Fireworks => self.fireworks.feed(levels, moved, dt, size),
                     _ => self.aurora.feed(levels.map(smoothed).as_deref(), moved, dt),
                 }
             }
@@ -511,7 +511,7 @@ impl Visualizer {
             Visual::Strings => self.strings.active(),
             Visual::Harp => self.harp.active(),
             Visual::Fire => self.fire.active(),
-            Visual::Sparks => self.sparks.active(),
+            Visual::Fireworks => self.fireworks.active(),
             Visual::Aurora => self.aurora.active(),
             Visual::Cloth => self.cloth.active(),
             Visual::Ripples => self.ripples.active(),
@@ -535,7 +535,7 @@ impl Visualizer {
             Visual::Synthwave => self.synthwave.paint(painter, rect),
             Visual::Vortex => self.vortex.paint(painter, rect),
             Visual::Fire => self.fire.paint(painter, rect),
-            Visual::Sparks => self.sparks.paint(painter, rect),
+            Visual::Fireworks => self.fireworks.paint(painter, rect),
             Visual::Aurora => self.aurora.paint(painter, rect),
             Visual::Cloth => self.cloth.paint(painter, rect),
             Visual::Ripples => self.ripples.paint(painter, rect),
@@ -1050,7 +1050,7 @@ mod tests {
             Visual::Vortex,
             Visual::Spectrum,
             Visual::Fire,
-            Visual::Sparks,
+            Visual::Fireworks,
             Visual::Aurora,
             Visual::Cloth,
             Visual::Ripples,
@@ -1067,7 +1067,7 @@ mod tests {
                 end += 960;
                 let s = sound(end as usize, &mut seed);
                 // The scene must advance by 20 ms even in this tight
-                // loop; otherwise fire and sparks stay nearly empty.
+                // loop; otherwise fire and fireworks stay nearly empty.
                 v.last = Instant::now() - Duration::from_millis(20);
                 v.feed(
                     visual,

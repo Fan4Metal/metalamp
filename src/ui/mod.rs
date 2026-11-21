@@ -23,7 +23,7 @@ pub mod playlist;
 pub mod ribbons;
 pub mod ripples;
 pub mod settings;
-pub mod sparks;
+pub mod fireworks;
 pub mod spectrum;
 pub mod start;
 pub mod statistics;
