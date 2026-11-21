@@ -28,9 +28,13 @@ const TRIGGER_S: f32 = 0.02;
 /// sample of a sweep compared with the last one.
 const CANDIDATES: usize = 48;
 const MATCH_STEP: usize = 4;
-/// A sweep fades by e every `PERSIST_S` and goes after `GONE_S`.
-const PERSIST_S: f32 = 0.06;
-const GONE_S: f32 = 0.22;
+/// A sweep fades by e every `PERSIST_S` and goes after `GONE_S`; the ones
+/// before the newest are at most `AFTERGLOW` as bright (at 0.06 s and
+/// 0.22 s, as bright as the newest, the user found the sweeps running
+/// together).
+const PERSIST_S: f32 = 0.03;
+const GONE_S: f32 = 0.11;
+const AFTERGLOW: f32 = 0.55;
 /// The sweeps' RMS, followed over `FOLLOW_S`, stands at `FILL` of the half
 /// height, the gain at most `MOST_GAIN` (silence's noise is not blown up);
 /// over `KNEE` the trace is pressed softly towards the edge.
@@ -177,8 +181,8 @@ impl Scope {
         let n = self.sweeps.len();
         let mut mesh = Mesh::default();
         for (k, sweep) in self.sweeps.iter().enumerate() {
-            let fade = (-sweep.age / PERSIST_S).exp();
             let newest = k + 1 == n;
+            let fade = (-sweep.age / PERSIST_S).exp() * if newest { 1.0 } else { AFTERGLOW };
             let points: Vec<Pos2> = sweep
                 .points
                 .iter()
