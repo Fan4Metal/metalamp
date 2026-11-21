@@ -125,7 +125,17 @@ fn thread(asks: &Receiver<(PathBuf, Arc<Job>)>, ctx: &egui::Context) {
     let _mf = match mf::Mf::start() {
         Ok(m) => m,
         Err(e) => {
-            log::error!("spectrum: Media Foundation: {}", mf::describe(&e));
+            let message = mf::describe(&e);
+            log::error!("spectrum: Media Foundation: {message}");
+            // Each job asked for told so, not left waiting.
+            while let Ok((_, job)) = asks.recv() {
+                let mut grid = job.grid();
+                grid.done = true;
+                grid.error = Some(message.clone());
+                drop(grid);
+                job.changed();
+                ctx.request_repaint();
+            }
             return;
         }
     };
