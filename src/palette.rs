@@ -191,14 +191,22 @@ fn scheme(visual: Visual) -> Scheme {
             peak: &[0xffece0],
             by_level: true,
         },
-        // Amber, as the icon's bolt: copper at the bass, amber, gold at the
-        // treble (the sea's turquoise and azure the user found out of place).
+        // Tropical: emerald at the bass, lime, gold, orange, raspberry,
+        // violet, and azure only at the top of the treble (the sea's
+        // turquoise and azure the user found out of place as the main
+        // colours, then amber alone too plain).
         Visual::Curve => Scheme {
             rows: &[
-                (0.0, &[0x4c1806, 0x4c2a06, 0x4c3408]),
-                (1.0, &[0xff6a26, 0xffa31e, 0xffd84a]),
+                (
+                    0.0,
+                    &[0x064a2a, 0x2e4a06, 0x4c3c06, 0x4c2006, 0x4c0a26, 0x30105a, 0x0a2a5a],
+                ),
+                (
+                    1.0,
+                    &[0x22e88a, 0xa6f02a, 0xffd22a, 0xff7a1e, 0xff2f7e, 0xa45cff, 0x4aa8ff],
+                ),
             ],
-            peak: &[0xffe0cc, 0xffeccc, 0xfff6d6],
+            peak: &[0xd8ffea, 0xf0ffd4, 0xfff6d2, 0xffe6d2, 0xffdcea, 0xeee0ff, 0xdceeff],
             by_level: false,
         },
         // A sunset: amber, rose, violet.
@@ -210,14 +218,17 @@ fn scheme(visual: Visual) -> Scheme {
             peak: &[0xffe6bf, 0xffcde2, 0xe9dbff],
             by_level: false,
         },
-        // Embers: crimson at the bass, coral, gold at the treble (moonlit
-        // ice, then acid mint to lemon, the user found out of place).
+        // Neon without yellow: coral at the bass, pink, magenta, violet, and
+        // azure only at the top of the treble (moonlit ice, acid mint to
+        // lemon, then embers the user found out of place or too plain, and
+        // gold at the treble dirty: a dim yellow is an olive; blue is
+        // welcome, though not as the main colour).
         Visual::Ridges => Scheme {
             rows: &[
-                (0.0, &[0x52101e, 0x52200e, 0x503a0c]),
-                (1.0, &[0xff4660, 0xff8a52, 0xffd46a]),
+                (0.0, &[0x5a1420, 0x5a0e34, 0x50104e, 0x34146a, 0x103470]),
+                (1.0, &[0xff5a5a, 0xff3e9a, 0xe84cf0, 0x9a62ff, 0x4aa8ff]),
             ],
-            peak: &[0xffe0e6, 0xffe8dc, 0xfff6d8],
+            peak: &[0xffe0e0, 0xffdcee, 0xfadcff, 0xece2ff, 0xdcefff],
             by_level: false,
         },
         // Dusk: coral bass in front, orange, gold at the back.
