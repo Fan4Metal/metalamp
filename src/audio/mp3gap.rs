@@ -252,7 +252,7 @@ pub fn parse(data: &[u8]) -> Option<GapInfo> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Encoder {
     /// Its name and version as written: `LAME3.99r`, `LAME3.100`,
-    /// `Lavc58.91`.
+    /// `Lavc58.91`, `Lavc60.3` (written `Lavc60.3.`), `Lavf`.
     pub name: String,
     /// Its settings as MediaInfo puts them together from the tag's fields
     /// (`-m j -V 4 -q 3 -lowpass 20.5`); empty when the tag is not
@@ -278,6 +278,8 @@ pub fn encoder(data: &[u8]) -> Option<Encoder> {
         .collect::<String>()
         .trim()
         .to_owned();
+    // FFmpeg cuts its name to 9 letters: `Lavc60.3.100` as `Lavc60.3.`.
+    let name = name.trim_end_matches('.').to_owned();
     if name.is_empty() {
         return None;
     }
@@ -463,6 +465,9 @@ mod tests {
                 settings: String::new(),
             })
         );
+        // Its name cut short after a dot.
+        data[at..at + 9].copy_from_slice(b"Lavc60.3.");
+        assert_eq!(encoder(&data).unwrap().name, "Lavc60.3");
         // No header, no encoder.
         assert_eq!(encoder(b"not an mp3"), None);
     }

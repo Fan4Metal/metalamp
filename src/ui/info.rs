@@ -2554,21 +2554,18 @@ fn footer_row(ui: &mut Ui, form: Option<&Form>, acts: &mut Vec<Act>) {
     });
 }
 
-/// The lines of the section "File": the path, an MP3's LAME tag (the
-/// encoder with its settings, the delay and the padding on one line; the
-/// encoder's name alone without a tag), the pictures.
+/// The lines of the section "File": the path, an MP3's encoder from its
+/// LAME tag (LAME's or FFmpeg's: the encoder with its settings, the delay
+/// and the padding on one line; the encoder's name alone without a tag),
+/// the pictures.
 fn file_lines(d: &Details) -> Vec<(String, String)> {
     let mut out = vec![(tr!("Path", "Путь").to_owned(), d.path.display().to_string())];
-    match (d.gapless, &d.encoder) {
-        (Some((delay, padding)), encoder) => out.push((
-            tr!("LAME tag", "Тег LAME").to_owned(),
-            lame_line(encoder.as_ref(), delay, padding),
-        )),
-        (None, Some(encoder)) => out.push((
-            tr!("Encoder", "Кодировщик").to_owned(),
-            encoder.name.clone(),
-        )),
-        (None, None) => {}
+    if d.gapless.is_some() || d.encoder.is_some() {
+        // Not "Кодировщик": the tag's "Encoded by" (TENC) is named so.
+        out.push((
+            tr!("Encoder", "Кодек").to_owned(),
+            encoder_line(d.encoder.as_ref(), d.gapless),
+        ));
     }
     for p in &d.pictures {
         let mut text = p.format.clone();
@@ -2581,22 +2578,32 @@ fn file_lines(d: &Details) -> Vec<(String, String)> {
     out
 }
 
-/// The LAME tag's line: `LAME3.99r (-m j -V 4 -q 3 -lowpass 20.5), encoder
-/// delay 576, padding 924 samples`, the encoder left out when the tag
-/// names none.
-fn lame_line(
+/// The encoder's line: `LAME3.99r (-m j -V 4 -q 3 -lowpass 20.5), delay
+/// 576, padding 924 samples`; FFmpeg's as `FFmpeg (Lavc60.3)`; the
+/// encoder or the delay and padding left out when the tag lacks them.
+fn encoder_line(
     encoder: Option<&crate::audio::mp3gap::Encoder>,
-    delay: u32,
-    padding: u32,
+    gapless: Option<(u32, u32)>,
 ) -> String {
-    let gap = tr!(
-        format!("encoder delay {delay}, padding {padding} samples"),
-        format!("задержка кодировщика {delay}, добивка {padding} сэмплов")
-    );
-    match encoder {
-        Some(e) if e.settings.is_empty() => format!("{}, {gap}", e.name),
-        Some(e) => format!("{} ({}), {gap}", e.name, e.settings),
-        None => gap,
+    let name = encoder.map(|e| {
+        if e.name.starts_with("Lav") {
+            format!("FFmpeg ({})", e.name)
+        } else if e.settings.is_empty() {
+            e.name.clone()
+        } else {
+            format!("{} ({})", e.name, e.settings)
+        }
+    });
+    let gap = gapless.map(|(delay, padding)| {
+        tr!(
+            format!("delay {delay}, padding {padding} samples"),
+            format!("задержка {delay}, добивка {padding} сэмплов")
+        )
+    });
+    match (name, gap) {
+        (Some(name), Some(gap)) => format!("{name}, {gap}"),
+        (Some(one), None) | (None, Some(one)) => one,
+        (None, None) => String::new(),
     }
 }
 
@@ -3262,6 +3269,33 @@ fn picture_name(kind: PictureType) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_encoders_line() {
+        use crate::audio::mp3gap::Encoder;
+        let lame = Encoder {
+            name: "LAME3.99r".into(),
+            settings: "-m j -V 4 -q 3 -lowpass 20.5".into(),
+        };
+        assert_eq!(
+            encoder_line(Some(&lame), Some((576, 924))),
+            "LAME3.99r (-m j -V 4 -q 3 -lowpass 20.5), delay 576, padding 924 samples"
+        );
+        let ffmpeg = Encoder {
+            name: "Lavc60.3".into(),
+            settings: String::new(),
+        };
+        assert_eq!(
+            encoder_line(Some(&ffmpeg), Some((576, 576))),
+            "FFmpeg (Lavc60.3), delay 576, padding 576 samples"
+        );
+        let old = Encoder {
+            name: "LAME3.85".into(),
+            settings: String::new(),
+        };
+        assert_eq!(encoder_line(Some(&old), None), "LAME3.85");
+        assert_eq!(encoder_line(None, Some((576, 0))), "delay 576, padding 0 samples");
+    }
 
     /// A lyrics file in UTF-8 (with or without a BOM) or UTF-16 (either
     /// order), its lines ending with `\n`.
