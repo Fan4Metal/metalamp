@@ -167,14 +167,16 @@ const MOST_ACROSS: usize = 7;
 /// dark ground.
 fn scheme(visual: Visual) -> Scheme {
     match visual {
-        // Neon: magenta at the bass, violet, cyan at the treble.
+        // Hot neon: pink at the bass, orange, gold at the treble (a neon
+        // of magenta, violet and cyan the user found out of place by the
+        // amber).
         Visual::Spectrum | Visual::Off => Scheme {
             rows: &[
-                (0.0, &[0x4a0f5e, 0x24166e, 0x08406a]),
-                (0.55, &[0xd61c9e, 0x6c3df2, 0x169fe0]),
-                (1.0, &[0xff6ad5, 0xa98cff, 0x6ff0ff]),
+                (0.0, &[0x5a0a2e, 0x5a2208, 0x524006]),
+                (0.55, &[0xf0206e, 0xff7414, 0xffc21a]),
+                (1.0, &[0xff6aa0, 0xffa65a, 0xffe46a]),
             ],
-            peak: &[0xffe0f6, 0xece6ff, 0xe0fdff],
+            peak: &[0xffe0ec, 0xffecdc, 0xfff8d8],
             by_level: false,
         },
         // A hi-fi's meter: green, then yellow, orange and red at the top.
@@ -189,13 +191,14 @@ fn scheme(visual: Visual) -> Scheme {
             peak: &[0xffece0],
             by_level: true,
         },
-        // The sea: turquoise, azure, indigo.
+        // Amber, as the icon's bolt: copper at the bass, amber, gold at the
+        // treble (the sea's turquoise and azure the user found out of place).
         Visual::Curve => Scheme {
             rows: &[
-                (0.0, &[0x06324f, 0x063a5a, 0x1c2a60]),
-                (1.0, &[0x2cf0c8, 0x34b4ff, 0x8f80ff]),
+                (0.0, &[0x4c1806, 0x4c2a06, 0x4c3408]),
+                (1.0, &[0xff6a26, 0xffa31e, 0xffd84a]),
             ],
-            peak: &[0xd0fff4, 0xd4f0ff, 0xe6e0ff],
+            peak: &[0xffe0cc, 0xffeccc, 0xfff6d6],
             by_level: false,
         },
         // A sunset: amber, rose, violet.
@@ -207,13 +210,14 @@ fn scheme(visual: Visual) -> Scheme {
             peak: &[0xffe6bf, 0xffcde2, 0xe9dbff],
             by_level: false,
         },
-        // Acid neon: mint at the bass, lime, lemon at the treble.
+        // Embers: crimson at the bass, coral, gold at the treble (moonlit
+        // ice, then acid mint to lemon, the user found out of place).
         Visual::Ridges => Scheme {
             rows: &[
-                (0.0, &[0x0a4a3a, 0x1e5a14, 0x4a5a0a]),
-                (1.0, &[0x3dffc0, 0x8aff5a, 0xe6ff4d]),
+                (0.0, &[0x52101e, 0x52200e, 0x503a0c]),
+                (1.0, &[0xff4660, 0xff8a52, 0xffd46a]),
             ],
-            peak: &[0xe0fff4, 0xeeffe0, 0xfcffe0],
+            peak: &[0xffe0e6, 0xffe8dc, 0xfff6d8],
             by_level: false,
         },
         // Dusk: coral bass in front, orange, gold at the back.
