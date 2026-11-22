@@ -430,9 +430,20 @@ pub(crate) struct Enhancer {
     law: Law,
     band_now: [f32; NB],
     drive_now: f32,
-    average: f32,
+    /// Per stage the share of the way a detector's level goes per hop
+    /// towards a louder and a quieter sound.
+    rise: [f32; 3],
+    fall: [f32; 3],
     attack: f32,
     release: f32,
+    /// The bins' gains (dB) of the last hops, a ring: the gains applied are
+    /// `lag` hops old (whole hops and a share of one more), as the recorded
+    /// player's come after the sound they were worked out on.
+    history: Vec<Vec<f32>>,
+    hop: usize,
+    lag: (usize, f32),
+    /// Nothing in `history` yet: the first gains fill it.
+    fresh: bool,
 }
 
 impl Enhancer {
@@ -448,7 +459,10 @@ impl Enhancer {
                 * window.iter().map(|w| w * w).sum::<f32>()
                 * (channels - usize::from(channels >= 6)).max(1) as f32);
         let step = rate / n as f32;
-        let smooth = |seconds: f32| 1. - (-(n as f32 / 4.) / (rate * seconds)).exp();
+        let hop_s = n as f32 / 4. / rate;
+        let smooth = |seconds: f32| 1. - (-hop_s / seconds).exp();
+        let lag = (law::LAG_S / hop_s).max(0.);
+        let lag = (lag as usize, lag.fract());
         let law = law_of(e);
         let mut fx = Self {
             enabled,
@@ -477,9 +491,14 @@ impl Enhancer {
             band_now: law.band_db,
             drive_now: law.drive,
             law,
-            average: smooth(law::AVERAGE_S),
+            rise: [law::RISE_CORE_S, law::RISE_STAGES_S, law::RISE_STAGES_S].map(smooth),
+            fall: [law::FALL_CORE_S, law::FALL_STAGES_S, law::FALL_STAGES_S].map(smooth),
             attack: smooth(law::ATTACK_S),
             release: smooth(law::RELEASE_S),
+            history: vec![vec![0.; n / 2 + 1]; lag.0 + 2],
+            hop: 0,
+            lag,
+            fresh: true,
         };
         fx.start();
         fx
@@ -493,6 +512,7 @@ impl Enhancer {
             s.env = [0.; K];
             s.gain = s.most;
         }
+        self.fresh = true;
     }
 
     pub(crate) fn configure(&mut self, enabled: bool, e: &Enhancement) {
@@ -578,12 +598,17 @@ impl Enhancer {
         // part of the loss).
         let mut heard = power;
         let mut linear = [[1f32; K]; 3];
-        for (s, lin) in self.law.stages.iter_mut().zip(&mut linear) {
+        for (i, (s, lin)) in self.law.stages.iter_mut().zip(&mut linear).enumerate() {
             if !s.on {
                 continue;
             }
             for k in 0..K {
-                s.env[k] += self.average * (heard[k] - s.env[k]);
+                let towards = if heard[k] > s.env[k] {
+                    self.rise[i]
+                } else {
+                    self.fall[i]
+                };
+                s.env[k] += towards * (heard[k] - s.env[k]);
                 let level = 10. * s.env[k].max(1e-12).log10();
                 let target = (s.offset[k] - s.slope[k] * level).max(s.floor[k]).min(s.most[k]);
                 let a = if target < s.gain[k] {
@@ -605,18 +630,34 @@ impl Enhancer {
                 *x += u * s.unscaled[k] * (s.gain[k] - s.reference[k]);
             }
         }
-        for (g, b) in self.bin_gain.iter_mut().zip(&self.bins) {
+        let len = self.history.len();
+        let slot = self.hop % len;
+        for (now, b) in self.history[slot].iter_mut().zip(&self.bins) {
             let mut product = 1.;
             for (lin, _) in linear.iter().zip(on).filter(|(_, on)| *on) {
                 product *= lin[b.band] + b.blend * (lin[b.band + 1] - lin[b.band]);
             }
             let (i, t) = b.place;
             let base = self.band_now[i - 1] + t * (self.band_now[i] - self.band_now[i - 1]);
-            let db = base
+            *now = base
                 + OUTPUT_TRIM_DB
                 + d * 20. * product.max(1e-9).log10()
                 + extra[b.band]
                 + b.blend * (extra[b.band + 1] - extra[b.band]);
+        }
+        if self.fresh {
+            let first = self.history[slot].clone();
+            for h in &mut self.history {
+                h.copy_from_slice(&first);
+            }
+            self.fresh = false;
+        }
+        self.hop = self.hop.wrapping_add(1);
+        let (whole, share) = self.lag;
+        let newer = &self.history[(slot + len - whole) % len];
+        let older = &self.history[(slot + len - whole - 1) % len];
+        for (((g, b), &a), &o) in self.bin_gain.iter_mut().zip(&self.bins).zip(newer).zip(older) {
+            let db = a + share * (o - a);
             *g = (10f32.powf(db / 20.) - 1.) * b.audible;
         }
         // Four periodic Hann windows overlap with a squared sum of 1.5.
@@ -712,6 +753,31 @@ mod tests {
             let (half, full) = (at(70, level), at(140, level));
             assert!(half > 1. && (full / half - 2.).abs() < 0.05, "{level}: {half} {full}");
         }
+    }
+
+    #[test]
+    fn a_hit_passes_before_its_gain_falls() {
+        // The recorded player let a hit's first milliseconds through with
+        // much of the gain of the quiet sound before it and lowered it over
+        // the next 50-100 ms: a tone from -40 to -10 dBFS is still raised
+        // well over its settled gain at first, and still a little at 20-40 ms.
+        let rate = 48000;
+        let mut fx = Enhancer::new(rate, 1, true, &Enhancement::LOUD);
+        let (quiet, loud) = (sine(rate, 1000., -40., 1.), sine(rate, 1000., -10., 0.5));
+        let mut s: Vec<f32> = quiet.iter().chain(&loud).copied().collect();
+        fx.process(&mut s);
+        let delay = fx.latency_frames();
+        let at = |from_ms: usize, to_ms: usize, input: &[f32], offset: usize| {
+            let (a, b) = (rate as usize * from_ms / 1000, rate as usize * to_ms / 1000);
+            let rms = |x: &[f32]| (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
+            20. * (rms(&s[offset + delay + a..offset + delay + b]) / rms(&input[a..b])).log10()
+        };
+        let before = at(800, 1000, &quiet, 0);
+        let first = at(0, 3, &loud, quiet.len());
+        let later = at(20, 40, &loud, quiet.len());
+        let settled = at(300, 450, &loud, quiet.len());
+        assert!(before - settled > 20., "{before} {settled}");
+        assert!(first - settled > 10. && later - settled > 2., "{first} {later} {settled}");
     }
 
     #[test]

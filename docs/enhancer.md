@@ -59,7 +59,7 @@ All three stages work on the same six detectors. They follow one another, and ea
 
 Because the later stages hear what the earlier ones did, Fidelity and Ambience together raise less than the sum of each, as recorded.
 
-- **Envelopes.** The detectors average power over 54 ms. A gain follows its target with an attack of 2 ms and a release of 21 ms, all applied per hop. The effective timing comes mostly from the power average.
+- **Envelopes.** A detector's level is its power averaged unevenly: it rises with a time constant of 54 ms in the core and 84 ms in Fidelity and Ambience, and falls with 27 and 34 ms. A gain follows its target down within 1 ms and back up with 99 ms. The gains apply 1.6 ms after the sound they were worked out on. Together this lets the first milliseconds of a hit through almost untouched, then lowers the gain over the next 50–100 ms and lets it back slowly, as the original does. The times were fitted on hits; see [Timing on hits](#timing-on-hits).
 - **Start.** A stage starts at its most, as after silence. This applies on each new chain (a seek, another track) and when the enhancer is switched on. The original behaved so after a seek; started from a mid level, the model came 5–11 dB short on the first hit.
 - **Levels.** A fixed three-band equalizer comes after the stages and is linear in dB:
   - Bass: under about 125 Hz;
@@ -158,6 +158,16 @@ A Python port of the model (numpy, with numba for the envelopes) was fitted to t
 
    Both were refitted the same way.
 
+### Timing on hits
+
+The fits above used one set of times for all detectors (a symmetric power average of 54 ms, a gain attack of 2 ms and release of 21 ms). Measured at a finer step, the model erred on hits more than twice as much as elsewhere. To see why, the gain (output over input) was averaged per band around the input's onsets, where a band's power rises 6 dB over its mean of the 100 ms before, in hops of 5.3 ms:
+
+- the original barely lowers its gain in the first 5–10 ms of a hit, and above 3 kHz it is still rising: its detectors come after the sound;
+- the model was lowering its gain already a few milliseconds before the hit, since its window sees the hit coming;
+- 30–100 ms after the hit, the original's gain is 1–2 dB lower than the model's in the middle and the top.
+
+The times were then refitted on the music takes: the level's rise and fall (the core's and the upward stages' apart), the gain's attack and release, and a lag of the gains. The measure was the 21 ms envelopes plus, at a quarter of the weight, the error in the first 53 ms of each hit at the 5.3 ms step. The rig's frames stayed as a regulariser. Refitting the levels and slopes with the times as well made the hits better still (1.08 dB), but the presets held out of the fit worse (0.59 → 0.67 dB): the statics bent to the hits. So only the seven times were fitted, and the law was left as it was. The result is better on every measure on music, the held-out presets included; see [Current state](#current-state).
+
 **The metric.** The model's and the original's envelopes are compared in five bands at 20–21 ms, with the overall level difference taken out by the median, and the result is the mean absolute difference in dB. The rig itself repeats to 0.00 dB. Two independent recordings of the same passage, made in an earlier session at other settings, differed by 0.37 dB on average. These older recordings also differ from the rig's own by about 0.67 dB, so only the rig's recordings serve as the reference.
 
 ### Output level and peaks
@@ -172,7 +182,7 @@ A Python port of the model (numpy, with numba for the envelopes) was fitted to t
   | −5 dB | 28–64 % | 0.5–0.9 dB | |
   | −6 dB | 8–21 % | 0.2–0.3 dB | less than the original's |
 
-  At −6 dB without the limiter, 0.002–0.065 % of samples pass full scale and are clipped by Windows, fewer than the original clips of its own output. For this reason the limiter is off by default while the enhancer is on.
+  These figures were measured with the earlier timing. With the timing fitted on hits, the first milliseconds of a hit pass almost untouched, as in the original, and at −6 dB without the limiter 0.013–0.11 % of samples pass full scale and are clipped by Windows, about as many as the original clips of its own output (0.007–0.086 %). Before, it was 0.002–0.065 %. On these passages the model's attacks now differ from the original's mainly where the original clips: with the original's ceiling applied to the model, the error on the Loud preset's attacks falls from 1.63 to 1.00 dB. For this reason the limiter stays off by default while the enhancer is on.
 - **The cost.** At 100 % volume, MetalAMP with the enhancer is 2.3 dB quieter than the original at volume 167.
 
 ## Current state
@@ -181,12 +191,14 @@ The figures below are measured on the rig's recordings, using the metric describ
 
 | Measure | Result |
 |---|---|
-| music envelopes, presets in the fit | 0.62 dB on average (Loud 0.59) |
-| music envelopes, presets held out | Rock 0.58, Acoustic 0.62, Electronic 0.75 dB |
-| each control's change of the five bands | follows the original's within about 0.5 dB |
-| quiet stimulus frames, all recorded presets | 1.14 dB on average, 1.64 at worst |
-| music envelopes at Drive 35 / 70 / 105 | 0.46 / 0.45 / 0.49 dB |
-| overall level against the original before its volume | Loud +0.06, Neutral +0.15, Rock −0.25, Acoustic −0.05, Electronic −1.05 dB |
+| music envelopes, all takes in the fit (21 ms) | 0.55 dB on average (0.59 before the timing was fitted on hits) |
+| music envelopes, presets (20 ms) | Loud 0.53, Neutral 0.34 dB |
+| music envelopes, presets held out (20 ms) | Rock 0.56, Acoustic 0.57, Electronic 0.69 dB |
+| the first 53 ms of hits (5.3 ms step) | 1.18 dB (1.32 before); elsewhere 0.57 (0.60) |
+| each control's change of the five bands | follows the original's within about 0.5 dB, except Bass type −100 on loud bass |
+| quiet stimulus frames, all recorded presets | 1.13 dB on average, 1.61 at worst |
+| music envelopes at Drive 35 / 70 / 105 | 0.46 / 0.43 / 0.44 dB |
+| overall level against the original before its volume | Loud +0.23, Neutral +0.17, Rock −0.16, Acoustic +0.02, Electronic −1.00 dB |
 | phase, stereo image | unchanged, as in the original |
 | bypass | sample-exact delayed path |
 
@@ -194,7 +206,7 @@ The model is about as close to the original as two recordings of the same passag
 
 ## Known differences and further work
 
-1. **Attacks at low drive.** The largest remaining differences are on hits. At Drive 35, loud moments at 3–8 kHz are lowered by 3.3 dB in the model and by 5.0 dB in the original. The likely cause is the detectors' timing: the original's attack settles over 30–80 ms, while the model has one attack and release for all detectors. Matching it would also lower the model's transient peaks, which would allow a trim closer to −3.7 dB and the original's loudness.
+1. **Depth after hits, and loud moments at low drive.** The timing of hits now follows the original's, but 30–100 ms after a hit the original still lowers the middle and the top 1–2 dB more than the model (on the Rock preset above 8 kHz, 1.8 dB against 0.4). Likewise, at Drive 35, loud moments at 3–8 kHz are lowered by 3.4 dB in the model and by 5.0 dB in the original. Refitting the levels and slopes on hits did not generalise to other settings, so the model probably lacks a part of the original's structure here; finding it is further work.
 2. **Smaller differences:**
    - Ambience 10 raises the middle by about 1.1 dB, the original by 0.4–0.9 dB;
    - Bass type −100 raises loud bass by about 4.5 dB, the original by 3.4 dB;
@@ -210,13 +222,14 @@ The rig, the recordings and the fitting scripts are kept outside the repository:
 ## Code and tests
 
 - `src/audio/dsp/enhancer.rs`: the enhancer, its controls (`Enhancement`), the presets, the detectors' layout and the law's structure (`law_of`, `synthesize`).
-- `src/audio/dsp/enhancer_law.rs`: the fitted numbers (the third-octave centres, the stages, the knots, the levels' curves, the times, the unscaled shares). The file is generated by the fit and regenerated rather than edited.
+- `src/audio/dsp/enhancer_law.rs`: the fitted numbers (the third-octave centres, the stages, the knots, the levels' curves, the unscaled shares, the times and the gains' lag). The file is generated by the fit and regenerated rather than edited.
 - `src/audio/dsp/mod.rs`: the chain, the trim's place, the limiter's switch (`DspSettings::limiter_enabled`).
 - `metalamp.exe --bench render <file> <out.wav> <start> <seconds> [gain] [raw]` renders a passage through the chain with the settings' sound as a float WAV, with the chain's delay taken out, for comparison with a recording of another player. `raw` leaves the limiter out.
 - Tests in `enhancer.rs` and `mod.rs`:
   - quiet sound is raised more than loud;
   - Drive 0 leaves only the levels;
   - the drive scales the gain;
+  - a hit passes before its gain falls;
   - Fidelity and Ambience raise quiet sound;
   - the stages start at their most;
   - a changed control glides;

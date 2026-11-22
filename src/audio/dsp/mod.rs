@@ -53,8 +53,9 @@ pub struct DspSettings {
     /// The limiter while the enhancer is on; off by default. The enhancer
     /// leaves `enhancer::OUTPUT_TRIM_DB` of room, and its rare peaks past
     /// full scale are clipped by Windows: on the music it was fitted on,
-    /// fewer samples (0.002-0.07 %) than the modelled enhancer clips of its
-    /// own output, and no limiter's recovery moves the bass's gain.
+    /// about as many samples (0.01-0.11 %) as the modelled enhancer clips
+    /// of its own output (0.01-0.09 %), and no limiter's recovery moves
+    /// the bass's gain.
     pub enhancer_limiter: bool,
     /// -100 (the left alone) to 100 (the right alone); 0: both.
     pub balance: i8,

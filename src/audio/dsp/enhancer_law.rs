@@ -61,7 +61,13 @@ pub const UNSCALED_AMBIENCE: f32 = 0.0308;
 pub const LEVEL_BASS: [f32; 30] = [0.990, 0.990, 0.991, 0.992, 0.989, 0.991, 0.986, 0.938, 0.720, 0.505, 0.252, 0.001, -0.006, -0.006, -0.010, -0.007, -0.008, -0.007, -0.008, -0.007, -0.007, -0.007, -0.007, -0.008, -0.008, -0.007, -0.008, -0.007, -0.007, -0.007];
 pub const LEVEL_MID: [f32; 30] = [-0.002, -0.002, -0.002, -0.002, -0.002, -0.002, 0.003, 0.070, 0.311, 0.497, 0.798, 0.998, 0.998, 0.998, 0.997, 0.997, 0.858, 0.636, 0.506, 0.498, 0.498, 0.498, 0.498, 0.471, 0.404, 0.308, 0.163, 0.012, -0.002, -0.002];
 pub const LEVEL_TREBLE: [f32; 30] = [-0.001, -0.001, -0.001, -0.001, -0.001, -0.001, -0.001, -0.001, -0.001, -0.001, -0.001, -0.001, -0.001, -0.001, -0.001, -0.000, 0.179, 0.394, 0.493, 0.499, 0.499, 0.499, 0.499, 0.536, 0.623, 0.732, 0.870, 0.990, 0.999, 0.994];
-/// Seconds: a detector's gain falling, rising, and its level's average.
-pub const ATTACK_S: f32 = 0.0020;
-pub const RELEASE_S: f32 = 0.0208;
-pub const AVERAGE_S: f32 = 0.0543;
+/// Seconds: a detector's level (its power's average) rising and falling,
+/// the core's and the upward stages'; its gain falling and rising; and
+/// how late the gains come after the sound they were worked out on.
+pub const RISE_CORE_S: f32 = 0.0545;
+pub const FALL_CORE_S: f32 = 0.0271;
+pub const RISE_STAGES_S: f32 = 0.0841;
+pub const FALL_STAGES_S: f32 = 0.0337;
+pub const ATTACK_S: f32 = 0.0010;
+pub const RELEASE_S: f32 = 0.0989;
+pub const LAG_S: f32 = 0.00156;
