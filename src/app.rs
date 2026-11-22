@@ -1786,7 +1786,6 @@ impl App {
                 WindowLayout::Library => self.settings.playlist_visible,
                 WindowLayout::Playlist => !self.settings.player_only,
             },
-            equalizer: self.eq_window.open,
             on_top: self.settings.on_top,
             tray: self.settings.tray,
             tray_only: self.settings.tray_only,

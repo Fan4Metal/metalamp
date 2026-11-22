@@ -3,7 +3,7 @@
 //! release's button, then minimise, maximise and close on the right. Its
 //! free area drags the window; a double click maximises it or brings it
 //! back; the right button there or on the icon opens the window's menu
-//! (`menu`: the library, the playlist, the equalizer, the mini player, over
+//! (`menu`: the library, the playlist, the mini player, over
 //! the others, the tray, the settings, About, Exit), as the early Winamp's main menu.
 //! The family's "i" button is left out: the row is bare.
 
@@ -43,8 +43,6 @@ pub struct Ticks {
     /// The playlist shown (in the player and playlist layout: not folded
     /// away).
     pub playlist: bool,
-    /// The equalizer's window open.
-    pub equalizer: bool,
     pub on_top: bool,
     /// Minimized to the tray; only in the tray.
     pub tray: bool,
@@ -252,7 +250,6 @@ fn menu(ui: &mut Ui, ticks: Ticks, cmd: &mut Option<TitleCmd>) {
     for (on, label, what) in [
         (ticks.library, tr!("Library", "Библиотека"), Cmd::WindowLayout),
         (ticks.playlist, tr!("Playlist", "Плейлист"), Cmd::Playlist),
-        (ticks.equalizer, tr!("Sound tuning", "Настройка звука"), Cmd::Equalizer),
     ] {
         let mut on = on;
         if ui.checkbox(&mut on, with_key(label, what)).changed() {
