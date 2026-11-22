@@ -20,6 +20,7 @@ pub mod mini;
 pub mod notes;
 pub mod player_bar;
 pub mod playlist;
+pub mod raster;
 pub mod ribbons;
 pub mod ripples;
 pub mod scope;
@@ -32,8 +33,6 @@ pub mod status;
 pub mod strata;
 pub mod strings;
 pub mod synthwave;
-#[cfg(test)]
-pub mod test_render;
 pub mod table;
 pub mod title;
 pub mod track_spectrum;

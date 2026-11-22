@@ -783,6 +783,18 @@ impl InfoView {
         self.spectrum.open(ctx, path, heading, facts);
     }
 
+    /// The spectrum's window asked for its picture to be saved: the file's
+    /// name to offer and the window to own the dialog.
+    pub fn spectrum_save_asked(&mut self) -> Option<(String, Option<isize>)> {
+        std::mem::take(&mut self.spectrum.ask_save)
+            .then(|| (self.spectrum.file_name(), self.spectrum.hwnd()))
+    }
+
+    /// The file chosen for the spectrum's picture.
+    pub fn spectrum_to(&mut self, path: PathBuf) {
+        self.spectrum.save_to(path);
+    }
+
     /// The text file chosen in the dialog `pick_lyrics` asked for.
     pub fn lyrics_from(&mut self, path: PathBuf) {
         self.lyrics_file = Some(path);

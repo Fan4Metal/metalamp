@@ -1,8 +1,9 @@
-//! The visualizations drawn by hand into pictures to look at in tests, with
-//! no window and no GPU: egui's meshes rasterised with their textures and
-//! vertex colours, blended as premultiplied colours (in gamma space, near
-//! enough to what the app shows), and saved as a PNG sheet of frames one
-//! under another.
+//! Pictures drawn by hand with no window and no GPU: egui's meshes
+//! rasterised with their textures and vertex colours, blended as
+//! premultiplied colours (in gamma space, near enough to what the app
+//! shows). The text is laid out at the picture's own density. The track's
+//! spectrum is saved as a PNG this way; in tests, the visualizations are
+//! drawn into a PNG sheet of frames one under another to look at.
 
 use std::collections::HashMap;
 
@@ -45,10 +46,16 @@ impl Renderer {
         paint: impl FnOnce(&egui::Painter),
     ) -> Picture {
         let mut paint = Some(paint);
-        let input = egui::RawInput {
+        let mut input = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, rect.max.to_vec2())),
             ..Default::default()
         };
+        // The fonts rasterised at the picture's pixels, not scaled up.
+        input
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .native_pixels_per_point = Some(self.scale);
         let out = self.ctx.run_ui(input, |ui| {
             if let Some(paint) = paint.take() {
                 paint(ui.painter());
@@ -77,7 +84,7 @@ impl Renderer {
             }
         }
         textures.clear();
-        let prims = self.ctx.tessellate(out.shapes, 1.0);
+        let prims = self.ctx.tessellate(out.shapes, self.scale);
         let [w, h] = self.pixels(rect.size());
         let g = ground.to_array().map(|c| c as f32 / 255.0);
         let mut picture = vec![[g[0], g[1], g[2]]; w * h];
@@ -142,15 +149,19 @@ impl Renderer {
     }
 }
 
+/// A picture's pixels as RGB bytes.
+pub fn rgb8(picture: &Picture) -> Vec<u8> {
+    picture
+        .iter()
+        .flat_map(|c| c.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8))
+        .collect()
+}
+
 /// `frames` of `size` pixels one under another, as a PNG at `path`.
+#[cfg(test)]
 pub fn save(path: &str, frames: &[Picture], size: [usize; 2]) {
     let [w, h] = size;
-    let mut sheet = Vec::with_capacity(w * h * frames.len() * 3);
-    for frame in frames {
-        for c in frame {
-            sheet.extend(c.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8));
-        }
-    }
+    let sheet: Vec<u8> = frames.iter().flat_map(rgb8).collect();
     image::save_buffer(
         path,
         &sheet,

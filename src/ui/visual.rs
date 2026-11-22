@@ -1438,7 +1438,7 @@ mod tests {
         let size = Vec2::new(760.0, 118.0);
         let rect = Rect::from_min_size(pos2(0.0, 0.0), size);
         let mut v = Visualizer::new();
-        let mut renderer = crate::ui::test_render::Renderer::new(2.0);
+        let mut renderer = crate::ui::raster::Renderer::new(2.0);
         let mut frames = Vec::new();
         let mut end = FETCH as u64;
         for frame in 0..=400 {
@@ -1450,6 +1450,6 @@ mod tests {
                 frames.push(renderer.frame(rect, palette::list_bg(), |p| v.paint(p, rect)));
             }
         }
-        crate::ui::test_render::save(&out, &frames, renderer.pixels(size));
+        crate::ui::raster::save(&out, &frames, renderer.pixels(size));
     }
 }

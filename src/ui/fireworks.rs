@@ -1067,7 +1067,7 @@ mod tests {
         let rect = Rect::from_min_size(Pos2::ZERO, SIZE);
         let mut f = Fireworks::new();
         let mut rng = Rng::default();
-        let mut renderer = crate::ui::test_render::Renderer::new(2.0);
+        let mut renderer = crate::ui::raster::Renderer::new(2.0);
         let shots: Vec<usize> = (0..8).map(|k| 150 + k * 37).collect();
         let mut frames = Vec::new();
         let mut notes = [0.0f32; BANDS];
@@ -1098,6 +1098,6 @@ mod tests {
                 frames.push(renderer.frame(rect, palette::list_bg(), |p| f.paint(p, rect)));
             }
         }
-        crate::ui::test_render::save(&out, &frames, renderer.pixels(SIZE));
+        crate::ui::raster::save(&out, &frames, renderer.pixels(SIZE));
     }
 }

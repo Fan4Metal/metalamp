@@ -6,11 +6,15 @@
 //! out by `audio::track_spectrum` on a thread, the picture filling from
 //! the left as the file is decoded; drawn at the window's own pixels,
 //! made again when it is resized. The pointer over it reads the time, the
-//! frequency and the level there. Esc or the cross closes it; the window
-//! closed, the work is given up.
+//! frequency and the level there. Once worked out, it is saved as a PNG
+//! (the button in the heading or Ctrl+S): the heading, the facts, the
+//! picture and its scales drawn by hand (`ui::raster`) at `SAVE_SIZE` on a
+//! thread of its own. Esc or the cross closes it; the window closed, the
+//! work is given up.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use egui::{Align2, Color32, FontId, Rect, TextureHandle, Ui, pos2, vec2};
 
@@ -27,6 +31,12 @@ const BOTTOM: f32 = 26.0;
 /// The picture is made again at most this often while columns come, in
 /// seconds.
 const REBUILD_S: f64 = 0.1;
+/// The picture saved: its size in points and its pixels a point (1800 ×
+/// 1020 pixels).
+const SAVE_SIZE: egui::Vec2 = vec2(1200.0, 680.0);
+const SAVE_SCALE: f32 = 1.5;
+/// The margin round the window's content, in points.
+const MARGIN: f32 = 16.0;
 
 /// The window's title, by which it is found.
 fn title() -> &'static str {
@@ -46,6 +56,16 @@ pub struct SpectrumWindow {
     worker: Worker,
     window: super::OwnWindow,
     picture: Option<Picture>,
+    /// Save was asked for: the app shows Windows' dialog (on a thread of
+    /// its own, `dialog.rs`) and gives the file back through
+    /// [`SpectrumWindow::save_to`].
+    pub ask_save: bool,
+    /// The file chosen, written from the next frame.
+    save_path: Option<PathBuf>,
+    /// The PNG being written on its thread.
+    saving: Option<Receiver<Result<PathBuf, String>>>,
+    /// What came of the last save: the file written, or why not.
+    saved: Option<Result<PathBuf, String>>,
 }
 
 /// The picture as last made: its texture, pixels and the grid's revision.
@@ -72,6 +92,7 @@ impl SpectrumWindow {
             self.job = Some(self.worker.start(ctx, path));
             self.picture = None;
             self.path = path.to_path_buf();
+            self.saved = None;
         }
         self.heading = heading;
         self.facts = facts;
@@ -92,11 +113,69 @@ impl SpectrumWindow {
         }
     }
 
+    /// The window, for the save dialog to be owned by.
+    pub fn hwnd(&self) -> Option<isize> {
+        self.window.hwnd()
+    }
+
+    /// The name the save dialog offers: the track's file's, as a PNG.
+    pub fn file_name(&self) -> String {
+        let stem = self
+            .path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        tr!(format!("{stem} - spectrum.png"), format!("{stem} - спектр.png"))
+    }
+
+    /// The file chosen in the save dialog: written from the next frame.
+    pub fn save_to(&mut self, path: PathBuf) {
+        self.save_path = Some(path);
+    }
+
+    /// The PNG written on a thread of its own once a file was chosen, and
+    /// what came of it taken.
+    fn follow_saving(&mut self, ctx: &egui::Context) {
+        if let (Some(path), Some(job)) = (self.save_path.take(), self.job.clone()) {
+            let (heading, facts) = (self.heading.clone(), self.facts.clone());
+            let (send, receive) = channel();
+            let wake = ctx.clone();
+            let spawned = std::thread::Builder::new()
+                .name("spectrum png".into())
+                .spawn(move || {
+                    let result = save_png(&path, &heading, &facts, &job.grid()).map(|()| path);
+                    if let Err(e) = &result {
+                        log::warn!("cannot save the spectrum: {e}");
+                    }
+                    let _ = send.send(result);
+                    wake.request_repaint();
+                });
+            match spawned {
+                Ok(_) => {
+                    self.saving = Some(receive);
+                    self.saved = None;
+                }
+                Err(e) => self.saved = Some(Err(e.to_string())),
+            }
+        }
+        if let Some(receive) = &self.saving {
+            match receive.try_recv() {
+                Ok(result) => {
+                    self.saved = Some(result);
+                    self.saving = None;
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => self.saving = None,
+            }
+        }
+    }
+
     /// Draws the window while it is open, owned by `owner`.
     pub fn show(&mut self, ctx: &egui::Context, owner: Option<isize>) {
         if !self.open {
             return;
         }
+        self.follow_saving(ctx);
         let fresh = std::mem::take(&mut self.fresh);
         if fresh {
             self.window.reset();
@@ -131,7 +210,7 @@ impl SpectrumWindow {
                 .frame(
                     egui::Frame::NONE
                         .fill(palette::panel_bg())
-                        .inner_margin(egui::Margin::same(16)),
+                        .inner_margin(egui::Margin::same(MARGIN as i8)),
                 )
                 .show(ui, |ui| close |= self.content(ui));
         });
@@ -158,10 +237,33 @@ impl SpectrumWindow {
             let grid = job.grid();
             (grid.done, grid.error.clone(), grid.columns())
         };
+        let can_save = done && error.is_none() && self.saving.is_none();
+        if can_save
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S))
+        {
+            self.ask_save = true;
+        }
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 close = super::close_cross(ui);
                 ui.add_space(8.0);
+                if done && error.is_none() {
+                    let button = egui::Button::new(tr!("Save as PNG…", "Сохранить в PNG…"));
+                    if ui
+                        .add_enabled(can_save, button)
+                        .on_hover_text(tr!(
+                            "The picture with its scales as a PNG file (Ctrl+S)",
+                            "Картинка со шкалами в файл PNG (Ctrl+S)"
+                        ))
+                        .clicked()
+                    {
+                        self.ask_save = true;
+                    }
+                    if self.saving.is_some() {
+                        ui.spinner();
+                    }
+                    self.saved_note(ui);
+                }
                 if !done {
                     let share = columns.min(COLUMNS) * 100 / COLUMNS;
                     ui.label(
@@ -198,10 +300,7 @@ impl SpectrumWindow {
         ui.add_space(10.0);
 
         let room = ui.available_rect_before_wrap();
-        let plot = Rect::from_min_max(
-            pos2(room.left() + LEFT, room.top() + 8.0),
-            pos2(room.right() - RIGHT, room.bottom() - BOTTOM),
-        );
+        let plot = plot_in(room);
         ui.allocate_rect(room, egui::Sense::hover());
         if plot.width() < 40.0 || plot.height() < 40.0 {
             return close;
@@ -236,6 +335,41 @@ impl SpectrumWindow {
             readout(&painter, plot, at, &grid);
         }
         close
+    }
+
+    /// What came of the last save: "Saved", a click showing the file in
+    /// its folder, or why not, in red.
+    fn saved_note(&self, ui: &mut Ui) {
+        match &self.saved {
+            Some(Ok(path)) => {
+                let note = ui
+                    .add(
+                        egui::Label::new(
+                            egui::RichText::new(tr!("Saved", "Сохранено"))
+                                .color(palette::text_weak()),
+                        )
+                        .sense(egui::Sense::click()),
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text(tr!(
+                        format!("{}\nA click shows it in its folder", path.display()),
+                        format!("{}\nЩелчок покажет его в папке", path.display())
+                    ));
+                if note.clicked() {
+                    crate::win::show_in_folder(path);
+                }
+            }
+            Some(Err(e)) => {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(tr!("Not saved", "Не сохранено"))
+                            .color(palette::error()),
+                    ),
+                )
+                .on_hover_text(e);
+            }
+            None => {}
+        }
     }
 
     /// The picture made again for `plot`'s pixels when the grid or the
@@ -323,6 +457,63 @@ pub fn about(path: &Path, track: Option<&crate::library::Track>) -> (String, Str
         facts.push(format::size(t.size));
     }
     (heading, facts.join("  ·  "))
+}
+
+/// The picture's place in `room`, the room under the heading: the scales
+/// round it.
+fn plot_in(room: Rect) -> Rect {
+    Rect::from_min_max(
+        pos2(room.left() + LEFT, room.top() + 8.0),
+        pos2(room.right() - RIGHT, room.bottom() - BOTTOM),
+    )
+}
+
+/// The spectrum as the window shows it, drawn by hand at `SAVE_SIZE` and
+/// written to `path` as a PNG: the heading and the facts over the picture
+/// and its scales, on the window's ground.
+fn save_png(path: &Path, heading: &str, facts: &str, grid: &Grid) -> Result<(), String> {
+    let mut renderer = super::raster::Renderer::new(SAVE_SCALE);
+    let rect = Rect::from_min_size(egui::Pos2::ZERO, SAVE_SIZE);
+    let inner = rect.shrink(MARGIN);
+    // The heading's row and the facts' line, as the window lays them out.
+    let room = Rect::from_min_max(pos2(inner.left(), inner.top() + 54.0), inner.max);
+    let plot = plot_in(room);
+    let image = picture(grid, renderer.pixels(plot.size()));
+    let pixels = renderer.frame(rect, palette::panel_bg(), |painter| {
+        let line = |text: &str, size: f32, colour: Color32, top: f32| {
+            let mut job = egui::text::LayoutJob::simple_singleline(
+                text.to_owned(),
+                FontId::proportional(size),
+                colour,
+            );
+            job.wrap = egui::text::TextWrapping::truncate_at_width(inner.width());
+            let galley = painter.layout_job(job);
+            painter.galley(pos2(inner.left(), top), galley, colour);
+        };
+        line(heading, 17.0, palette::text_bright(), inner.top() + 2.0);
+        line(facts, 12.0, palette::text_weak(), inner.top() + 30.0);
+        painter.rect_filled(plot, 0.0, Color32::BLACK);
+        let texture =
+            painter
+                .ctx()
+                .load_texture("spectrum_saved", image, egui::TextureOptions::NEAREST);
+        painter.image(
+            texture.id(),
+            plot,
+            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+            Color32::WHITE,
+        );
+        scales(painter, plot, grid);
+    });
+    let [w, h] = renderer.pixels(SAVE_SIZE);
+    image::save_buffer(
+        path,
+        &super::raster::rgb8(&pixels),
+        w as u32,
+        h as u32,
+        image::ColorType::Rgb8,
+    )
+    .map_err(|e| e.to_string())
 }
 
 fn viewport() -> egui::ViewportId {
@@ -604,5 +795,49 @@ mod tests {
     fn steps_keep_their_marks_apart() {
         assert_eq!(step_of(&[1.0, 2.0, 5.0], 10.0, 100.0, 15.0), 2.0);
         assert_eq!(step_of(&[1.0, 2.0, 5.0], 10.0, 10.0, 15.0), 5.0);
+    }
+
+    #[test]
+    fn the_spectrum_is_saved_with_its_scales() {
+        let mut grid = Grid {
+            rate: 44100,
+            seconds: 200.0,
+            done: true,
+            ..Grid::default()
+        };
+        // Loud at the bottom half, silent over it.
+        for _ in 0..COLUMNS {
+            let mut column = vec![0u8; BINS];
+            column[..BINS / 2].fill(255);
+            grid.levels.extend_from_slice(&column);
+        }
+        let dir = std::env::temp_dir().join(format!("metalamp_spectrum_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("saved.png");
+        save_png(&path, "Artist – Title", "MP3  ·  3:20", &grid).unwrap();
+        let image = image::open(&path).unwrap().to_rgb8();
+        std::fs::remove_dir_all(&dir).unwrap();
+        let [w, h] = [
+            (SAVE_SIZE.x * SAVE_SCALE) as u32,
+            (SAVE_SIZE.y * SAVE_SCALE) as u32,
+        ];
+        assert_eq!(image.dimensions(), (w, h));
+        // The plot: white (0 dB) low in it, black high in it.
+        let plot = plot_in(Rect::from_min_max(
+            pos2(MARGIN, MARGIN + 54.0),
+            (SAVE_SIZE - vec2(MARGIN, MARGIN)).to_pos2(),
+        ));
+        let px = |p: egui::Pos2| {
+            image.get_pixel((p.x * SAVE_SCALE) as u32, (p.y * SAVE_SCALE) as u32).0
+        };
+        let low = plot.left_bottom() + vec2(plot.width() / 2.0, -plot.height() / 4.0);
+        let high = plot.left_top() + vec2(plot.width() / 2.0, plot.height() / 4.0);
+        assert_eq!(px(low), [255, 255, 255]);
+        assert_eq!(px(high), [0, 0, 0]);
+        // Text was drawn: the heading's row is not only the ground.
+        let ground = palette::panel_bg();
+        let ground = [ground.r(), ground.g(), ground.b()];
+        let y = ((MARGIN + 12.0) * SAVE_SCALE) as u32;
+        assert!((0..w / 3).any(|x| image.get_pixel(x, y).0 != ground));
     }
 }

@@ -30,6 +30,8 @@ pub enum Ask {
     Cover,
     /// A text file for the file info's lyrics.
     Lyrics,
+    /// The PNG the track's spectrum is saved to.
+    Spectrum,
 }
 
 impl Ask {
@@ -42,6 +44,7 @@ impl Ask {
             Ask::ViewFolder(_) => "a view's folder",
             Ask::Cover => "a cover",
             Ask::Lyrics => "lyrics",
+            Ask::Spectrum => "the spectrum's picture",
         }
     }
 }

@@ -1133,6 +1133,7 @@ impl App {
             Ask::ViewFolder(rule) => self.view_editor.set_folder(rule, &path),
             Ask::Cover => self.file_info.cover_from(path),
             Ask::Lyrics => self.file_info.lyrics_from(path),
+            Ask::Spectrum => self.file_info.spectrum_to(path),
         }
     }
 
@@ -2277,6 +2278,21 @@ impl eframe::App for App {
             let owner = self.file_info.owner().or(self.hwnd);
             self.dialogs
                 .start(&ctx, owner, Ask::Lyrics, make, dialog::pick_file);
+        }
+        if let Some((name, owner)) = self.file_info.spectrum_save_asked() {
+            let make = move || {
+                rfd::FileDialog::new()
+                    .set_title(tr!("Save the spectrum", "Сохранить спектр"))
+                    .add_filter(tr!("PNG picture", "Картинка PNG"), &["png"])
+                    .set_file_name(name)
+            };
+            self.dialogs.start(
+                &ctx,
+                owner.or(self.hwnd),
+                Ask::Spectrum,
+                make,
+                dialog::save_file,
+            );
         }
         if let Some(folder) = self.file_info.folder_saved.take() {
             self.library_view
