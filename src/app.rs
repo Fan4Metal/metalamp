@@ -708,8 +708,11 @@ impl App {
         let mut heard = std::mem::take(&mut self.heard);
         let mut side = std::mem::take(&mut self.heard_side);
         let visual = self.settings.visual_shown();
-        // The side only for the goniometer.
-        let at = if visual == crate::settings::Visual::Goniometer {
+        // The side only for the goniometer and the vortex.
+        let at = if matches!(
+            visual,
+            crate::settings::Visual::Goniometer | crate::settings::Visual::Vortex
+        ) {
             self.player
                 .heard_stereo(crate::ui::visual::FETCH, &mut heard, &mut side)
         } else {

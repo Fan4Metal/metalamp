@@ -208,7 +208,8 @@ impl Visualizer {
     }
 
     /// Moves `visual` on with the `FETCH` frames heard now (`None`:
-    /// nothing is heard) and, for the goniometer, their side, for a
+    /// nothing is heard) and, for the goniometer and the vortex, their
+    /// side, for a
     /// display of `size` (`None`: none shown).
     pub fn feed(
         &mut self,
@@ -273,11 +274,16 @@ impl Visualizer {
                         self.analyzer
                             .levels(&s[s.len() - spectrum::N..], h.rate, vortex::BANDS);
                     let span = ((h.rate as f32 * vortex::WAVE_S) as usize).clamp(16, s.len());
-                    (&s[s.len() - span..], levels)
+                    let side = side
+                        .filter(|d| d.len() == s.len())
+                        .map(|d| &d[d.len() - span..]);
+                    (&s[s.len() - span..], side, levels)
                 });
-                let heard = heard
-                    .as_ref()
-                    .map(|(wave, levels)| (*wave, levels.as_slice()));
+                let heard = heard.as_ref().map(|(wave, side, levels)| vortex::Sound {
+                    wave,
+                    side: *side,
+                    levels,
+                });
                 self.vortex.feed(heard, new > 0, dt, size);
             }
             Visual::Chroma | Visual::Piano | Visual::Strings => {
@@ -1448,6 +1454,47 @@ mod tests {
             v.feed(visual, Some((&s, Heard { rate, end })), Some(&s), Some(size));
             if frame >= 250 && frame % 25 == 0 {
                 frames.push(renderer.frame(rect, palette::list_bg(), |p| v.paint(p, rect)));
+            }
+        }
+        crate::ui::raster::save(&out, &frames, renderer.pixels(size));
+    }
+
+    /// Two frames of each of the vortex's scenes fed `music`, drawn by
+    /// hand into a PNG sheet: `METALAMP_FRAMES=<file.png> cargo test
+    /// --release vortex_scenes -- --ignored` (`METALAMP_THEME=light` for
+    /// the light theme).
+    #[test]
+    #[ignore]
+    fn vortex_scenes() {
+        use std::time::Duration;
+        let out = std::env::var("METALAMP_FRAMES").expect("METALAMP_FRAMES=<file.png>");
+        if std::env::var("METALAMP_THEME").is_ok_and(|t| t == "light") {
+            palette::set(palette::Look {
+                theme: palette::Theme::Light,
+                ..Default::default()
+            });
+        }
+        let rate = 48_000;
+        let size = Vec2::new(760.0, 118.0);
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), size);
+        let mut renderer = crate::ui::raster::Renderer::new(2.0);
+        let mut frames = Vec::new();
+        for scene in 0..Vortex::SCENES {
+            let mut v = Visualizer::new();
+            let mut end = FETCH as u64;
+            for frame in 0..=300 {
+                end += 960;
+                let s: Vec<f32> = (end as usize - FETCH..end as usize).map(music).collect();
+                // A little of the bass on one side only.
+                let side: Vec<f32> = s.iter().map(|x| x * 0.2).collect();
+                v.last = Instant::now() - Duration::from_millis(20);
+                v.feed(Visual::Vortex, Some((&s, Heard { rate, end })), Some(&side), Some(size));
+                if frame == 0 {
+                    v.vortex.play_scene(scene);
+                }
+                if frame == 250 || frame == 300 {
+                    frames.push(renderer.frame(rect, palette::list_bg(), |p| v.paint(p, rect)));
+                }
             }
         }
         crate::ui::raster::save(&out, &frames, renderer.pixels(size));

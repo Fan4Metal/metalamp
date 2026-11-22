@@ -229,7 +229,7 @@ The display right of the player shows the sound heard. A click on it goes on to 
 - **Spectrogram**: the spectrum's history flowing left out of the spectrum heard now, drawn as bars with their peaks on the right; the columns heard on a beat are brighter.
 - **Synthwave**: a flight over a grid towards a striped sun, between mountains raised by the spectrum.
 - **Lightning**: bolts striking from a glowing core on the beats.
-- **Vortex**: the waves heard flying out from the middle in swirling trails that fade, thrown outwards on the beats, as the pictures of Winamp's MilkDrop.
+- **Vortex**: the waves heard flying out from the middle in swirling trails that fade, thrown outwards on the beats, as the pictures of Winamp's MilkDrop. Its scenes follow one another on the beats and blend into each other: the wave across, a tunnel of rings, a mirrored spiral, rising smoke, a kaleidoscope, a starburst, a whirlpool and a river.
 - **Fire**: flames rising from the spectrum along the bottom, as the fire of Doom, thrown higher on the beats.
 - **Fireworks**: rockets go up as notes start in the bands (the bass on the left) and burst at the top of their climb; each beat bursts the rocket highest up as a large shell (a peony, a chrysanthemum, a willow, a ring, a crackle or a palm) and lights the sky.
 - **Aurora**: curtains of light swaying over the spectrum, streaked by drifting rays, swaying faster as the music is louder; each beat makes them flash and leap and sends a surge of light across.
