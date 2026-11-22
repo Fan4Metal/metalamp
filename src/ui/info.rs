@@ -2554,18 +2554,21 @@ fn footer_row(ui: &mut Ui, form: Option<&Form>, acts: &mut Vec<Act>) {
     });
 }
 
-/// The lines of the section "File": the path, an MP3's LAME tag, the
-/// pictures.
+/// The lines of the section "File": the path, an MP3's LAME tag (the
+/// encoder with its settings, the delay and the padding on one line; the
+/// encoder's name alone without a tag), the pictures.
 fn file_lines(d: &Details) -> Vec<(String, String)> {
     let mut out = vec![(tr!("Path", "Путь").to_owned(), d.path.display().to_string())];
-    if let Some((delay, padding)) = d.gapless {
-        out.push((
+    match (d.gapless, &d.encoder) {
+        (Some((delay, padding)), encoder) => out.push((
             tr!("LAME tag", "Тег LAME").to_owned(),
-            tr!(
-                format!("encoder delay {delay}, padding {padding} samples"),
-                format!("задержка кодировщика {delay}, добивка {padding} сэмплов")
-            ),
-        ));
+            lame_line(encoder.as_ref(), delay, padding),
+        )),
+        (None, Some(encoder)) => out.push((
+            tr!("Encoder", "Кодировщик").to_owned(),
+            encoder.name.clone(),
+        )),
+        (None, None) => {}
     }
     for p in &d.pictures {
         let mut text = p.format.clone();
@@ -2576,6 +2579,25 @@ fn file_lines(d: &Details) -> Vec<(String, String)> {
         out.push((picture_name(p.kind), text));
     }
     out
+}
+
+/// The LAME tag's line: `LAME3.99r (-m j -V 4 -q 3 -lowpass 20.5), encoder
+/// delay 576, padding 924 samples`, the encoder left out when the tag
+/// names none.
+fn lame_line(
+    encoder: Option<&crate::audio::mp3gap::Encoder>,
+    delay: u32,
+    padding: u32,
+) -> String {
+    let gap = tr!(
+        format!("encoder delay {delay}, padding {padding} samples"),
+        format!("задержка кодировщика {delay}, добивка {padding} сэмплов")
+    );
+    match encoder {
+        Some(e) if e.settings.is_empty() => format!("{}, {gap}", e.name),
+        Some(e) => format!("{} ({}), {gap}", e.name, e.settings),
+        None => gap,
+    }
 }
 
 /// A section's heading: small capitals, `right` (a note or a button) at

@@ -29,8 +29,12 @@ pub struct Details {
     pub sample_rate: u32,
     pub bit_depth: Option<u8>,
     pub channels: u8,
-    /// An MP3's LAME tag: the encoder's delay and padding, in samples.
+    /// An MP3's LAME tag: the encoder's delay and padding, in samples
+    /// (none without a tag that has them).
     pub gapless: Option<(u32, u32)>,
+    /// The encoder the tag names, with its settings; or the name alone
+    /// that LAME left in the first frame without a tag.
+    pub encoder: Option<crate::audio::mp3gap::Encoder>,
     /// The front cover of the tag (else its first picture, else the
     /// folder's), at most [`COVER_SIDE`] pixels a side.
     pub cover: Option<egui::ColorImage>,
@@ -141,7 +145,11 @@ pub fn read(path: &Path) -> Result<Details, String> {
         gapless: is_mp3
             .then(|| crate::audio::mp3gap::parse(&head))
             .flatten()
+            .filter(|g| g.delay > 0 || g.padding > 0)
             .map(|g| (g.delay, g.padding)),
+        encoder: is_mp3
+            .then(|| crate::audio::mp3gap::encoder(&head))
+            .flatten(),
         cover,
         tag_cover,
     })

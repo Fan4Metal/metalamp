@@ -120,10 +120,35 @@ fn id3v2_tags_len(data: &[u8]) -> usize {
     at
 }
 
-/// The gapless information of an MP3 whose start (past the ID3v2 tags,
-/// `id3v2_tags_len`) is `data`; `None` without a Xing/Info header with a
-/// LAME tag.
-pub fn parse(data: &[u8]) -> Option<GapInfo> {
+/// Where the first frame's Xing/Info header and LAME tag lie.
+struct Located<'a> {
+    /// The first frame, from its header on.
+    header: &'a [u8],
+    frames: Option<u32>,
+    samples_per_frame: u32,
+    /// The Xing header's quality (`100 - 10 × V - q`), when it has one.
+    quality: Option<u32>,
+    /// Where the LAME tag starts in `header` (none: a Xing/Info header
+    /// with something else after it), and the encoder's name in its
+    /// first 4 bytes.
+    lame: Option<usize>,
+    /// What follows the name is LAME's filler (`LAME3.85UUUU…`), not a
+    /// tag: old versions wrote it into their frames, and the first frame
+    /// of a file without an info tag carries it where the tag would be.
+    filler: bool,
+}
+
+/// LAME's filler after its name: 0x55 ("U") or 0xAA over and over.
+fn is_filler(bytes: &[u8]) -> bool {
+    bytes
+        .windows(12)
+        .any(|w| (w[0] == 0x55 || w[0] == 0xaa) && w.iter().all(|&b| b == w[0]))
+}
+
+/// The first frame of an MP3 whose start (past the ID3v2 tags,
+/// `id3v2_tags_len`) is `data`, and what its Xing/Info header holds;
+/// `None` without a Xing/Info header or a LAME tag where it would be.
+fn locate(data: &[u8]) -> Option<Located<'_>> {
     let start = id3v2_tags_len(data);
     let data = data.get(start..)?;
     // The first frame header: a sync, MPEG 1, 2 or 2.5, Layer III.
@@ -153,10 +178,11 @@ pub fn parse(data: &[u8]) -> Option<GapInfo> {
             .get(i..i + 4)
             .map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
     };
-    let (frames, lame) = if tag == b"Xing" || tag == b"Info" {
+    let (frames, quality, lame) = if tag == b"Xing" || tag == b"Info" {
         let flags = u32_at(x + 4)?;
         let mut p = x + 8;
         let mut frames = None;
+        let mut quality = None;
         if flags & 1 != 0 {
             frames = u32_at(p);
             p += 4;
@@ -168,36 +194,179 @@ pub fn parse(data: &[u8]) -> Option<GapInfo> {
             p += 100;
         }
         if flags & 8 != 0 {
+            quality = u32_at(p);
             p += 4;
         }
-        (frames, p)
+        (frames, quality, p)
     } else if tag == b"LAME" || tag == b"Lavc" || tag == b"Lavf" {
         // A LAME tag where the Xing header would be, without one.
-        (None, x)
+        (None, None, x)
     } else {
         return None;
     };
     let name = header.get(lame..lame + 4)?;
-    if name != b"LAME" && name != b"Lavc" && name != b"Lavf" && name != b"L3.9" {
+    let lame =
+        (name == b"LAME" || name == b"Lavc" || name == b"Lavf" || name == b"L3.9").then_some(lame);
+    let filler =
+        lame.is_some_and(|l| is_filler(header.get(l..).map_or(&[][..], |h| &h[..h.len().min(40)])));
+    Some(Located {
+        header,
+        frames,
+        samples_per_frame,
+        quality,
+        lame,
+        filler,
+    })
+}
+
+/// The gapless information of an MP3 whose start (past the ID3v2 tags,
+/// `id3v2_tags_len`) is `data`; `None` without a Xing/Info header with a
+/// LAME tag.
+pub fn parse(data: &[u8]) -> Option<GapInfo> {
+    let found = locate(data)?;
+    // LAME's filler where the tag would be, without a Xing header: none.
+    if found.filler && found.frames.is_none() && found.quality.is_none() {
+        return None;
+    }
+    let Some(lame) = found.lame.filter(|_| !found.filler) else {
         return Some(GapInfo {
-            frames,
-            samples_per_frame,
+            frames: found.frames,
+            samples_per_frame: found.samples_per_frame,
             delay: 0,
             padding: 0,
         });
-    }
+    };
     // 12 bits of delay and 12 of padding, 21 bytes into the LAME tag.
-    let d = header.get(lame + 21..lame + 24)?;
+    let d = found.header.get(lame + 21..lame + 24)?;
     let delay = (u32::from(d[0]) << 4) | (u32::from(d[1]) >> 4);
     let padding = ((u32::from(d[1]) & 0x0f) << 8) | u32::from(d[2]);
     Some(GapInfo {
-        frames,
-        samples_per_frame,
+        frames: found.frames,
+        samples_per_frame: found.samples_per_frame,
         delay,
         padding,
     })
 }
 
+/// What an MP3's LAME tag says of the encoder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Encoder {
+    /// Its name and version as written: `LAME3.99r`, `LAME3.100`,
+    /// `Lavc58.91`.
+    pub name: String,
+    /// Its settings as MediaInfo puts them together from the tag's fields
+    /// (`-m j -V 4 -q 3 -lowpass 20.5`); empty when the tag is not
+    /// LAME's own (FFmpeg's leaves the fields empty).
+    pub settings: String,
+}
+
+/// The encoder of an MP3 whose start (past the ID3v2 tags) is `data`, from
+/// its LAME tag: the name in its first 9 bytes, the settings from the VBR
+/// method and lowpass (bytes 9 and 10), the bitrate (20), the stereo mode
+/// (24) and the Xing header's quality.
+pub fn encoder(data: &[u8]) -> Option<Encoder> {
+    let found = locate(data)?;
+    let lame = found.lame?;
+    // The name: 9 bytes in a tag; before the filler without one
+    // (`LAME3.88 (alpha)`, `LAME3.97.3`).
+    let tag = found.header.get(lame..)?;
+    let most = if found.filler { 24 } else { 9 };
+    let name: String = tag[..tag.len().min(most)]
+        .iter()
+        .take_while(|&&b| (b.is_ascii_graphic() || b == b' ') && !(found.filler && b == 0x55))
+        .map(|&b| b as char)
+        .collect::<String>()
+        .trim()
+        .to_owned();
+    if name.is_empty() {
+        return None;
+    }
+    if found.filler {
+        return Some(Encoder {
+            name,
+            settings: String::new(),
+        });
+    }
+    let tag = tag.get(..25)?;
+    let own = name.starts_with("LAME") || name.starts_with("L3.9");
+    let settings = if own {
+        settings_of(tag, found.quality, frame_kbps(found.header))
+    } else {
+        String::new()
+    };
+    Some(Encoder { name, settings })
+}
+
+/// The bitrate of the frame whose header starts `header`, in kbps (0: free
+/// or not one).
+fn frame_kbps(header: &[u8]) -> u32 {
+    const MPEG1: [u32; 15] = [
+        0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320,
+    ];
+    const MPEG2: [u32; 15] = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
+    let index = usize::from(header[2] >> 4);
+    let table = if (header[1] >> 3) & 3 == 3 {
+        MPEG1
+    } else {
+        MPEG2
+    };
+    table.get(index).copied().unwrap_or(0)
+}
+
+/// The settings of a LAME tag `tag` (its first 25 bytes at least), the
+/// Xing header's `quality` and the bitrate of the frame holding them, as
+/// MediaInfo writes them: the stereo mode, the bitrate mode (`-V`,
+/// `--vbr-old -V`, `--abr`, `-b`), `-q`, `-lowpass` in kHz.
+fn settings_of(tag: &[u8], quality: Option<u32>, frame_kbps: u32) -> String {
+    let method = tag[9] & 0x0f;
+    let lowpass = u32::from(tag[10]);
+    // The tag's bitrate stops at 255 ("255 or more"); a CBR file's first
+    // frame has the bitrate itself.
+    let bitrate = match (tag[20], method) {
+        (255, 1 | 8) if frame_kbps > 0 => frame_kbps,
+        (b, _) => u32::from(b),
+    };
+    let stereo = (tag[24] >> 2) & 7;
+    // V and q from `100 - 10 × V - q`.
+    let vq = quality
+        .filter(|&q| q <= 100)
+        .map(|q| ((100 - q) / 10, (100 - q) % 10));
+    let mut parts = Vec::new();
+    let mode = match stereo {
+        0 => Some("m"),
+        1 => Some("s"),
+        2 => Some("d"),
+        3 => Some("j"),
+        4 => Some("f"),
+        _ => None,
+    };
+    if let Some(m) = mode {
+        parts.push(format!("-m {m}"));
+    }
+    let v = vq.map(|(v, _)| format!("-V {v}"));
+    match method {
+        1 | 8 if bitrate > 0 => parts.push(format!("-b {bitrate}")),
+        2 | 9 if bitrate > 0 => parts.push(format!("--abr {bitrate}")),
+        3 => {
+            parts.push("--vbr-old".to_owned());
+            parts.extend(v);
+        }
+        4..=6 => parts.extend(v),
+        _ => {}
+    }
+    if let Some((_, q)) = vq {
+        parts.push(format!("-q {q}"));
+    }
+    if lowpass > 0 {
+        let khz = if lowpass % 10 == 0 {
+            format!("{}", lowpass / 10)
+        } else {
+            format!("{}.{}", lowpass / 10, lowpass % 10)
+        };
+        parts.push(format!("-lowpass {khz}"));
+    }
+    parts.join(" ")
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,6 +411,127 @@ mod tests {
         );
         assert_eq!(info.music_samples(), Some(9000 * 1152 - 576 - 1424));
         assert!(parse(&file(b"Xing", 0, 10, 576, 0)).is_some());
+    }
+
+    #[test]
+    fn the_encoder_and_its_settings() {
+        let mut data = file(b"Info", 0, 10, 576, 924);
+        let at = data.windows(4).position(|w| w == b"LAME").unwrap();
+        data[at..at + 9].copy_from_slice(b"LAME3.99r");
+        // VBR (the new method), 20.5 kHz, joint stereo, quality 100 - 40 - 3.
+        data[at + 9] = 0x04;
+        data[at + 10] = 205;
+        data[at + 24] = 3 << 2;
+        data[at - 4..at].copy_from_slice(&57u32.to_be_bytes());
+        assert_eq!(
+            encoder(&data),
+            Some(Encoder {
+                name: "LAME3.99r".into(),
+                settings: "-m j -V 4 -q 3 -lowpass 20.5".into(),
+            })
+        );
+        // The delay and padding still read.
+        assert_eq!(
+            (parse(&data).unwrap().delay, parse(&data).unwrap().padding),
+            (576, 924)
+        );
+        // CBR at 128 kbps (the frame's), 20 kHz; and at the tag's own.
+        data[at + 9] = 0x01;
+        data[at + 10] = 200;
+        data[at + 20] = 255;
+        assert_eq!(
+            encoder(&data).unwrap().settings,
+            "-m j -b 128 -q 3 -lowpass 20"
+        );
+        data[at + 20] = 192;
+        assert_eq!(
+            encoder(&data).unwrap().settings,
+            "-m j -b 192 -q 3 -lowpass 20"
+        );
+        // The old VBR method.
+        data[at + 9] = 0x03;
+        assert_eq!(
+            encoder(&data).unwrap().settings,
+            "-m j --vbr-old -V 4 -q 3 -lowpass 20"
+        );
+        // FFmpeg's tag: its name only.
+        data[at..at + 9].copy_from_slice(b"Lavc58.91");
+        assert_eq!(
+            encoder(&data),
+            Some(Encoder {
+                name: "Lavc58.91".into(),
+                settings: String::new(),
+            })
+        );
+        // No header, no encoder.
+        assert_eq!(encoder(b"not an mp3"), None);
+    }
+
+    #[test]
+    fn lames_filler_is_no_tag() {
+        // A first frame with LAME's name and filler where a Xing header
+        // would be: the name, nothing else.
+        let mut v = vec![0xff, 0xfb, 0x90, 0x00];
+        v.extend([0u8; 32]);
+        v.extend(b"LAME3.88 (alpha)");
+        v.extend([0x55; 40]);
+        assert_eq!(
+            encoder(&v),
+            Some(Encoder {
+                name: "LAME3.88 (alpha)".into(),
+                settings: String::new(),
+            })
+        );
+        assert_eq!(parse(&v), None);
+        let mut v = vec![0xff, 0xfb, 0x90, 0x00];
+        v.extend([0u8; 32]);
+        v.extend(b"LAME3.85");
+        v.extend([0x55; 40]);
+        assert_eq!(encoder(&v).unwrap().name, "LAME3.85");
+        let at = v.len() - 40;
+        v[at..].fill(0xaa);
+        assert_eq!(
+            encoder(&v).unwrap(),
+            Encoder {
+                name: "LAME3.85".into(),
+                settings: String::new()
+            }
+        );
+        assert_eq!(parse(&v), None);
+        // After a Xing header: its frames count, no delay or padding.
+        let mut data = file(b"Xing", 0, 10, 576, 924);
+        let at = data.windows(4).position(|w| w == b"LAME").unwrap();
+        data[at + 9..at + 40].fill(0x55);
+        let info = parse(&data).unwrap();
+        assert_eq!((info.frames, info.delay, info.padding), (Some(10), 0, 0));
+        assert_eq!(encoder(&data).unwrap().settings, "");
+    }
+
+    /// The encoders of the MP3s under `METALAMP_MUSIC=<folder>`, counted,
+    /// to compare with MediaInfo: `cargo test encoders_of_real_files --
+    /// --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn encoders_of_real_files() {
+        let root = std::env::var("METALAMP_MUSIC").expect("METALAMP_MUSIC=<folder>");
+        let mut seen = std::collections::BTreeMap::<String, (usize, String)>::new();
+        for entry in walkdir::WalkDir::new(root).into_iter().flatten() {
+            let path = entry.path();
+            if !path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("mp3"))
+            {
+                continue;
+            }
+            let line = encoder(&read_head(path)).map_or("(none)".to_owned(), |e| {
+                format!("{} ({})", e.name, e.settings)
+            });
+            let slot = seen.entry(line).or_insert((0, path.display().to_string()));
+            slot.0 += 1;
+        }
+        for (line, (count, example)) in seen {
+            println!("{count:5}  {line}  e.g. {example}");
+        }
     }
 
     #[test]
