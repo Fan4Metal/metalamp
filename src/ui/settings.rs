@@ -1288,6 +1288,17 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
             50.0,
             |ui| switch(ui, &mut settings.tray),
         );
+        divider(ui);
+        row(
+            ui,
+            tr!("Only in the tray", "Только в трее"),
+            Some(tr!(
+                "The program has no button on the taskbar, shown or minimized: its icon in the notification area brings the window back.",
+                "У программы нет кнопки на панели задач ни у открытого, ни у свёрнутого окна: окно возвращает значок в области уведомлений."
+            )),
+            50.0,
+            |ui| switch(ui, &mut settings.tray_only),
+        );
     });
     section(ui, tr!("Tags", "Теги"), |ui| tag_rows(ui, settings));
 }
@@ -3259,6 +3270,7 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     settings.seek_step = d.seek_step;
     settings.volume_step = d.volume_step;
     settings.tray = d.tray;
+    settings.tray_only = d.tray_only;
     updates.enabled = d.check_updates;
 }
 

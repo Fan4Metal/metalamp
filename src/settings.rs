@@ -169,6 +169,9 @@ pub struct Settings {
     /// An icon in the notification area; minimized, the window leaves the
     /// taskbar for it.
     pub tray: bool,
+    /// The program only in the notification area: the icon there always and
+    /// the window never on the taskbar, shown or minimized.
+    pub tray_only: bool,
     /// The window over the others (Ctrl+T), and the mini player: the
     /// cover and the least of the controls, always over the others
     /// (Ctrl+M; `window` keeps the whole window's place meanwhile).
@@ -751,6 +754,7 @@ impl Default for Settings {
             ape: ApeTag::default(),
             keys: crate::keymap::Keymap::default(),
             tray: false,
+            tray_only: false,
             on_top: false,
             mini: false,
             mini_rect: None,

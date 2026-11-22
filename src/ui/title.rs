@@ -4,7 +4,7 @@
 //! free area drags the window; a double click maximises it or brings it
 //! back; the right button there or on the icon opens the window's menu
 //! (`menu`: the library, the playlist, the equalizer, the mini player, over
-//! the others, the settings, About, Exit), as the early Winamp's main menu.
+//! the others, the tray, the settings, About, Exit), as the early Winamp's main menu.
 //! The family's "i" button is left out: the row is bare.
 
 use egui::{Align2, FontId, Rect, Sense, TextureHandle, Ui, pos2, vec2};
@@ -30,6 +30,9 @@ pub enum TitleCmd {
     Mini,
     /// A line of the window's menu: what its key does.
     Run(Cmd),
+    /// The settings `tray` and `tray_only` switched.
+    Tray,
+    TrayOnly,
 }
 
 /// What the window's menu ticks.
@@ -43,6 +46,9 @@ pub struct Ticks {
     /// The equalizer's window open.
     pub equalizer: bool,
     pub on_top: bool,
+    /// Minimized to the tray; only in the tray.
+    pub tray: bool,
+    pub tray_only: bool,
 }
 
 /// `update` is the tag of a newer release, shown as a button left of
@@ -269,6 +275,27 @@ fn menu(ui: &mut Ui, ticks: Ticks, cmd: &mut Option<TitleCmd>) {
         .changed()
     {
         run = Some(Cmd::OnTop);
+    }
+    ui.separator();
+    let mut tray = ticks.tray;
+    if ui
+        .checkbox(&mut tray, tr!("Minimize to the tray", "Сворачивать в трей"))
+        .changed()
+    {
+        *cmd = Some(TitleCmd::Tray);
+        ui.close();
+    }
+    let mut tray_only = ticks.tray_only;
+    if ui
+        .checkbox(&mut tray_only, tr!("Only in the tray", "Только в трее"))
+        .on_hover_text(tr!(
+            "No button on the taskbar: the icon in the notification area brings the window back",
+            "Без кнопки на панели задач: окно возвращает значок в области уведомлений"
+        ))
+        .changed()
+    {
+        *cmd = Some(TitleCmd::TrayOnly);
+        ui.close();
     }
     ui.separator();
     for (label, what) in [

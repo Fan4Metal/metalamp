@@ -1692,18 +1692,23 @@ impl App {
         self.applied_modes = Some(wanted);
     }
 
-    /// The tray icon made or dropped as the setting says, its tooltip what
-    /// plays; minimized with it, the window leaves the taskbar.
+    /// The tray icon made or dropped as the settings say, its tooltip what
+    /// plays; minimized with it, or always only in the tray, the window
+    /// leaves the taskbar.
     fn follow_tray(&mut self) {
         let Some(hwnd) = self.hwnd else { return };
-        if self.settings.tray {
+        let only = self.settings.tray_only;
+        if self.settings.tray || only {
             if self.tray.is_none() {
                 self.tray = crate::tray::Tray::new(hwnd);
             }
         } else {
             self.tray = None;
         }
-        let off = self.tray.is_some() && win::is_minimized(hwnd);
+        // Only in the tray, the window is never on the taskbar (when the
+        // icon could not be made either, it stays there: else nothing would
+        // bring a minimized window back).
+        let off = self.tray.is_some() && (only || win::is_minimized(hwnd));
         if off != self.off_taskbar {
             if let Some(taskbar) = &self.taskbar {
                 taskbar.set_tab(!off);
@@ -1783,6 +1788,8 @@ impl App {
             },
             equalizer: self.eq_window.open,
             on_top: self.settings.on_top,
+            tray: self.settings.tray,
+            tray_only: self.settings.tray_only,
         };
         let shown = title::row(
             ui,
@@ -1807,6 +1814,14 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized))
             }
             Some(TitleCmd::About) => self.about.toggle(),
+            Some(TitleCmd::Tray) => {
+                self.settings.tray = !self.settings.tray;
+                self.place_changed = Some(Instant::now());
+            }
+            Some(TitleCmd::TrayOnly) => {
+                self.settings.tray_only = !self.settings.tray_only;
+                self.place_changed = Some(Instant::now());
+            }
             None => {}
         }
     }

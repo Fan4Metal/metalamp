@@ -210,7 +210,7 @@ A narrow window with a player of its own on top (a display with the time over th
 <summary>The taskbar, the tray, the media keys</summary>
 
 - **Taskbar**: the program's button shows the position as its progress (yellow when paused) and has Previous, Play/Pause and Next under its thumbnail.
-- **Tray**: with **Minimize to the tray** (the settings window, General) an icon stays in the notification area: the window minimized leaves the taskbar for it, a click on the icon brings it back, and the icon's menu has Play/Pause, Stop, Previous, Next and Exit; its tooltip names the track playing.
+- **Tray**: with **Minimize to the tray** (the settings window, General) an icon stays in the notification area: the window minimized leaves the taskbar for it, a click on the icon brings it back, and the icon's menu has Play/Pause, Stop, Previous, Next and Exit; its tooltip names the track playing. With **Only in the tray** the program has no taskbar button at all, shown or minimized, and the icon is always there. Both are also switched in the window's menu (the right button on the title row).
 - **Media keys** of keyboards, headsets and remotes control the player also while another window is active, and Windows' media panel by the volume shows the track; the settings window can limit them to the player's window or turn them off.
 - **Over the other windows**: `Ctrl+T` keeps the window over the others; the pushpin is kept between runs.
 
@@ -318,7 +318,7 @@ The settings window (`F5`, or `Ctrl+P`, or the gear in the library's bar) lists 
 - **Covers**: **Source priority**, tags first (the default) or folder first, applied to the library and player without restarting; a missing or unreadable picture falls back to the other source. The tag editor always shows the embedded picture first.
 - **Playlist**: the line of an entry, the numbers and the lengths (see [The playlist](#the-playlist)).
 - **Playback**: the seek step (5 seconds by default, 1–60 s) and the volume step (5 % by default, 1–25 %).
-- **Media keys**: always, in the player's window only, or off; **Minimize to the tray**.
+- **Media keys**: always, in the player's window only, or off; **Minimize to the tray**, **Only in the tray**.
 - **Tags**: how an MP3's tags are written (see [File info](#file-info)).
 
 </details>
