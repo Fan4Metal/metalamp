@@ -1,8 +1,8 @@
 //! Vortex: a picture with feedback, as Winamp's MilkDrop and Geiss drew
 //! theirs. Each frame the picture before is drawn again moved as the scene
-//! in play says (grown or shrunk from a wandering middle, faster towards
-//! the edges or the middle, stretched, turned with a slow swing, drifted,
-//! rippled with the bass, stirred by running sines), and dimmed; then the
+//! in play says (grown from the middle, faster towards the edges or the
+//! middle, stretched, turned steadily, drifted, rippled with the bass,
+//! stirred by running sines), and dimmed; then the
 //! sound heard now is drawn in the scene's shape (`Shape`: the wave on a
 //! carrier across the middle, two of them, a ring, MilkDrop's XY spiral,
 //! the wave against itself a moment later, rays from the middle) in
@@ -44,14 +44,11 @@ const CELL: usize = 8;
 /// light goes soon (the blur of the sampling gathers in it) and the last
 /// of it with `active`.
 const CUT: f32 = 0.2;
-/// A kick grows the picture this much more a second at its height, and
-/// turns it `KICK_SWIRL` more (radians a second), the way changing with
-/// each kick; it fades in `KICK_S`.
-const KICK_ZOOM: f32 = 2.5;
-const KICK_SWIRL: f32 = 2.0;
-const KICK_S: f32 = 0.3;
-/// The middle wanders round in these times.
-const WANDER_S: Vec2 = Vec2::new(7.0, 5.3);
+/// A kick grows the picture this much more a second at its height, a
+/// surge forwards fading in `KICK_S` (it turned the picture too, each
+/// kick the other way: the user found it rocking).
+const KICK_ZOOM: f32 = 1.2;
+const KICK_S: f32 = 0.5;
 /// The ripple's waves per half height, and per second.
 const RIPPLE_K: f32 = 5.0;
 const RIPPLE_HZ: f32 = 1.0;
@@ -77,6 +74,13 @@ const POINTS: usize = 600;
 const LATER: f32 = 0.03;
 const STEP_LIGHT: f32 = 0.3;
 const RUN: f32 = 3.0;
+/// The loop: its half size, its orbit's half width and height (half
+/// heights), and its turn and orbit's in radians a second (in the middle
+/// and still, a slow bass drew it over itself into a blot). The spiral
+/// leaves half the light of the other shapes, drawn over itself more.
+const LOOP_SIZE: f32 = 0.45;
+const LOOP_ORBIT: Vec2 = Vec2::new(1.3, 0.45);
+const LOOP_TURN: f32 = 0.8;
 /// The rays: so many, from so far out (half heights) and so long at the
 /// peak (the square root of a share of it: between the kicks the peaks
 /// are small), and the light a pixel of them leaves.
@@ -135,25 +139,25 @@ enum Mirror {
     Both,
 }
 
-/// How the picture moves and what is drawn on it.
+/// How the picture moves and what is drawn on it. The middle stays put
+/// and every scene flies forwards, turning steadily if at all: the middle
+/// wandering and the turn swinging one way and the other, the user found
+/// the picture rocking.
 #[derive(Clone, Copy, Debug)]
 struct Scene {
     shape: Shape,
-    /// The picture grows this share a second (shrinks below 0)...
+    /// The picture grows this share a second...
     zoom: f32,
     /// ...times this at the edge and its inverse in the middle (MilkDrop's
     /// zoom exponent: over 1 a tunnel, under 1 a bulge).
     edge: f32,
     /// More growth a second across and down.
     stretch: Vec2,
-    /// The turn, in radians a second at most, swinging one way and the
-    /// other over `swing_s`.
+    /// The turn, in radians a second (anticlockwise on the screen when
+    /// over 0).
     swirl: f32,
-    swing_s: f32,
     /// The picture moves so many half heights a second.
     drift: Vec2,
-    /// The middle wanders this far (shares of the half width and height).
-    wander: Vec2,
     /// The ripple and the stir, in half heights a second.
     ripple: f32,
     stir: f32,
@@ -168,17 +172,15 @@ struct Scene {
     hue: f32,
 }
 
-/// The vortex as it was before the scenes.
+/// The vortex as it was before the scenes, held steady.
 const CLASSIC: Scene = Scene {
     shape: Shape::Line,
-    zoom: 0.6,
+    zoom: 0.7,
     edge: 1.0,
     stretch: Vec2::ZERO,
-    swirl: 0.7,
-    swing_s: 9.0,
+    swirl: 0.12,
     drift: Vec2::ZERO,
-    wander: Vec2::new(0.35, 0.3),
-    ripple: 1.0,
+    ripple: 0.3,
     stir: 0.0,
     half_s: 0.3,
     echo: 0.0,
@@ -194,51 +196,44 @@ const SCENES: [Scene; 8] = [
         shape: Shape::Ring,
         zoom: 1.0,
         edge: 1.5,
-        swirl: 0.25,
-        swing_s: 13.0,
-        wander: Vec2::new(0.15, 0.1),
+        swirl: 0.1,
         ripple: 0.0,
         half_s: 0.3,
         hue: 0.03,
         ..CLASSIC
     },
-    // A spiral turning fast, its top and bottom alike.
+    // A spiral turning one way as it flies out, its top and bottom alike.
     Scene {
         shape: Shape::Spiral,
-        zoom: 0.45,
+        zoom: 0.6,
         edge: 1.3,
-        swirl: 1.4,
-        swing_s: 7.0,
-        wander: Vec2::new(0.25, 0.2),
-        ripple: 0.5,
+        swirl: 0.5,
+        ripple: 0.0,
         half_s: 0.35,
         echo: 0.5,
         mirror: Mirror::Down,
         ..CLASSIC
     },
-    // Smoke: two waves rising, spreading and stirred.
+    // Smoke: two waves flying out wide, rising a little and stirred.
     Scene {
         shape: Shape::Lines,
-        zoom: 0.15,
-        stretch: Vec2::new(0.5, -0.1),
-        swirl: 0.1,
-        drift: Vec2::new(0.0, -0.45),
-        wander: Vec2::new(0.1, 0.05),
+        zoom: 0.5,
+        stretch: Vec2::new(0.3, 0.0),
+        swirl: 0.0,
+        drift: Vec2::new(0.0, -0.15),
         ripple: 0.0,
-        stir: 0.5,
-        half_s: 0.5,
+        stir: 0.25,
+        half_s: 0.45,
         ..CLASSIC
     },
     // A kaleidoscope: loops bulging out of the middle, left and right
     // alike.
     Scene {
         shape: Shape::Loop,
-        zoom: 0.5,
-        edge: 0.6,
-        swirl: 0.9,
-        swing_s: 11.0,
-        wander: Vec2::new(0.3, 0.25),
-        ripple: 0.6,
+        zoom: 0.6,
+        edge: 0.8,
+        swirl: -0.25,
+        ripple: 0.0,
         half_s: 0.35,
         echo: 0.5,
         mirror: Mirror::Across,
@@ -247,44 +242,42 @@ const SCENES: [Scene; 8] = [
     // A starburst, with a larger echo of it about it.
     Scene {
         shape: Shape::Rays,
-        zoom: 0.8,
+        zoom: 0.9,
         edge: 1.6,
-        swirl: 0.2,
-        wander: Vec2::new(0.15, 0.1),
-        stir: 0.15,
+        swirl: 0.1,
+        ripple: 0.0,
+        stir: 0.1,
         half_s: 0.25,
         echo: 0.3,
         echo_zoom: 1.5,
         hue: 0.05,
         ..CLASSIC
     },
-    // A whirlpool: rings drawn in and turning, half a turn of it over
+    // A whirlpool: rings flying out and turning, half a turn of it over
     // itself.
     Scene {
         shape: Shape::Ring,
-        zoom: -0.6,
+        zoom: 0.7,
         edge: 1.5,
-        swirl: 1.6,
-        swing_s: 15.0,
-        wander: Vec2::new(0.2, 0.15),
-        ripple: 0.4,
-        half_s: 0.55,
+        swirl: -0.8,
+        ripple: 0.0,
+        half_s: 0.45,
         echo: 0.35,
         echo_zoom: 1.25,
         mirror: Mirror::Both,
         ..CLASSIC
     },
-    // A river: the wave spreading up and down and flowing to both sides.
+    // A corridor: the two waves flying out to both sides, faster across
+    // than down, the top and the bottom alike.
     Scene {
-        shape: Shape::Line,
-        zoom: 0.1,
-        stretch: Vec2::new(0.0, 0.6),
+        shape: Shape::Lines,
+        zoom: 0.3,
+        stretch: Vec2::new(0.6, 0.0),
         swirl: 0.0,
-        drift: Vec2::new(0.6, 0.0),
-        stir: 0.4,
+        ripple: 0.0,
         half_s: 0.4,
         echo: 0.4,
-        mirror: Mirror::Across,
+        mirror: Mirror::Down,
         ..CLASSIC
     },
 ];
@@ -301,9 +294,7 @@ impl Scene {
             edge: m(self.edge, other.edge),
             stretch: v(self.stretch, other.stretch),
             swirl: m(self.swirl, other.swirl),
-            swing_s: m(self.swing_s, other.swing_s),
             drift: v(self.drift, other.drift),
-            wander: v(self.wander, other.wander),
             ripple: m(self.ripple, other.ripple),
             stir: m(self.stir, other.stir),
             half_s: m(self.half_s, other.half_s),
@@ -380,19 +371,15 @@ pub struct Vortex {
     /// Something is lit.
     lit: bool,
     time: f32,
-    /// The swing's phase (turns).
-    swing: f32,
     /// How far the colours' places have run.
     hue: f32,
     /// The bass and the overall level shown (falling at `FALL_S`), the
-    /// bass's recent mean, a kick's height, the time since the last and
-    /// the way it turns the picture (1 or -1).
+    /// bass's recent mean, a kick's height and the time since the last.
     bass: f32,
     level: f32,
     mean: f32,
     kick: f32,
     since_kick: f32,
-    way: f32,
     /// The samples' peak followed.
     peak: f32,
     /// The scene playing, the one it blends from, how far (1: done), and
@@ -433,14 +420,12 @@ impl Vortex {
             height: 0,
             lit: false,
             time: 0.0,
-            swing: 0.0,
             hue: 0.0,
             bass: 0.0,
             level: 0.0,
             mean: 0.0,
             kick: 0.0,
             since_kick: 0.0,
-            way: 1.0,
             peak: PEAK_LEAST,
             scene: 0,
             from: 0,
@@ -492,7 +477,6 @@ impl Vortex {
         if kicked {
             self.kick = (0.5 + (rise - KICK_RISE) * 8.0).clamp(0.4, 1.0);
             self.since_kick = 0.0;
-            self.way = -self.way;
         }
         if heard.is_none() && !self.lit {
             return;
@@ -510,7 +494,6 @@ impl Vortex {
         let (from, to) = (SCENES[self.from], SCENES[self.scene]);
         let look = from.mix(&to, t);
         self.time += dt;
-        self.swing += dt / look.swing_s;
         self.hue += look.hue * dt;
         self.echoes = [(from, 1.0 - t), (to, t)].map(|(s, k)| Echo {
             share: s.echo * k,
@@ -522,10 +505,10 @@ impl Vortex {
             let peak = sound.wave.iter().fold(0.0f32, |m, s| m.max(s.abs()));
             self.peak = peak.max(self.peak * (-dt / PEAK_S).exp()).max(PEAK_LEAST);
             if t < 1.0 {
-                self.draw(from.shape, sound, &look, 1.0 - t);
+                self.draw(from.shape, sound, 1.0 - t);
             }
             if t > 0.0 {
-                self.draw(to.shape, sound, &look, t);
+                self.draw(to.shape, sound, t);
             }
         }
         self.changed = true;
@@ -560,12 +543,8 @@ impl Vortex {
 
     /// The middle the picture moves about and the shapes are drawn round,
     /// in pixels.
-    fn middle(&self, look: &Scene) -> (f32, f32) {
-        let t = self.time;
-        (
-            self.width as f32 / 2.0 * (1.0 + look.wander.x * (TAU * t / WANDER_S.x).sin()),
-            self.height as f32 / 2.0 * (1.0 + look.wander.y * (TAU * t / WANDER_S.y + 1.0).sin()),
-        )
+    fn middle(&self) -> (f32, f32) {
+        (self.width as f32 / 2.0, self.height as f32 / 2.0)
     }
 
     /// The picture moved by `dt` seconds' worth of `look` and dimmed: each
@@ -576,12 +555,11 @@ impl Vortex {
         let (w, h) = (self.width, self.height);
         let half = h as f32 / 2.0;
         let t = self.time;
-        let (cx, cy) = self.middle(look);
+        let (cx, cy) = self.middle();
         let reach = (w as f32 / h as f32).sqrt();
         let zoom = look.zoom + KICK_ZOOM * self.kick;
         let ln_edge = look.edge.max(0.01).ln();
-        let turn =
-            (-look.swirl * (TAU * self.swing).sin() + KICK_SWIRL * self.kick * self.way) * dt;
+        let turn = -look.swirl * dt;
         let (sn, cs) = turn.sin_cos();
         let ripple = look.ripple * (0.3 + 0.7 * self.bass) * dt;
         let stir = look.stir * dt;
@@ -651,7 +629,7 @@ impl Vortex {
 
     /// The sound as `shape`, its light `share` of the whole (two shapes
     /// share it while the scenes blend).
-    fn draw(&mut self, shape: Shape, sound: Sound<'_>, look: &Scene, share: f32) {
+    fn draw(&mut self, shape: Shape, sound: Sound<'_>, share: f32) {
         let (w, h) = (self.width, self.height);
         let wave = sound.wave;
         if wave.is_empty() || w < 2 {
@@ -672,7 +650,7 @@ impl Vortex {
         let side = sound.side.filter(|s| s.len() == wave.len());
         let left = |i: usize| (wave[i] + side.map_or(0.0, |s| s[i])) * norm;
         let right = |i: usize| (wave[i] - side.map_or(0.0, |s| s[i])) * norm;
-        let (cx, cy) = self.middle(look);
+        let (cx, cy) = self.middle();
         let half = mid;
         let n = wave.len();
         let later = ((n as f32 * LATER) as usize).clamp(1, n - 1);
@@ -738,6 +716,7 @@ impl Vortex {
             Shape::Spiral | Shape::Loop => {
                 let count = (n - later).min(POINTS);
                 let spin = self.time * 2.3;
+                let turn = (self.time * LOOP_TURN).sin_cos();
                 let points: Vec<_> = (0..count)
                     .map(|k| {
                         let i = k * (n - later) / count;
@@ -748,12 +727,24 @@ impl Vortex {
                                 let a = ll * 1.57 + spin;
                                 (radius * a.cos(), radius * a.sin())
                             }
-                            _ => (l * 1.8, rl * 0.45),
+                            _ => {
+                                // Turning on an orbit round the middle.
+                                let (x, y) = (l * LOOP_SIZE, rl * LOOP_SIZE);
+                                (
+                                    x * turn.1 - y * turn.0 + LOOP_ORBIT.x * turn.1,
+                                    x * turn.0 + y * turn.1 + LOOP_ORBIT.y * turn.0,
+                                )
+                            }
                         };
                         (cx + x * half, cy + y * half, l * 0.5)
                     })
                     .collect();
-                self.stroke(&points, &ink, STEP_LIGHT);
+                let light = if shape == Shape::Spiral {
+                    STEP_LIGHT / 2.0
+                } else {
+                    STEP_LIGHT
+                };
+                self.stroke(&points, &ink, light);
             }
         }
         self.lit = true;
@@ -1073,8 +1064,6 @@ mod tests {
         beat[..BANDS / 6].fill(0.9);
         v.feed(sound(&flat, &beat), true, 0.02, size);
         assert!(v.kick > 0.0);
-        // It turns the picture the other way than the next one will.
-        assert_eq!(v.way, -1.0);
     }
 
     /// A sine of `hz` cycles in the wave, at `amp`.
