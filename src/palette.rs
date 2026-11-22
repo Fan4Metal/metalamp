@@ -218,17 +218,15 @@ fn scheme(visual: Visual) -> Scheme {
             peak: &[0xffe6bf, 0xffcde2, 0xe9dbff],
             by_level: false,
         },
-        // Neon without yellow: coral at the bass, pink, magenta, violet, and
-        // azure only at the top of the treble (moonlit ice, acid mint to
-        // lemon, then embers the user found out of place or too plain, and
-        // gold at the treble dirty: a dim yellow is an olive; blue is
-        // welcome, though not as the main colour).
+        // Acid neon: mint at the bass, lime, lemon at the treble (moonlit
+        // ice the user found out of place; embers and a neon of coral to
+        // violet were tried after it, and the user came back to this one).
         Visual::Ridges => Scheme {
             rows: &[
-                (0.0, &[0x5a1420, 0x5a0e34, 0x50104e, 0x34146a, 0x103470]),
-                (1.0, &[0xff5a5a, 0xff3e9a, 0xe84cf0, 0x9a62ff, 0x4aa8ff]),
+                (0.0, &[0x0a4a3a, 0x1e5a14, 0x4a5a0a]),
+                (1.0, &[0x3dffc0, 0x8aff5a, 0xe6ff4d]),
             ],
-            peak: &[0xffe0e0, 0xffdcee, 0xfadcff, 0xece2ff, 0xdcefff],
+            peak: &[0xe0fff4, 0xeeffe0, 0xfcffe0],
             by_level: false,
         },
         // Dusk: coral bass in front, orange, gold at the back.
