@@ -1061,6 +1061,7 @@ impl Player<'_> {
         let Some(out) = self.out.as_mut() else {
             return Ok(());
         };
+        clip_for_windows(&mut block, f32::from_bits(self.shared.gain.load(Relaxed)));
         out.write(&block)?;
         self.shared
             .vis
@@ -1802,9 +1803,44 @@ impl Player<'_> {
     }
 }
 
+/// The highest sample heard (after the device's gain) that Windows' audio
+/// engine lets through as it is: from about 0.985 it does not clip a
+/// shared float stream but holds the whole sound down, as far as the peak
+/// passed and for as long (a burst 9.5 dB over: -9.5 dB, let go over half
+/// a second), heard as a hit ducking what follows
+/// (`windows_and_samples_past_full_scale`).
+const WINDOWS_CEILING: f32 = 0.98;
+
+/// What would pass `WINDOWS_CEILING` at the device's `gain` clipped here,
+/// as the modelled enhancer clips its own output: only without the
+/// limiter (which keeps under -1 dBTP) does anything reach it, the
+/// enhancer's rarest peaks or raised bands. Muted, nothing to do.
+fn clip_for_windows(block: &mut [f32], gain: f32) {
+    if gain > 0.0 {
+        let most = WINDOWS_CEILING / gain;
+        for x in block {
+            *x = x.clamp(-most, most);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_windows_would_hold_down_is_clipped() {
+        let mut block = [0.5, -0.99, 1.5, -3.0, 0.97];
+        clip_for_windows(&mut block, 1.0);
+        assert_eq!(block, [0.5, -0.98, 0.98, -0.98, 0.97]);
+        // At half the gain twice as much is heard as it is.
+        let mut block = [1.5, -3.0];
+        clip_for_windows(&mut block, 0.5);
+        assert_eq!(block, [1.5, -1.96]);
+        let mut muted = [5.0];
+        clip_for_windows(&mut muted, 0.0);
+        assert_eq!(muted, [5.0]);
+    }
 
     /// A clock controlled by the test, with no audio device or COM.
     struct RecordedOutput {
@@ -2636,6 +2672,79 @@ mod tests {
             println!("a bend at {ms} ms: {d:.4} of the peak");
         }
         assert!(found.is_empty(), "{} clicks", found.len());
+    }
+
+    /// What Windows does with samples past full scale in a shared float
+    /// stream: a 1 kHz sine at 0.3 with bursts of 30 ms at `BURSTS` in it,
+    /// 1.5 s apart, played into VB-Audio's cable and recorded from its
+    /// other end; the sine's level after each burst, every 20 ms. Measured
+    /// on Windows 10: no clip, a limiter in the audio engine holding the
+    /// whole sound down (a burst at 3.0, -9.5 dB at once) and letting go
+    /// over about 0.5 s.
+    #[test]
+    #[ignore = "needs VB-Audio Virtual Cable; plays a tone into it for about 9 s"]
+    fn windows_and_samples_past_full_scale() {
+        use super::output::{Output, Wasapi};
+        use windows::Win32::Media::Audio::{eCapture, eRender};
+        const BURSTS: [f32; 5] = [0.95, 0.99, 1.0, 1.01, 1.1];
+        let input = endpoint_named(eRender, "CABLE Input").expect("VB-Audio's CABLE Input");
+        let output = endpoint_named(eCapture, "CABLE Output").expect("VB-Audio's CABLE Output");
+        let rate = 48000u32;
+        let at = |s: f32| (s * rate as f32) as usize;
+        let starts: Vec<usize> = (0..BURSTS.len()).map(|k| at(1.5 + 1.5 * k as f32)).collect();
+        let total = at(1.5 + 1.5 * BURSTS.len() as f32);
+        let signal: Vec<f32> = (0..total)
+            .flat_map(|i| {
+                let a = starts
+                    .iter()
+                    .zip(BURSTS)
+                    .find(|(s, _)| (**s..**s + at(0.03)).contains(&i))
+                    .map_or(0.3, |(_, a)| a);
+                let x = a * (std::f32::consts::TAU * 1000.0 * i as f32 / rate as f32).sin();
+                [x, x]
+            })
+            .collect();
+        let _com = mf::com_init_mta();
+        let mut out = Wasapi::open(rate, 2, &input).expect("the cable's input");
+        let recorder = Recorder::start(output);
+        out.set_gain(1.0).unwrap();
+        let mut written = 0;
+        let mut started = false;
+        while written < total {
+            let room = out.room().unwrap() as usize;
+            let n = room.min(total - written);
+            if n > 0 {
+                out.write(&signal[2 * written..2 * (written + n)]).unwrap();
+                written += n;
+            }
+            if !started {
+                out.start().unwrap();
+                started = true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        std::thread::sleep(Duration::from_millis(700));
+        drop(out);
+        let (got_rate, x) = recorder.finish();
+        assert_eq!(got_rate, rate);
+        // Where the tone starts in the capture; the bursts as written.
+        let first = x.iter().position(|v| v.abs() > 0.05).expect("the tone");
+        let win = at(0.02);
+        for (start, a) in starts.iter().zip(BURSTS) {
+            let burst = first + start;
+            let peak = x[burst..burst + at(0.03)]
+                .iter()
+                .fold(0f32, |m, v| m.max(v.abs()));
+            let after: Vec<String> = [40, 100, 200, 400]
+                .iter()
+                .map(|ms| {
+                    let from = burst + at(*ms as f32 / 1000.0);
+                    let l = amplitude(&x[from..from + win], rate, 1000.0);
+                    format!("{ms} ms {:+.2} dB", 20.0 * (l / 0.3).log10())
+                })
+                .collect();
+            println!("burst {a}: captured peak {peak:.4}; after it {}", after.join(", "));
+        }
     }
 
     /// The amplitude of a sine of `hz` in `x` (a least-squares fit).

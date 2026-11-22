@@ -4,7 +4,8 @@
 //! (`channels.rs`, on whether the rest is or not), and a look-ahead
 //! limiter after them whenever any of the first three is on, so nothing
 //! clips (unless its switch in effect is off, `limiter_enabled`: then what
-//! goes past full scale is clipped by Windows, as in the players of old,
+//! goes past full scale is clipped as the samples are written to the
+//! device, `audio::clip_for_windows`, as in the players of old,
 //! and a raised preamp is heard; while the enhancer is on the switch is
 //! `enhancer_limiter`, off by default). `DspSettings` is
 //! what the settings window edits (`settings.dsp`); the engine gets a
@@ -52,7 +53,8 @@ pub struct DspSettings {
     pub limiter: bool,
     /// The limiter while the enhancer is on; off by default. The enhancer
     /// leaves `enhancer::OUTPUT_TRIM_DB` of room, and its rare peaks past
-    /// full scale are clipped by Windows: on the music it was fitted on,
+    /// full scale are clipped as they are written to the device (Windows
+    /// itself would hold the whole sound down): on the music it was fitted on,
     /// about as many samples (0.01-0.11 %) as the modelled enhancer clips
     /// of its own output (0.01-0.09 %), and no limiter's recovery moves
     /// the bass's gain.
@@ -531,7 +533,7 @@ mod tests {
         assert!((through_preamp(-20.0, 6.0) + 14.0).abs() < 0.1);
         // ...a loud track is held at it.
         assert!((through_preamp(-3.0, 12.0) - CEILING_DB).abs() < 0.2);
-        // Without the limiter, raised past full scale (Windows clips it).
+        // Without the limiter, raised past full scale (clipped as written).
         assert!((through(-3.0, 12.0, false) - 9.0).abs() < 0.1);
     }
 }
