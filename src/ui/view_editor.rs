@@ -53,6 +53,8 @@ struct Suggestions {
     album_artists: Vec<String>,
     albums: Vec<String>,
     folders: Vec<String>,
+    /// In kilohertz as typed (`44.1` / `44,1`), from the lowest.
+    sample_rates: Vec<String>,
 }
 
 /// Which library the counts are of: a scan swaps it while the editor is
@@ -114,6 +116,7 @@ impl Suggestions {
             album_artists: distinct(tracks.iter().map(|t| t.album_artist.as_str())),
             albums: distinct(library.albums.iter().map(|a| a.title.as_str())),
             folders: distinct(folders.iter().map(String::as_str)),
+            sample_rates: sample_rates(library),
         }
     }
 
@@ -124,10 +127,31 @@ impl Suggestions {
             Field::AlbumArtist => &self.album_artists,
             Field::Album => &self.albums,
             Field::Folder => &self.folders,
+            Field::SampleRate => &self.sample_rates,
             _ => return None,
         };
         (!list.is_empty()).then_some(list.as_slice())
     }
+}
+
+/// The sample rates the library's tracks have, in kilohertz as a number
+/// is typed in the language in use, from the lowest.
+fn sample_rates(library: &Library) -> Vec<String> {
+    let mut rates: Vec<u32> = library
+        .tracks
+        .iter()
+        .map(|t| t.sample_rate)
+        .filter(|&hz| hz > 0)
+        .collect();
+    rates.sort_unstable();
+    rates.dedup();
+    rates
+        .into_iter()
+        .map(|hz| {
+            let khz = crate::format::khz(hz);
+            tr!(khz.clone(), khz.replace('.', ","))
+        })
+        .collect()
 }
 
 impl ViewEditor {
@@ -564,6 +588,9 @@ fn rule_row(
             }
             Kind::Number => {
                 number_field(ui, &mut rule.value);
+                if let Some(list) = suggestions.for_field(rule.field) {
+                    suggestion_menu(ui, i, &mut rule.value, list);
+                }
                 if rule.op == Op::Between {
                     ui.label("–");
                     number_field(ui, &mut rule.to);

@@ -7,7 +7,7 @@
 //! A filter is a list of [`Rule`]s, all of which must hold (or any one,
 //! `any`). A rule tests one field of a track: a text (the genre, the
 //! artist, the album, the title) against a value without regard to case,
-//! a number (the year, the bit rate, the length in minutes, the days since
+//! a number (the year, the bit rate, the sample rate, the length in minutes, the days since
 //! the track came into the library, the plays, the days since the last one, the rating;
 //! the last three from `stats`) against one or two, the folder the file is
 //! in, or whether its tag holds a cover. The filters are kept in the settings
@@ -128,6 +128,8 @@ pub enum Field {
     Folder,
     /// Kilobits per second.
     Bitrate,
+    /// Kilohertz.
+    SampleRate,
     /// Minutes.
     Length,
     /// Days since the track came into the library (`Track::added`).
@@ -171,7 +173,7 @@ pub enum Op {
 }
 
 impl Field {
-    pub const ALL: [Field; 14] = [
+    pub const ALL: [Field; 15] = [
         Field::Genre,
         Field::Artist,
         Field::AlbumArtist,
@@ -180,6 +182,7 @@ impl Field {
         Field::Year,
         Field::Folder,
         Field::Bitrate,
+        Field::SampleRate,
         Field::Length,
         Field::Added,
         Field::Plays,
@@ -198,6 +201,7 @@ impl Field {
             Field::Year => tr!("Year", "Год"),
             Field::Folder => tr!("Folder", "Папка"),
             Field::Bitrate => tr!("Bit rate, kbps", "Битрейт, кбит/с"),
+            Field::SampleRate => tr!("Sample rate, kHz", "Частота дискретизации, кГц"),
             Field::Length => tr!("Length, minutes", "Длительность, минут"),
             Field::Added => tr!("Added, days ago", "Добавлен, дней назад"),
             Field::Plays => tr!("Plays", "Прослушиваний"),
@@ -214,6 +218,7 @@ impl Field {
             }
             Field::Year
             | Field::Bitrate
+            | Field::SampleRate
             | Field::Length
             | Field::Added
             | Field::Plays
@@ -262,6 +267,7 @@ impl Field {
         match self {
             Field::Year => (t.year > 0).then_some(f64::from(t.year)),
             Field::Bitrate => (t.bitrate > 0).then_some(f64::from(t.bitrate)),
+            Field::SampleRate => (t.sample_rate > 0).then_some(f64::from(t.sample_rate) / 1000.0),
             Field::Length => Some(f64::from(t.duration_ms) / 60_000.0),
             Field::Added => Some(days(t.added_or_mtime())),
             Field::Plays => Some(f64::from(s.plays)),
@@ -495,6 +501,7 @@ mod tests {
             title: "Paul".into(),
             year,
             bitrate: 320,
+            sample_rate: 44_100,
             duration_ms: 4 * 60_000 + 30_000,
             mtime: 1_000_000,
             has_cover: true,
@@ -592,6 +599,22 @@ mod tests {
             filter(vec![rule(Field::Length, Op::Greater, "4,25")]).matches(&t, &Stat::default())
         );
         assert!(filter(vec![rule(Field::Bitrate, Op::Is, "320")]).matches(&t, &Stat::default()));
+        // The sample rate in kilohertz, as the menu of the library's offers it.
+        assert!(
+            filter(vec![rule(Field::SampleRate, Op::Is, "44,1")]).matches(&t, &Stat::default())
+        );
+        assert!(
+            !filter(vec![rule(Field::SampleRate, Op::Is, "48")]).matches(&t, &Stat::default())
+        );
+        assert!(
+            filter(vec![rule(Field::SampleRate, Op::IsNot, "48")]).matches(&t, &Stat::default())
+        );
+        let mut no_rate = t.clone();
+        no_rate.sample_rate = 0;
+        assert!(
+            !filter(vec![rule(Field::SampleRate, Op::Less, "96")])
+                .matches(&no_rate, &Stat::default())
+        );
         assert!(filter(vec![rule(Field::Added, Op::Less, "30")]).matches(&t, &Stat::default()));
         assert!(!filter(vec![rule(Field::Added, Op::Less, "5")]).matches(&t, &Stat::default()));
         // A number the file does not have holds for nothing but "is not".

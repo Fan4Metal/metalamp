@@ -166,7 +166,7 @@ pub fn sample_rate(hz: u32) -> String {
 
 /// Hertz as kilohertz, every digit it has: `44.1`, `48`, `22.05` (from
 /// the integer: 22050 / 1000 in floats printed as `22.0`).
-fn khz(hz: u32) -> String {
+pub fn khz(hz: u32) -> String {
     let (whole, part) = (hz / 1000, hz % 1000);
     if part == 0 {
         whole.to_string()
