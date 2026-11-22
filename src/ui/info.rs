@@ -1216,6 +1216,8 @@ impl InfoView {
             self.cover_act(ctx, CoverAct::File(path));
         }
         if let Some(path) = self.lyrics_file.take() {
+            // The lyrics taken in are shown.
+            set_lyrics_open(ctx, true);
             self.take_lyrics_file(&path);
         }
         // `METALAMP_INFO_ZOOM=1`: the cover large once it is read (GUI
@@ -1815,10 +1817,15 @@ fn body_one(
     }
 
     // The lyrics apart: many lines, which the fields' grid would stretch.
+    // While editing they are folded unless unfolded (`lyrics_open`): a field
+    // of eight rows made the window grow by half.
     let lyrics = value(d, &[ItemKey::UnsyncLyrics, ItemKey::Lyrics]);
     if let Some(field) = form.as_mut().and_then(|f| f.lyrics.as_mut()) {
         ui.add_space(14.0);
-        section(ui, tr!("Lyrics", "Текст"), |ui| {
+        let open = lyrics_open(ui.ctx());
+        let note = (!open).then(|| lyrics_note(&field.value));
+        let mut toggled = false;
+        folding_section(ui, tr!("Lyrics", "Текст"), open, note, &mut toggled, |ui| {
             let clear = egui::Button::new(tr!("Clear", "Очистить")).small();
             if ui
                 .add_enabled(!field.value.is_empty(), clear)
@@ -1838,7 +1845,12 @@ fn body_one(
                 acts.push(Act::PickLyrics);
             }
         });
-        lyrics_field(ui, field);
+        if toggled {
+            set_lyrics_open(ui.ctx(), !open);
+        }
+        if open {
+            lyrics_field(ui, field);
+        }
     } else if !lyrics.is_empty() {
         ui.add_space(14.0);
         section(ui, tr!("Lyrics", "Текст"), |_| {});
@@ -2564,6 +2576,79 @@ fn section(ui: &mut Ui, title: &str, right: impl FnOnce(&mut Ui)) {
                 .strong()
                 .color(palette::text_weak()),
         );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), right);
+    });
+    let r = ui.available_rect_before_wrap();
+    ui.painter().hline(
+        r.left()..=r.right(),
+        r.top() + 2.0,
+        egui::Stroke::new(1.0, palette::line()),
+    );
+    ui.add_space(10.0);
+}
+
+/// Whether the lyrics' field is unfolded while editing: folded by default,
+/// kept for the session in egui's memory.
+fn lyrics_open(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp(lyrics_open_id()).unwrap_or(false))
+}
+
+fn set_lyrics_open(ctx: &egui::Context, open: bool) {
+    ctx.data_mut(|d| d.insert_temp(lyrics_open_id(), open));
+}
+
+fn lyrics_open_id() -> egui::Id {
+    egui::Id::new("info_lyrics_open")
+}
+
+/// What the folded lyrics' heading says of them: their lines, or none.
+fn lyrics_note(text: &str) -> String {
+    let lines = text.lines().filter(|l| !l.trim().is_empty()).count() as u64;
+    if lines == 0 {
+        tr!("none", "нет").to_owned()
+    } else {
+        crate::i18n::count(lines, ["line", "lines"], ["строка", "строки", "строк"])
+    }
+}
+
+/// [`section`]'s heading folding what is under it: a chevron before the
+/// title, a click on either sets `toggled`; `note` beside the title.
+fn folding_section(
+    ui: &mut Ui,
+    title: &str,
+    open: bool,
+    note: Option<String>,
+    toggled: &mut bool,
+    right: impl FnOnce(&mut Ui),
+) {
+    ui.horizontal(|ui| {
+        let openness = ui
+            .ctx()
+            .animate_bool(egui::Id::new(("fold", title)), open);
+        let gap = ui.spacing().item_spacing.x;
+        ui.spacing_mut().item_spacing.x = 2.0;
+        if super::settings::fold_button(ui, openness).clicked() {
+            *toggled = true;
+        }
+        let title = ui
+            .add(
+                egui::Label::new(
+                    RichText::new(title.to_uppercase())
+                        .size(11.0)
+                        .strong()
+                        .color(palette::text_weak()),
+                )
+                .sense(egui::Sense::click()),
+            )
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        if title.clicked() {
+            *toggled = true;
+        }
+        if let Some(note) = note {
+            ui.add_space(8.0);
+            ui.label(RichText::new(note).size(11.0).color(palette::text_weak()));
+        }
+        ui.spacing_mut().item_spacing.x = gap;
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), right);
     });
     let r = ui.available_rect_before_wrap();

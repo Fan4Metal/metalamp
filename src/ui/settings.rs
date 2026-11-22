@@ -2104,7 +2104,7 @@ fn fold_title(ui: &mut Ui, title: &str) -> Response {
 /// The fold's button of a section, a `tool` of its own: a chevron in the
 /// icons' lines, pointing right while folded and turning down as it opens
 /// (`openness`, 0 to 1, egui's animation of the fold).
-fn fold_button(ui: &mut Ui, openness: f32) -> Response {
+pub(crate) fn fold_button(ui: &mut Ui, openness: f32) -> Response {
     let (rect, response) = ui.allocate_exact_size(vec2(TOOL, 24.0), Sense::click());
     let color = if response.hovered() {
         palette::text_bright()
