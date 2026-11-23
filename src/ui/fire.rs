@@ -1,8 +1,9 @@
 //! Fire: flames rising from the spectrum along the display's bottom, with
 //! fireballs, explosions and sparks. The picture is a fine grid of heat (a
-//! pixel `POINTS` points wide); at least `STEP_HZ` times a second each
-//! pixel takes a mean of the pixel under it (the most), its two neighbours
-//! and the one under that (less: sideways they blurred the flames), less
+//! pixel `POINTS` points wide); at least `STEP_HZ` times a second the heat
+//! rises `RISE` rows, each pixel a mean of the pixel that far under it
+//! (the most), its two neighbours and the ones a row nearer and further
+//! (less: sideways they blurred the flames), less
 //! a cooling read from a map of soft blobs that rises with the flames
 //! (`cooling_map`; Hugo Elias's fire, with a finer octave for ragged
 //! edges and wisps), more the higher: where a blob passes, a tongue thins
@@ -12,13 +13,15 @@
 //! rises slower than the flames (`shifted`, `swirl_map`), so the tongues
 //! sway and each bends and curls on its own. Every destination is written,
 //! leaving no old heat
-//! floating between the flames. The bottom row is the source: each column
-//! the analyzer's level at its place across (the bass on the left), with
+//! floating between the flames. The bottom rows are the source: each
+//! column the heat of the analyzer's band at its place across (the bass on
+//! the left: how loud it is, and how far over its own recent course, so
+//! the flames leap with the music rather than stand at its loudness), with
 //! hot spots and travelling ripples that break it into tongues, going from
 //! the last frame's level to this one's over the frame's steps. Beats
 //! speed up the rise and reduce cooling, throwing the flames higher.
 //!
-//! Each beat sends a fireball up out of the flames (`Ball`): a blob that
+//! A strong beat sends a fireball up out of the flames (`Ball`): a blob that
 //! puts its heat into the grid wherever it is, so flames trail from it as
 //! they would from something burning, under a glow of its own. A strong
 //! beat's ball bursts at the top of its climb (`Blast`): a flash over the
@@ -47,9 +50,12 @@ pub const BANDS: usize = 48;
 /// Points a pixel of the fire, and its pixels at most across.
 const POINTS: f32 = 1.0;
 const MAX_WIDTH: usize = 1200;
-/// The heat rises a pixel at least this many times a second, faster
-/// with the sound and especially on beats.
+/// The heat rises `RISE` pixels at least this many times a second, faster
+/// with the sound and especially on beats. A row a step, the flames took a
+/// quarter of a second to reach their height, peaking as the next beat
+/// came; a step costs the same whatever it moves.
 const STEP_HZ: f32 = 210.0;
+const RISE: usize = 2;
 /// The cooling map's blobs: their radius across and down in pixels (three
 /// box blurs of it), and how much more the strongest cool than the mean
 /// (the blurred noise raised to `COOL_CONTRAST`).
@@ -62,9 +68,10 @@ const FINE_ACROSS: usize = 1;
 const FINE_DOWN: usize = 2;
 const FINE_SHARE: f32 = 0.35;
 /// The swirl: a field of sideways pushes (blobs `SWIRL_ACROSS` by
-/// `SWIRL_DOWN` pixels), up to `SWIRL` pixels a step at the top and a
-/// quarter of it at the base, rising `SWIRL_RISE` of a row a step (slower
-/// than the flames, so each tongue bends and curls on its own).
+/// `SWIRL_DOWN` pixels), up to `SWIRL` pixels a row risen at the top and a
+/// quarter of it at the base, rising `SWIRL_RISE` of a row for each row
+/// the heat rises (slower than the flames, so each tongue bends and curls
+/// on its own).
 const SWIRL_ACROSS: usize = 6;
 const SWIRL_DOWN: usize = 10;
 const SWIRL: f32 = 0.7;
@@ -91,22 +98,39 @@ const POWER: f32 = 0.65;
 const KICK_HEAT: f32 = 0.35;
 /// The source's heat falls the whole way in this long.
 const FALL_S: f32 = 0.15;
+/// Each band's level against its own recent course: its mean and mean
+/// deviation over `FOLLOW_S` (the deviation at least `LEAST_SWING`); a
+/// level at the mean gives `AT_MEAN` of the band's heat, each deviation
+/// over it `PER_SWING` more. The levels are decibels over a range of 60:
+/// loud music stays within a tenth of it, and the flames read from the
+/// level alone stood at four fifths of the height whatever was played.
+const FOLLOW_S: f32 = 1.2;
+const LEAST_SWING: f32 = 0.03;
+const AT_MEAN: f32 = 0.42;
+const PER_SWING: f32 = 0.32;
+/// The heat a band's level gives at the least: how loud it is against
+/// `FROM` alone, while the course gives the rest.
+const STEADY: f32 = 0.15;
 
 /// A fireball climbs for `BALL_RISE_S` (the least, and the most for the
 /// strongest beat) to `BALL_APEX` of the height under the top (from the
 /// highest to the lowest), its radius `BALL_RADIUS` of the height plus
 /// as much again for the strongest beat, growing by `BALL_GROW` over the
 /// climb. A ball not bursting dies down over `FIZZLE_S` after the top.
-/// At most `MOST_BALLS` at once.
+/// At most `MOST_BALLS` at once, `BALL_GAP_S` apart, from beats of
+/// `BALL_FROM` up: a ball on every beat of a rock song left the display
+/// full of their flames, standing whatever was played.
 const BALL_RISE_S: (f32, f32) = (0.42, 0.62);
 const BALL_APEX: (f32, f32) = (0.1, 0.42);
 const BALL_RADIUS: f32 = 0.055;
 const BALL_GROW: f32 = 0.6;
 const FIZZLE_S: f32 = 0.3;
-const MOST_BALLS: usize = 10;
+const MOST_BALLS: usize = 4;
+const BALL_GAP_S: f32 = 0.6;
+const BALL_FROM: f32 = 0.55;
 /// A beat this strong bursts its ball; one over `TWIN` sends two.
-const BURST: f32 = 0.6;
-const TWIN: f32 = 0.92;
+const BURST: f32 = 0.75;
+const TWIN: f32 = 0.95;
 /// A burst: the flash and the shock ring last `BLAST_S`; the ring runs
 /// out to `RING_REACH` of the height (times 0.6–1 by the strength); the
 /// heat put in reaches `BLAST_HEAT_RADIUS` times the ball's radius.
@@ -215,6 +239,11 @@ pub struct Fire {
     /// frame, it rose as a band every frame's steps high).
     source: Vec<f32>,
     was: Vec<f32>,
+    /// Each band's mean level and mean deviation (`FOLLOW_S`), and its heat
+    /// this frame.
+    mean: Vec<f32>,
+    swing: Vec<f32>,
+    bands: Vec<f32>,
     /// Steps owed (fractions carried on).
     owed: f32,
     /// The simulation clock, frozen along with the flame when paused.
@@ -223,6 +252,8 @@ pub struct Fire {
     rng: Rng,
     lit: bool,
     balls: Vec<Ball>,
+    /// Since the last ball was sent up.
+    since_ball: f32,
     blasts: Vec<Blast>,
     sparks: Vec<Spark>,
     /// Embers owed (fractions carried on).
@@ -258,12 +289,16 @@ impl Fire {
             lut: Vec::new(),
             source: Vec::new(),
             was: Vec::new(),
+            mean: Vec::new(),
+            swing: Vec::new(),
+            bands: Vec::new(),
             owed: 0.0,
             time: 0.0,
             beat: Beat::default(),
             rng: Rng::default(),
             lit: false,
             balls: Vec::new(),
+            since_ball: BALL_GAP_S,
             blasts: Vec::new(),
             sparks: Vec::new(),
             embers_owed: 0.0,
@@ -302,20 +337,24 @@ impl Fire {
         }
         let struck = self.beat.feed(levels, dt);
         let kick = self.beat.kick * KICK_HEAT;
+        self.follow(levels, dt);
         self.was.clone_from(&self.source);
         for (x, s) in self.source.iter_mut().enumerate() {
-            let wanted = levels.map_or(0.0, |l| {
-                let level = level_at(l, x as f32 / (w - 1) as f32);
-                let heat = ((level - FROM) / (1.0 - FROM)).clamp(0.0, 1.0).powf(POWER);
+            let wanted = levels.map_or(0.0, |_| {
+                let heat = level_at(&self.bands, x as f32 / (w - 1) as f32);
                 (heat + kick * heat.sqrt()).min(1.0)
             });
             *s = wanted.max(*s - dt / FALL_S).max(0.0);
         }
         self.fly(dt);
+        self.since_ball += dt;
         if let Some(strength) = struck.filter(|_| self.source.iter().any(|&s| s > 0.05)) {
-            self.launch(strength);
-            if strength > TWIN {
-                self.launch(strength * 0.8);
+            if strength >= BALL_FROM && self.since_ball >= BALL_GAP_S {
+                self.since_ball = 0.0;
+                self.launch(strength);
+                if strength > TWIN {
+                    self.launch(strength * 0.8);
+                }
             }
             self.throw_embers(BEAT_EMBERS * strength);
         }
@@ -337,6 +376,30 @@ impl Fire {
             self.step(1.0 / hz, (i + 1) as f32 / steps as f32);
         }
         self.changed |= steps > 0;
+    }
+
+    /// Each band's heat from its level: how loud it is (over `FROM`), and
+    /// how far over or under its own recent course, so the flames leap
+    /// with what the band does rather than stand at its loudness.
+    fn follow(&mut self, levels: Option<&[f32]>, dt: f32) {
+        let Some(levels) = levels else {
+            self.bands.clear();
+            return;
+        };
+        if self.mean.len() != levels.len() {
+            self.mean = levels.to_vec();
+            self.swing = vec![LEAST_SWING; levels.len()];
+        }
+        let k = (dt / FOLLOW_S).min(1.0);
+        self.bands.clear();
+        for ((&level, mean), swing) in levels.iter().zip(&mut self.mean).zip(&mut self.swing) {
+            let loud = ((level - FROM) / (1.0 - FROM)).clamp(0.0, 1.0).powf(POWER);
+            let course = (AT_MEAN + PER_SWING * (level - *mean) / swing.max(LEAST_SWING))
+                .clamp(0.0, 1.0);
+            self.bands.push(loud * (STEADY + (1.0 - STEADY) * course));
+            *swing += ((level - *mean).abs() - *swing) * k;
+            *mean += (level - *mean) * k;
+        }
     }
 
     /// The balls, the blasts and the sparks moved on by `dt`; the balls at
@@ -521,14 +584,14 @@ impl Fire {
         let pw = w + 2;
         // A mean of 1 a pixel lost on each row: full heat reaches `REACH`
         // of the height.
-        let cooling = 1.0 / (REACH * h as f32) * (1.0 - KICK_REACH * self.beat.kick);
+        let cooling = RISE as f32 / (REACH * h as f32) * (1.0 - KICK_REACH * self.beat.kick);
         // Each row moved aside by a gust shared along it, so whole tongues
         // sway, more the higher they reach, and each pixel further by the
         // swirl there, so each tongue bends on its own; between pixels,
         // smoothly.
         let rows = self.cool_rows;
-        self.scroll = (self.scroll + 1) % rows;
-        self.swirl_scroll = (self.swirl_scroll + SWIRL_RISE) % rows as f32;
+        self.scroll = (self.scroll + RISE) % rows;
+        self.swirl_scroll = (self.swirl_scroll + SWIRL_RISE * RISE as f32) % rows as f32;
         let swirl_at = self.swirl_scroll as usize;
         let last = w as isize - 1;
         for y in 0..h {
@@ -536,14 +599,14 @@ impl Fire {
             let wind = (self.time * 1.3).sin() * 0.22
                 + (self.time * 3.1 + rise * 4.0).sin() * 0.3 * rise
                 + (self.time * 0.7).sin() * 0.12;
-            let push = SWIRL * (0.25 + 0.75 * rise);
+            let push = RISE as f32 * SWIRL * (0.25 + 0.75 * rise);
             let swirl = &self.swirl[((y + swirl_at) % rows) * w..][..w];
             let row = &self.heat[y * w..(y + 1) * w];
             let out = &mut self.shifted[y * pw..(y + 1) * pw];
             // Kept positive by `PAD`, so a cast floors it (the hot loop:
             // `floor` and two clamps doubled the step's cost).
             const PAD: f32 = 64.0;
-            let start = wind - 1.0 + PAD;
+            let start = RISE as f32 * wind - 1.0 + PAD;
             for (i, o) in out.iter_mut().enumerate() {
                 let along = swirl[(i.saturating_sub(1)).min(w - 1)];
                 let from = (i as f32 + start + along * push).max(0.0);
@@ -554,23 +617,29 @@ impl Fire {
                 *o = row[x] + (row[next] - row[x]) * blend;
             }
         }
-        for y in 0..h - 1 {
-            let here = &self.shifted[(y + 1) * pw..(y + 2) * pw];
-            let under = (y + 2).min(h - 1);
-            let below = &self.shifted[under * pw..(under + 1) * pw];
-            let cool = &self.cooling[((y + 1 + self.scroll) % rows) * w..][..w];
+        // Two rows a step: each pixel mostly the one two under it, with
+        // its neighbours, and some of the ones a row nearer and further
+        // (moving two rows on average), which ties the odd rows to the
+        // even ones: alone, each half rose apart and the flames striped.
+        const _: () = assert!(RISE == 2);
+        for y in 0..h - RISE {
+            let from = y + RISE;
+            let row = |r: usize| &self.shifted[r * pw..(r + 1) * pw];
+            let (nearer, here, below) = (row(from - 1), row(from), row((from + 1).min(h - 1)));
+            let cool = &self.cooling[((from + self.scroll) % rows) * w..][..w];
             let out = &mut self.next[y * w..(y + 1) * w];
             // Cooling more the higher: a hot base, the tongues thinning to
             // their tips.
-            let rise = 1.0 - (y + 1) as f32 / h as f32;
+            let rise = 1.0 - from as f32 / h as f32;
             let cooling = cooling * (0.4 + 1.2 * rise);
             for x in 0..w {
-                let v = 0.5 * here[x + 1] + 0.15 * (here[x] + here[x + 2]) + 0.2 * below[x + 1];
+                let v = 0.4 * here[x + 1]
+                    + 0.12 * (here[x] + here[x + 2])
+                    + 0.18 * (nearer[x + 1] + below[x + 1]);
                 out[x] = (v - cool[x] * cooling).max(0.0);
             }
         }
         std::mem::swap(&mut self.heat, &mut self.next);
-        let bottom = (h - 1) * w;
         for x in 0..w {
             // Coherent patches of hot and cool fuel travel across the
             // base. Even sustained notes produce growing and shrinking
@@ -584,9 +653,12 @@ impl Fire {
             let fine = (place * 0.72 + self.time * 13.0 + broad * 1.4).sin();
             // Hot spots in the fuel, pixel by pixel: the base is not one
             // even band, nor is a beat's heat.
-            let flicker = (0.8 + 0.3 * broad + 0.18 * fine) * self.rng.between(0.6, 1.2);
             let fuel = self.was[x] + (self.source[x] - self.was[x]) * along;
-            self.heat[bottom + x] = (fuel * flicker).min(1.0);
+            let flicker = (0.8 + 0.3 * broad + 0.18 * fine) * self.rng.between(0.6, 1.2);
+            let v = (fuel * flicker).min(1.0);
+            for y in h - RISE..h {
+                self.heat[y * w + x] = v;
+            }
         }
         for b in &self.balls {
             let at = b.was + (b.at - b.was) * along;
@@ -997,8 +1069,9 @@ mod tests {
         }
         assert!(f.active());
         let r = rows(&f);
-        // Hot at the bottom, cooler going up, reaching past the middle.
-        assert!(r[r.len() - 1] > 0.6, "{r:?}");
+        // Hot at the bottom, cooler going up, reaching past the middle
+        // (a level held, at its mean: under half the heat its rises give).
+        assert!(r[r.len() - 1] > 0.25, "{r:?}");
         assert!(r[r.len() / 2] > 0.05, "{r:?}");
         assert!(r[0] < r[r.len() - 1]);
         // Paused, it stands, the sparks too.
@@ -1020,6 +1093,29 @@ mod tests {
             f.feed(Some(&quiet), true, 0.02, size);
         }
         assert!(!f.active());
+    }
+
+    /// Loud music moves within a tenth of the levels' range: the flames
+    /// leap with it all the same.
+    #[test]
+    fn flames_leap_with_a_loud_bands_course() {
+        let mut f = Fire::new();
+        let size = vec2(300.0, 90.0);
+        let (mut high, mut low) = (0.0, 0.0);
+        for frame in 0..400 {
+            let up = frame / 12 % 2 == 0;
+            let level = if up { 0.82 } else { 0.72 };
+            f.feed(Some(&[level; BANDS]), true, 0.02, size);
+            if frame >= 200 && frame % 12 == 11 {
+                let mean = f.source.iter().sum::<f32>() / f.width as f32;
+                if up {
+                    high += mean;
+                } else {
+                    low += mean;
+                }
+            }
+        }
+        assert!(high > 2.5 * low, "{high} {low}");
     }
 
     #[test]
@@ -1133,6 +1229,92 @@ mod tests {
             f.feed(None, true, 0.02, size);
         }
         assert!(!f.active());
+    }
+
+    /// How the flames follow a real file (`METALAMP_SAMPLE`, 20 s from
+    /// `METALAMP_FROM` s, 60 by default): the flames' height against the
+    /// bass, frame by frame at 50 a second.
+    #[test]
+    #[ignore]
+    fn flames_follow_a_real_file() {
+        use crate::audio::decoder::{Decoder, SECOND};
+        use crate::ui::spectrum::{self, Analyzer};
+        let path = std::env::var_os("METALAMP_SAMPLE").expect("METALAMP_SAMPLE");
+        let from: f32 = std::env::var("METALAMP_FROM")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(60.0);
+        let _com = crate::audio::mf::com_init_mta();
+        let _mf = crate::audio::mf::Mf::start().unwrap();
+        let mut decoder = Decoder::open(std::path::Path::new(&path)).unwrap();
+        decoder.seek((from * SECOND as f32) as i64).unwrap();
+        let (rate, channels) = (decoder.rate, usize::from(decoder.channels.max(1)));
+        let mut mono = Vec::new();
+        while mono.len() < rate as usize * 20 {
+            let Some(block) = decoder.next().unwrap() else {
+                break;
+            };
+            mono.extend(
+                block
+                    .chunks_exact(channels)
+                    .map(|f| f.iter().sum::<f32>() / channels as f32),
+            );
+        }
+        let mut analyzer = Analyzer::new();
+        let mut f = Fire::new();
+        let size = vec2(600.0, 100.0);
+        let step = rate as usize / 50;
+        let (mut bass, mut height, mut source) = (Vec::new(), Vec::new(), Vec::new());
+        let mut end = spectrum::N;
+        while end <= mono.len() {
+            let levels = analyzer.levels(&mono[end - spectrum::N..end], rate, BANDS);
+            f.feed(Some(&levels), true, 0.02, size);
+            bass.push(levels[..8].iter().sum::<f32>() / 8.0);
+            // Each column's flame: the highest row over a quarter heat.
+            let (w, h) = (f.width, f.height);
+            let left = w / 6;
+            source.push(f.source[..left].iter().sum::<f32>() / left as f32);
+            let tall = (0..left)
+                .map(|x| {
+                    (0..h)
+                        .find(|&y| f.heat[y * w + x] > 0.25)
+                        .map_or(0.0, |y| 1.0 - y as f32 / h as f32)
+                })
+                .sum::<f32>()
+                / left as f32;
+            height.push(tall);
+            end += step;
+        }
+        let stats = |v: &[f32]| {
+            let m = v.iter().sum::<f32>() / v.len() as f32;
+            let s = (v.iter().map(|x| (x - m) * (x - m)).sum::<f32>() / v.len() as f32).sqrt();
+            (m, s)
+        };
+        let (bm, bs) = stats(&bass);
+        let (hm, hs) = stats(&height);
+        let correlation = |lag: usize| {
+            let n = bass.len() - lag;
+            (0..n)
+                .map(|i| (bass[i] - bm) * (height[i + lag] - hm))
+                .sum::<f32>()
+                / n as f32
+                / (bs * hs)
+        };
+        let (sm, ss) = stats(&source);
+        println!("bass {bm:.3} ± {bs:.3}, source {sm:.3} ± {ss:.3}, height {hm:.3} ± {hs:.3}");
+        for lag in [0, 2, 4, 6, 8, 10, 15, 20] {
+            println!("lag {:3} ms: correlation {:.2}", lag * 20, correlation(lag));
+        }
+        for i in (0..100).step_by(2) {
+            let bar = |v: f32| "#".repeat((v * 40.0) as usize);
+            println!(
+                "{:5.2} {:<30} {:<30} {}",
+                bass[i],
+                bar(bass[i] * 0.75),
+                bar(source[i] * 0.75),
+                bar(height[i] * 0.75)
+            );
+        }
     }
 
     #[test]
