@@ -1052,9 +1052,43 @@ fn gram_colour(level: f32, colours: &[Color32; 4]) -> Color32 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::f32::consts::PI;
+
+    /// The analyzer's `bands` levels of 20 s of a real file
+    /// (`METALAMP_SAMPLE`, from `METALAMP_FROM` s, 60 by default), 50 a
+    /// second: for checking by hand how a scene follows music.
+    pub(crate) fn real_file_levels(bands: usize) -> Vec<Vec<f32>> {
+        use crate::audio::decoder::{Decoder, SECOND};
+        let path = std::env::var_os("METALAMP_SAMPLE").expect("METALAMP_SAMPLE");
+        let from: f32 = std::env::var("METALAMP_FROM")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(60.0);
+        let _com = crate::audio::mf::com_init_mta();
+        let _mf = crate::audio::mf::Mf::start().unwrap();
+        let mut decoder = Decoder::open(std::path::Path::new(&path)).unwrap();
+        decoder.seek((from * SECOND as f32) as i64).unwrap();
+        let (rate, channels) = (decoder.rate, usize::from(decoder.channels.max(1)));
+        let mut mono = Vec::new();
+        while mono.len() < rate as usize * 20 {
+            let Some(block) = decoder.next().unwrap() else {
+                break;
+            };
+            mono.extend(
+                block
+                    .chunks_exact(channels)
+                    .map(|f| f.iter().sum::<f32>() / channels as f32),
+            );
+        }
+        let mut analyzer = Analyzer::new();
+        let step = rate as usize / 50;
+        (spectrum::N..=mono.len())
+            .step_by(step)
+            .map(|end| analyzer.levels(&mono[end - spectrum::N..end], rate, bands))
+            .collect()
+    }
 
     fn sine(f: f32, rate: u32, n: usize, offset: usize) -> Vec<f32> {
         (offset..offset + n)

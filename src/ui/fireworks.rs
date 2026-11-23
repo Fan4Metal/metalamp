@@ -1,9 +1,12 @@
 //! Fireworks (in the sparks' place: a fountain of streaks the user found
 //! dull). Rockets go up as notes start in the bands (`beat::Onsets`, the
-//! bass on the left, the treble on the right) and burst at the top of
-//! their climb as small shells; a beat bursts the rocket highest up at
-//! once as a large shell, or one out of the dark with its trail from the
-//! ground when none is far enough up, and lights the sky. The shells are
+//! bass on the left, the treble on the right) and wait near the top of
+//! their climb for the next clear note in their stretch, bursting on it as
+//! small shells (going out unburst if none comes), so every burst is on
+//! the music; a beat bursts the rocket highest up at once as a large
+//! shell, or one out of the dark with its trail from the ground when none
+//! is far enough up, and lights the sky (a beat soon after a large one
+//! bursts a waiting rocket small, so the large ones stand out). The shells are
 //! of six kinds (`Shell`): a peony's sphere of stars, a chrysanthemum's
 //! trailing ones turning to white glitter, a willow's long drooping gold,
 //! a tilted ring, a crackle's stars splitting into flickers, a palm's few
@@ -42,8 +45,19 @@ const IDLE_FROM: f32 = 0.3;
 const RISE_S: [f32; 2] = [0.75, 1.05];
 const APEX: [f32; 2] = [0.4, 0.55];
 const EMBERS: f32 = 60.0;
-/// A beat bursts a rocket that has climbed this share of its way.
+/// A beat, or a note in its stretch, bursts a rocket that has climbed
+/// this share of its way; one that hears neither goes out `WAIT_S` after
+/// the top of its climb, falling, without a burst (bursting there of
+/// itself, most bursts came between the notes).
 const RISEN: f32 = 0.55;
+const WAIT_S: f32 = 0.45;
+/// A note bursts a rocket from this strength (0.4–1); a weaker one only
+/// sends one up. A beat bursts a large shell at most every `LARGE_GAP_S`,
+/// a rocket waiting as a small one between: a rock song's double bass
+/// struck five beats a second, a note started fifteen times, and a burst
+/// on each, mostly large, was a carpet in which no beat stood out.
+const NOTE_BURST: f32 = 0.55;
+const LARGE_GAP_S: f32 = 0.45;
 /// A beat over STRONG bursts the next rocket up too, at SECOND of
 /// the first's size.
 const STRONG: f32 = 0.7;
@@ -53,7 +67,7 @@ const SECOND: f32 = 0.8;
 const GRAVITY: f32 = 0.9;
 /// A shell's radius, of the height: the smallest and the largest; at
 /// most `SHELL_WIDE` of the width.
-const SHELL: [f32; 2] = [0.35, 0.8];
+const SHELL: [f32; 2] = [0.2, 0.8];
 const SHELL_WIDE: f32 = 0.35;
 /// The stars kept at most (the oldest go).
 const MOST: usize = 2200;
@@ -151,8 +165,12 @@ struct Rocket {
     from_y: f32,
     apex_y: f32,
     place: f32,
+    /// The group of bands it went up for, whose notes burst it.
+    group: usize,
     strength: f32,
     owed: f32,
+    /// Since the top of its climb.
+    over: f32,
 }
 
 impl Rocket {
@@ -183,6 +201,8 @@ pub struct Fireworks {
     /// Since each group last sent a rocket up, and since any did.
     since: [f32; GROUPS],
     idle: f32,
+    /// Since the last large shell.
+    since_large: f32,
     /// The last bursts' places across (shares of the width), so the next
     /// out of the dark goes elsewhere.
     recent: [f32; 3],
@@ -209,6 +229,7 @@ impl Fireworks {
             onsets: Onsets::default(),
             since: [LAUNCH_GAP_S; GROUPS],
             idle: 0.0,
+            since_large: LARGE_GAP_S,
             recent: [0.5; 3],
             sky: 0.0,
             sky_place: 0.5,
@@ -241,12 +262,27 @@ impl Fireworks {
             *s += dt;
         }
         self.idle += dt;
+        self.since_large += dt;
+        if let Some(strength) = struck {
+            let treble = levels.map_or(0.0, treble_share);
+            self.strike(strength, treble);
+        }
         if levels.is_some() {
             for (g, &strength) in starts.iter().enumerate() {
-                if strength > 0.0
-                    && self.since[g] > LAUNCH_GAP_S
-                    && self.rockets.len() < MOST_ROCKETS
+                if strength <= 0.0 {
+                    continue;
+                }
+                // A rocket up there for these bands bursts on the note (on
+                // a beat the beat's burst is the event).
+                if struck.is_none()
+                    && strength >= NOTE_BURST
+                    && let Some(i) = self.waiting_for(g)
                 {
+                    let r = self.rockets.swap_remove(i);
+                    let shell = self.small_shell(r.place);
+                    self.burst(r.at, r.place, small(strength.max(r.strength)), shell);
+                }
+                if self.since[g] > LAUNCH_GAP_S && self.rockets.len() < MOST_ROCKETS {
                     self.since[g] = 0.0;
                     let place = (g as f32 + self.rng.between(0.15, 0.85)) / GROUPS as f32;
                     self.launch(place, strength);
@@ -257,15 +293,11 @@ impl Fireworks {
                 self.launch(place, 0.5);
             }
         }
-        if let Some(strength) = struck {
-            let treble = levels.map_or(0.0, treble_share);
-            self.strike(strength, treble);
-        }
         let mut left = dt;
         while left > 0.0 {
             let step = left.min(STEP_S);
             left -= step;
-            self.step(step);
+            self.step(step, levels.is_none());
         }
         for f in &mut self.flashes {
             f.age += dt;
@@ -317,8 +349,10 @@ impl Fireworks {
             from_y: h,
             apex_y,
             place,
+            group: ((place * GROUPS as f32) as usize).min(GROUPS - 1),
             strength,
             owed: 0.0,
+            over: 0.0,
         });
         self.idle = 0.0;
     }
@@ -326,7 +360,17 @@ impl Fireworks {
     /// A beat of `strength`: the rocket highest up bursts as a large
     /// shell, or one bursts out of the dark; the sky is lit.
     fn strike(&mut self, strength: f32, treble: f32) {
-        let size = 0.55 + 0.45 * strength;
+        if self.since_large < LARGE_GAP_S {
+            // Soon after a large one: a rocket waiting bursts small.
+            if let Some(i) = self.highest_up() {
+                let r = self.rockets.swap_remove(i);
+                let shell = self.small_shell(r.place);
+                self.burst(r.at, r.place, small(0.8 * strength), shell);
+            }
+            return;
+        }
+        self.since_large = 0.0;
+        let size = large(strength);
         let shell = self.large_shell(strength, treble);
         let place = match self.highest_up() {
             Some(i) => {
@@ -368,6 +412,20 @@ impl Fireworks {
             .filter(|(_, r)| r.risen() > RISEN)
             .min_by(|a, b| a.1.at.y.total_cmp(&b.1.at.y))
             .map(|(i, _)| i)
+    }
+
+    /// The rocket highest up past `RISEN` of its climb that went up for
+    /// group `g`, else for one beside it.
+    fn waiting_for(&self, g: usize) -> Option<usize> {
+        let highest = |near: usize| {
+            self.rockets
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.risen() > RISEN && r.group.abs_diff(g) <= near)
+                .min_by(|a, b| a.1.at.y.total_cmp(&b.1.at.y))
+                .map(|(i, _)| i)
+        };
+        highest(0).or_else(|| highest(1))
     }
 
     /// A place across away from the last bursts: the best of a few tried.
@@ -551,15 +609,20 @@ impl Fireworks {
         self.sparks.push(s);
     }
 
-    /// The flight moved on by `step` seconds.
-    fn step(&mut self, step: f32) {
+    /// The flight moved on by `step` seconds; `silent`: nothing heard,
+    /// so the rockets burst at the top of their climb, no note coming.
+    fn step(&mut self, step: f32, silent: bool) {
         let (w, h) = (self.size.x, self.size.y);
         let gravity = GRAVITY * h;
         let mut embers = Vec::new();
         for r in &mut self.rockets {
             r.at += r.speed * step;
             r.speed.y += r.gravity * step;
-            r.owed += EMBERS * step;
+            if r.speed.y >= 0.0 {
+                r.over += step;
+            }
+            // Burning out past the top: fewer embers.
+            r.owed += EMBERS * step * (1.0 - r.over / WAIT_S).max(0.0);
             while r.owed >= 1.0 {
                 r.owed -= 1.0;
                 embers.push((r.at, r.speed, r.place));
@@ -567,10 +630,12 @@ impl Fireworks {
         }
         let mut i = 0;
         while i < self.rockets.len() {
-            if self.rockets[i].speed.y >= 0.0 {
+            if silent && self.rockets[i].speed.y >= 0.0 {
                 let r = self.rockets.swap_remove(i);
                 let shell = self.small_shell(r.place);
-                self.burst(r.at, r.place, 0.35 + 0.45 * r.strength, shell);
+                self.burst(r.at, r.place, small(r.strength), shell);
+            } else if self.rockets[i].over >= WAIT_S {
+                self.rockets.swap_remove(i);
             } else {
                 i += 1;
             }
@@ -697,16 +762,18 @@ impl Fireworks {
             );
         }
         for r in &self.rockets {
+            // Going out past the top of its climb, if nothing burst it.
+            let light = 1.0 - r.over / WAIT_S;
             let head = r.at + offset;
             let tail = head - r.speed * 0.05;
             let c = colours.peak(r.place);
-            strip(&mut mesh, &[head, tail], 1.6 * thin, glow(c, 0.9, dark));
-            disc(&mut mesh, head, 4.0 * thin, glow(c, 0.35 * haze, dark));
+            strip(&mut mesh, &[head, tail], 1.6 * thin, glow(c, 0.9 * light, dark));
+            disc(&mut mesh, head, 4.0 * thin, glow(c, 0.35 * light * haze, dark));
             dot(
                 &mut mesh,
                 head,
                 1.3 * thin,
-                glow(if dark { hot } else { c }, 1.0, dark),
+                glow(if dark { hot } else { c }, light, dark),
             );
         }
         let mut points = Vec::with_capacity(TRAIL + 1);
@@ -777,6 +844,19 @@ impl Fireworks {
         }
         painter.add(mesh);
     }
+}
+
+/// The size (0–1) of a small shell, a note's or a rocket's, for a
+/// strength of 0.4–1: a third to a half of the largest's radius.
+fn small(strength: f32) -> f32 {
+    0.15 + 0.35 * strength
+}
+
+/// The size of a beat's large shell: clearly larger than any small one
+/// (at first both were about two thirds of the height, and the beats did
+/// not stand out).
+fn large(strength: f32) -> f32 {
+    0.75 + 0.25 * strength
 }
 
 /// The levels gathered into `GROUPS`, each the loudest of its bands.
@@ -888,7 +968,7 @@ mod tests {
     }
 
     #[test]
-    fn notes_send_rockets_up_that_burst_at_the_top() {
+    fn notes_send_rockets_up_that_burst_on_the_next_note() {
         let mut f = settled(0.1);
         assert!(f.rockets.is_empty() && f.sparks.is_empty());
         // A note starts in the middle (not the bass: no beat).
@@ -898,26 +978,41 @@ mod tests {
         assert_eq!(f.rockets.len(), 1);
         let place = f.rockets[0].place;
         assert!((0.5..0.625).contains(&place), "{place}");
-        // It climbs, throwing embers, and bursts within its rise time.
-        for _ in 0..20 {
+        // It climbs, throwing embers.
+        for _ in 0..30 {
             f.feed(Some(&note), true, 0.02, SIZE);
         }
-        assert!(f.rockets.len() == 1 && f.rockets[0].at.y < SIZE.y * 0.8);
+        assert!(f.rockets.len() == 1 && f.rockets[0].risen() > RISEN);
         assert!(f.sparks.iter().all(|s| s.look == Look::Ember));
-        for _ in 0..40 {
+        // The note again (after a breath): the rocket bursts on it, and
+        // another goes up.
+        for _ in 0..10 {
+            f.feed(Some(&[0.1; BANDS]), true, 0.02, SIZE);
+        }
+        assert!(f.flashes.is_empty());
+        f.feed(Some(&note), true, 0.02, SIZE);
+        assert_eq!(f.flashes.len(), 1);
+        assert!(f.sparks.iter().filter(|s| s.look != Look::Ember).count() >= 15);
+        assert_eq!(f.rockets.len(), 1);
+        // Held, no note comes: past the top it goes out without a burst.
+        for _ in 0..80 {
             f.feed(Some(&note), true, 0.02, SIZE);
         }
         assert!(f.rockets.is_empty());
-        assert!(f.sparks.iter().filter(|s| s.look != Look::Ember).count() >= 15);
-        assert_eq!(f.flashes.len(), 1);
+        assert!(f.flashes.iter().all(|x| x.age > 1.0));
         // Paused, they stand.
+        f.launch(0.5, 1.0);
+        f.feed(Some(&note), true, 0.02, SIZE);
         let before: Vec<Pos2> = f.sparks.iter().map(|s| s.at).collect();
         f.feed(Some(&note), false, 0.02, SIZE);
         assert_eq!(before, f.sparks.iter().map(|s| s.at).collect::<Vec<_>>());
-        // Stopped, they go out.
+        // Stopped, the rocket up bursts at the top, and all go out.
+        let mut burst = false;
         for _ in 0..200 {
             f.feed(None, true, 0.02, SIZE);
+            burst |= !f.flashes.is_empty();
         }
+        assert!(burst);
         assert!(!f.active());
     }
 
@@ -970,7 +1065,7 @@ mod tests {
         let radius = f.flashes[0].radius;
         assert!((radius - SIZE.y * SHELL[1]).abs() < 0.01);
         for _ in 0..50 {
-            f.step(0.02);
+            f.step(0.02, false);
         }
         // The shell's own stars (not a core of another colour).
         let stars: Vec<Pos2> = f
@@ -1003,7 +1098,7 @@ mod tests {
         let mut f = settled(0.0);
         f.burst(pos2(380.0, 40.0), 0.5, 0.5, Shell::Crackle);
         for _ in 0..40 {
-            f.step(0.02);
+            f.step(0.02, false);
         }
         assert!(f.sparks.iter().any(|s| s.look == Look::Flicker));
         let flickers = f.sparks.iter().filter(|s| s.look == Look::Flicker);
@@ -1046,6 +1141,85 @@ mod tests {
         assert_eq!((g[1], g[7], g[0]), (0.5, 0.9, 0.0));
         assert_eq!(grouped(&[]), vec![0.0; GROUPS]);
         assert_eq!(grouped(&[0.3; 3]).len(), GROUPS);
+    }
+
+    /// How the bursts follow a real file (`METALAMP_SAMPLE`, 20 s from
+    /// `METALAMP_FROM` s): how many and of what, and the light of the new
+    /// bursts against the bass's rise over its recent mean.
+    #[test]
+    #[ignore]
+    fn fireworks_follow_a_real_file() {
+        let mut f = Fireworks::new();
+        let (mut rise, mut lit) = (Vec::new(), Vec::new());
+        let (mut beats, mut tops, mut launches, mut stars) = (0, 0, 0, 0);
+        let mut mean = 0.0;
+        // The events the scene hears, heard alike beside it: a burst on
+        // the frame of one is on the music.
+        let (mut beat, mut onsets) = (Beat::default(), Onsets::default());
+        let (mut on_music, mut events) = (0, 0);
+        let (mut beat_hist, mut note_hist, mut size_hist) = ([0; 7], [0; 7], [0; 7]);
+        let bin = |v: f32| (((v - 0.4) / 0.1) as usize).min(6);
+        let all = crate::ui::visual::tests::real_file_levels(BANDS);
+        for levels in &all {
+            let struck = beat.feed(Some(levels), 0.02);
+            let starts = onsets.feed(Some(&grouped(levels)), GROUPS, 0.02);
+            if let Some(b) = struck {
+                beat_hist[bin(b)] += 1;
+            }
+            for &n in starts.iter().filter(|&&n| n > 0.0) {
+                note_hist[bin(n)] += 1;
+            }
+            let event = struck.is_some() | starts.iter().any(|&s| s > 0.0);
+            events += usize::from(event);
+            f.feed(Some(levels), true, 0.02, SIZE);
+            let new: Vec<&Flash> = f.flashes.iter().filter(|x| x.age <= 0.021).collect();
+            if event {
+                on_music += new.len();
+            }
+            for x in &new {
+                size_hist[(((x.strength - 0.3) / 0.1) as usize).min(6)] += 1;
+            }
+            beats += new.iter().filter(|x| x.from_ground).count();
+            tops += new.iter().filter(|x| !x.from_ground).count();
+            launches += f.rockets.iter().filter(|r| r.risen() < 0.05).count();
+            stars += f.sparks.len();
+            lit.push(new.iter().map(|x| x.strength).sum::<f32>());
+            let bass = levels[..BANDS / 6].iter().sum::<f32>() / (BANDS / 6) as f32;
+            rise.push((bass - mean).max(0.0));
+            mean += (bass - mean) * 0.05;
+        }
+        let n = all.len() as f32 / 50.0;
+        println!(
+            "{n:.0} s: {:.1} bursts a second ({:.1} out of the dark, {:.1} at a rocket's top), {:.1} launches, {:.0} stars",
+            (beats + tops) as f32 / n,
+            beats as f32 / n,
+            tops as f32 / n,
+            launches as f32 / n,
+            stars as f32 / all.len() as f32
+        );
+        println!(
+            "{:.0} % of the bursts on a note or a beat; such frames {:.0} % of all",
+            100.0 * on_music as f32 / (beats + tops).max(1) as f32,
+            100.0 * events as f32 / all.len() as f32
+        );
+        println!("beats by strength from 0.4 in tenths: {beat_hist:?}");
+        println!("notes by strength from 0.4 in tenths: {note_hist:?}");
+        println!("bursts by size from 0.3 in tenths: {size_hist:?}");
+        let stats = |v: &[f32]| {
+            let m = v.iter().sum::<f32>() / v.len() as f32;
+            let s = (v.iter().map(|x| (x - m) * (x - m)).sum::<f32>() / v.len() as f32).sqrt();
+            (m, s)
+        };
+        let ((rm, rs), (lm, ls)) = (stats(&rise), stats(&lit));
+        for lag in [0, 1, 2, 3, 5, 10, 25, 40] {
+            let k = rise.len() - lag;
+            let c = (0..k)
+                .map(|i| (rise[i] - rm) * (lit[i + lag] - lm))
+                .sum::<f32>()
+                / k as f32
+                / (rs * ls);
+            println!("lag {:3} ms: correlation {c:.2}", lag * 20);
+        }
     }
 
     /// Frames of a few seconds of a beat with notes, drawn by hand into a

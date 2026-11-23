@@ -1237,37 +1237,10 @@ mod tests {
     #[test]
     #[ignore]
     fn flames_follow_a_real_file() {
-        use crate::audio::decoder::{Decoder, SECOND};
-        use crate::ui::spectrum::{self, Analyzer};
-        let path = std::env::var_os("METALAMP_SAMPLE").expect("METALAMP_SAMPLE");
-        let from: f32 = std::env::var("METALAMP_FROM")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(60.0);
-        let _com = crate::audio::mf::com_init_mta();
-        let _mf = crate::audio::mf::Mf::start().unwrap();
-        let mut decoder = Decoder::open(std::path::Path::new(&path)).unwrap();
-        decoder.seek((from * SECOND as f32) as i64).unwrap();
-        let (rate, channels) = (decoder.rate, usize::from(decoder.channels.max(1)));
-        let mut mono = Vec::new();
-        while mono.len() < rate as usize * 20 {
-            let Some(block) = decoder.next().unwrap() else {
-                break;
-            };
-            mono.extend(
-                block
-                    .chunks_exact(channels)
-                    .map(|f| f.iter().sum::<f32>() / channels as f32),
-            );
-        }
-        let mut analyzer = Analyzer::new();
         let mut f = Fire::new();
         let size = vec2(600.0, 100.0);
-        let step = rate as usize / 50;
         let (mut bass, mut height, mut source) = (Vec::new(), Vec::new(), Vec::new());
-        let mut end = spectrum::N;
-        while end <= mono.len() {
-            let levels = analyzer.levels(&mono[end - spectrum::N..end], rate, BANDS);
+        for levels in crate::ui::visual::tests::real_file_levels(BANDS) {
             f.feed(Some(&levels), true, 0.02, size);
             bass.push(levels[..8].iter().sum::<f32>() / 8.0);
             // Each column's flame: the highest row over a quarter heat.
@@ -1283,7 +1256,6 @@ mod tests {
                 .sum::<f32>()
                 / left as f32;
             height.push(tall);
-            end += step;
         }
         let stats = |v: &[f32]| {
             let m = v.iter().sum::<f32>() / v.len() as f32;
