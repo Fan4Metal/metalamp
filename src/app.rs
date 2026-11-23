@@ -1226,14 +1226,16 @@ impl App {
         }
     }
 
-    /// Show the window once it is maximized (see `win::place`).
+    /// Show the window once it is maximized (see `win::place`), or whole
+    /// again after the mini player (`apply_modes`).
     fn uncloak(&mut self, ctx: &egui::Context) {
         let Some((until, frame, maximized)) = self.cloak else {
             return;
         };
         // A few frames painted (Windows showed the window white until its
-        // first one was), and maximized when it is to be.
+        // first one was), grown and maximized when it is to be.
         let ready = ctx.cumulative_frame_nr() >= frame + PAINTED_TO_SHOW
+            && self.growing.is_none()
             && (!maximized || frameless::is_maximized(ctx));
         if ready || Instant::now() >= until {
             if let Some(hwnd) = self.hwnd {
@@ -1685,6 +1687,20 @@ impl App {
                 self.settings.mini_rect = win::window_rect(hwnd);
             }
             win::set_mini(None);
+            // Cloaked until it is whole and painted (`uncloak`): taking the
+            // record's round region away, Windows painted the window's frame
+            // once in its old basic style (a light blue caption with a red
+            // cross round the record, a frame in a recording), and the
+            // window then grew through frames of the ground alone.
+            if !win::is_minimized(hwnd) {
+                win::cloak(hwnd, true);
+                let maximized = self.settings.place().is_some_and(|w| w.maximized);
+                self.cloak = Some((
+                    Instant::now() + UNCLOAK_TIMEOUT,
+                    ctx.cumulative_frame_nr(),
+                    maximized,
+                ));
+            }
             win::set_round(hwnd, false);
             self.mini_cover.clear();
             self.growing = Some(Instant::now());
