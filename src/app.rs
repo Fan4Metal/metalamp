@@ -138,6 +138,8 @@ pub struct App {
     /// taskbar button is taken away (minimized to it).
     tray: Option<crate::tray::Tray>,
     off_taskbar: bool,
+    /// The track notice by the notification area (`notice.rs`).
+    notifier: crate::notice::Notifier,
     /// The equalizer's window (the player bar's button).
     eq_window: crate::ui::eq_window::EqWindow,
     /// `METALAMP_VIEW_EDITOR` is set: open the editor once the library is
@@ -274,6 +276,7 @@ impl App {
             eq_window: crate::ui::eq_window::EqWindow::from_env(),
             tray: None,
             off_taskbar: false,
+            notifier: crate::notice::Notifier::default(),
             applied_modes: None,
             layout_after_mini: false,
             mini_cover: Default::default(),
@@ -1491,6 +1494,39 @@ impl App {
         }
     }
 
+    /// A track started: its notice by the notification area, when the
+    /// settings want one now (the window minimized, or not active) and
+    /// Windows lets it show (no full-screen program).
+    fn notify_track(&mut self) {
+        use crate::settings::TrackNotice;
+        let Some(hwnd) = self.hwnd else { return };
+        let minimized = win::is_minimized(hwnd);
+        let wanted = match self.settings.track_notice {
+            TrackNotice::Off => false,
+            TrackNotice::Minimized => minimized,
+            // The mini player in sight shows the track itself.
+            TrackNotice::Inactive => {
+                minimized || !self.settings.mini && !win::is_foreground(hwnd)
+            }
+        };
+        if !wanted || !crate::notice::may_show() {
+            return;
+        }
+        let Some(path) = self.player.playing_path().cloned() else {
+            return;
+        };
+        let queue = &self.player.queue;
+        let notice = crate::notice::Notice {
+            track: self.shown_track().cloned(),
+            place: queue.current().map(|i| (i + 1, queue.len())),
+            length_ms: self.player.duration_ms(),
+            priority: self.settings.cover_priority,
+            seconds: self.settings.notice_seconds(),
+            path,
+        };
+        self.notifier.show(notice);
+    }
+
     /// Whether Previous does something: a track before the current one,
     /// or the current one past its first seconds (back to its start).
     fn has_previous(&self) -> bool {
@@ -1935,9 +1971,13 @@ impl eframe::App for App {
             self.answer(answer);
         }
         self.remember_playlist(false);
-        if self.player.poll().track {
+        let changes = self.player.poll();
+        if changes.track {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
             self.listening.restart(self.player.playing);
+        }
+        if changes.started {
+            self.notify_track();
         }
         self.count_play();
         // The visualization moves: 50 frames a second while playing, and

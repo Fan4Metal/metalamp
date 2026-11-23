@@ -211,6 +211,7 @@ A narrow window with a player of its own on top (a display with the time over th
 
 - **Taskbar**: the program's button shows the position as its progress (yellow when paused) and has Previous, Play/Pause and Next under its thumbnail.
 - **Tray**: with **Minimize to the tray** (the settings window, General) an icon stays in the notification area: the window minimized leaves the taskbar for it, a click on the icon brings it back, and the icon's menu has Play/Pause, Stop, Previous, Next and Exit; its tooltip names the track playing. With **Only in the tray** the program has no taskbar button at all, shown or minimized, and the icon is always there. Both are also switched in the window's menu (the right button on the title row).
+- **Track notices**: while the window is minimized (or in the tray), a small card by the notification area names each track as it starts for a few seconds: its place in the playlist, the title with its length, the artist, the album with its year and track number, and the cover. The pointer over the card keeps it, a click brings the player's window back, the right button sends it away. It is not shown over a full-screen program or during a presentation. The settings window can also show it while the window is merely not active, turn it off, and set how long it stays.
 - **Media keys** of keyboards, headsets and remotes control the player also while another window is active, and Windows' media panel by the volume shows the track; the settings window can limit them to the player's window or turn them off.
 - **Over the other windows**: `Ctrl+T` keeps the window over the others; the pushpin is kept between runs.
 
@@ -319,6 +320,7 @@ The settings window (`F5`, or `Ctrl+P`, or the gear in the library's bar) lists 
 - **Playlist**: the line of an entry, the numbers and the lengths (see [The playlist](#the-playlist)).
 - **Playback**: the seek step (5 seconds by default, 1–60 s) and the volume step (5 % by default, 1–25 %).
 - **Media keys**: always, in the player's window only, or off; **Minimize to the tray**, **Only in the tray**.
+- **Track notices**: while the window is minimized (the default), while it is not active, or never; how long a notice stays (4 seconds by default, 1–15 s).
 - **Tags**: how an MP3's tags are written (see [File info](#file-info)).
 
 </details>

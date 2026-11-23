@@ -83,7 +83,6 @@ impl Renderer {
                 }
             }
         }
-        textures.clear();
         let prims = self.ctx.tessellate(out.shapes, self.scale);
         let [w, h] = self.pixels(rect.size());
         let g = ground.to_array().map(|c| c as f32 / 255.0);
@@ -94,6 +93,12 @@ impl Renderer {
                 self.raster(&mut picture, rect, clip, m);
             }
         }
+        // Freed after the painting, as a backend frees them (a texture
+        // made and dropped within the frame is still painted).
+        for id in &textures.free {
+            self.textures.remove(id);
+        }
+        textures.clear();
         picture
     }
 

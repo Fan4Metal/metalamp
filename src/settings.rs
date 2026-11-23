@@ -172,6 +172,11 @@ pub struct Settings {
     /// The program only in the notification area: the icon there always and
     /// the window never on the taskbar, shown or minimized.
     pub tray_only: bool,
+    /// When a track starting is announced in a small window by the
+    /// notification area (`notice.rs`), and for how many seconds
+    /// (1–`MAX_NOTICE_SECONDS`).
+    pub track_notice: TrackNotice,
+    pub track_notice_seconds: u8,
     /// The window over the others (Ctrl+T), and the mini player: the
     /// cover and the least of the controls, always over the others
     /// (Ctrl+M; `window` keeps the whole window's place meanwhile).
@@ -204,6 +209,11 @@ impl Settings {
     /// bounds.
     pub fn volume_percent(&self) -> i32 {
         i32::from(self.volume_step.clamp(1, MAX_VOLUME_STEP))
+    }
+
+    /// How long a track's notice stays, within its bounds.
+    pub fn notice_seconds(&self) -> u32 {
+        u32::from(self.track_notice_seconds.clamp(1, MAX_NOTICE_SECONDS))
     }
 
     /// The view in use, if `view` names one of `views`.
@@ -255,6 +265,40 @@ impl MediaKeys {
         }
     }
 }
+
+/// When a track starting is announced (`notice.rs`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TrackNotice {
+    /// Never.
+    Off,
+    /// While the window is minimized (or in the tray), as Winamp's.
+    #[default]
+    Minimized,
+    /// Also while another window is active (not while the mini player,
+    /// which shows the track, is in sight).
+    Inactive,
+}
+
+impl TrackNotice {
+    pub const ALL: [TrackNotice; 3] = [
+        TrackNotice::Minimized,
+        TrackNotice::Inactive,
+        TrackNotice::Off,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            TrackNotice::Off => tr!("Never", "Никогда"),
+            TrackNotice::Minimized => tr!("While the window is minimized", "Когда окно свёрнуто"),
+            TrackNotice::Inactive => tr!("While the window is not active", "Когда окно неактивно"),
+        }
+    }
+}
+
+/// How long a track's notice stays, in seconds.
+pub const DEFAULT_NOTICE_SECONDS: u8 = 4;
+pub const MAX_NOTICE_SECONDS: u8 = 15;
 
 /// Which cover is preferred when both the tag and the folder have one.
 /// The other source is used when the preferred picture is absent or unreadable.
@@ -755,6 +799,8 @@ impl Default for Settings {
             keys: crate::keymap::Keymap::default(),
             tray: false,
             tray_only: false,
+            track_notice: TrackNotice::default(),
+            track_notice_seconds: DEFAULT_NOTICE_SECONDS,
             on_top: false,
             mini: false,
             mini_rect: None,

@@ -19,7 +19,7 @@ use crate::palette;
 use crate::palette::{Accent, Palette, Theme, Tint, VisualColours};
 use crate::settings::{
     ApeTag, BarLayout, CoverPriority, EnhancerPreset, EqPreset, Id3Version, Id3v1Tag, MediaKeys,
-    Settings, Visual, WindowLayout,
+    Settings, TrackNotice, Visual, WindowLayout,
 };
 use crate::ui::icons::{self, Icon};
 use crate::update::{Status, Updates, release_url, version_of};
@@ -1298,6 +1298,52 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
             )),
             50.0,
             |ui| switch(ui, &mut settings.tray_only),
+        );
+    });
+    section(ui, tr!("Track notices", "Уведомления о треках"), |ui| {
+        row(
+            ui,
+            tr!("Show", "Показывать"),
+            Some(tr!(
+                "A small window by the notification area names each track as it starts, with its cover, for a few seconds; the pointer over it keeps it, a click brings the player back. Not shown over a full-screen program or a presentation.",
+                "Небольшое окно у области уведомлений на несколько секунд называет каждый начавшийся трек и показывает его обложку; указатель над ним удерживает его, щелчок возвращает окно плеера. Не показывается поверх полноэкранной программы и во время презентации."
+            )),
+            CONTROL,
+            |ui| {
+                egui::ComboBox::from_id_salt("settings_track_notice")
+                    .selected_text(settings.track_notice.label())
+                    .width(CONTROL - 10.0)
+                    .show_ui(ui, |ui| {
+                        for n in TrackNotice::ALL {
+                            ui.selectable_value(&mut settings.track_notice, n, n.label());
+                        }
+                    });
+            },
+        );
+        divider(ui);
+        row(
+            ui,
+            tr!("For", "В течение"),
+            Some(tr!(
+                "How long a notice stays before it fades.",
+                "Сколько уведомление держится, прежде чем погаснуть."
+            )),
+            CONTROL,
+            |ui| {
+                ui.add_enabled_ui(settings.track_notice != TrackNotice::Off, |ui| {
+                    ui.spacing_mut().slider_width = CONTROL - 70.0;
+                    settings.track_notice_seconds = settings
+                        .track_notice_seconds
+                        .clamp(1, crate::settings::MAX_NOTICE_SECONDS);
+                    ui.add(
+                        egui::Slider::new(
+                            &mut settings.track_notice_seconds,
+                            1..=crate::settings::MAX_NOTICE_SECONDS,
+                        )
+                        .suffix(tr!(" s", " с")),
+                    );
+                });
+            },
         );
     });
     section(ui, tr!("Tags", "Теги"), |ui| tag_rows(ui, settings));
@@ -3271,6 +3317,8 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     settings.volume_step = d.volume_step;
     settings.tray = d.tray;
     settings.tray_only = d.tray_only;
+    settings.track_notice = d.track_notice;
+    settings.track_notice_seconds = d.track_notice_seconds;
     updates.enabled = d.check_updates;
 }
 

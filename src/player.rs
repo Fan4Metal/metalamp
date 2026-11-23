@@ -74,6 +74,9 @@ pub struct Player {
 pub struct Changes {
     /// A new entry is heard (the title, the cover).
     pub track: bool,
+    /// A play of an entry started (once per play: a seek or a pause is
+    /// not one; a repeat of the same entry is).
+    pub started: bool,
 }
 
 impl Player {
@@ -539,6 +542,7 @@ impl Player {
                     }
                     self.failed_in_row = 0;
                     changes.track = true;
+                    changes.started = true;
                     self.refresh_preload();
                 }
                 // The end of a play before the last: the new one starts.

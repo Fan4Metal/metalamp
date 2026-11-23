@@ -193,7 +193,8 @@ impl Loose {
     }
 }
 
-fn read_track(path: &Path) -> Option<Track> {
+/// The track at `path` as its tags give it (the track notice's too).
+pub fn read_track(path: &Path) -> Option<Track> {
     let meta = std::fs::metadata(path).ok()?;
     let mtime = meta
         .modified()

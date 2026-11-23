@@ -814,6 +814,12 @@ pub fn hook_media(key: MediaKey) {
     hook(Hooked::Media(key, Via::Controls));
 }
 
+/// The track notice clicked (`notice.rs`): the window brought back, as by
+/// the tray icon.
+pub fn hook_show() {
+    hook(Hooked::Tray(crate::tray::TrayCmd::Show));
+}
+
 /// What the window's messages asked for since the last call.
 pub fn take_hooked() -> Vec<Hooked> {
     HOOKED
@@ -1072,6 +1078,19 @@ pub fn adopt(hwnd: isize, owner: isize) {
 pub fn is_minimized(hwnd: isize) -> bool {
     // SAFETY: a question about the app's own window.
     unsafe { windows_sys::Win32::UI::WindowsAndMessaging::IsIconic(hwnd as _) != 0 }
+}
+
+/// The window, or a window it owns (the settings', the file info's), is
+/// the one in front.
+pub fn is_foreground(hwnd: isize) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GA_ROOTOWNER, GetAncestor, GetForegroundWindow,
+    };
+    // SAFETY: questions about windows, any of which may be gone.
+    unsafe {
+        let front = GetForegroundWindow();
+        !front.is_null() && GetAncestor(front, GA_ROOTOWNER) as isize == hwnd
+    }
 }
 
 /// The window back from minimized (or as it was) and in front.
