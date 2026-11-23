@@ -1,6 +1,11 @@
 //! What the newer scenes share: the beats of the analyzer's
 //! levels (the bass rising over its recent mean, as lightning's and the
-//! vortex's), and a small random generator (xorshift, no dependency).
+//! vortex's), and a small random generator (xorshift, no dependency);
+//! the soft lights the scenes paint with (`glow`, `ribbon`, `ellipse`,
+//! `ring`).
+
+use egui::{Color32, Mesh, Pos2, Vec2, vec2};
+use std::f32::consts::TAU;
 
 /// A beat: the bass this far over its mean of the last `MEAN_S`, and at
 /// least `LEAST`, `GAP_S` after the last; a kick fades in `KICK_S`.
@@ -154,6 +159,96 @@ pub fn glow(colour: egui::Color32, alpha: f32, dark: bool) -> egui::Color32 {
         egui::Color32::from_rgba_premultiplied(c.r(), c.g(), c.b(), 0)
     } else {
         c
+    }
+}
+
+/// A line through `points`, `half(i)` of its width either side of point
+/// `i`, `colour(i, p)` along its middle: fading to nothing at its sides
+/// (`soft`), else solid with an edge of `FEATHER` fading out.
+pub fn ribbon(
+    mesh: &mut Mesh,
+    points: &[Pos2],
+    half: impl Fn(usize) -> f32,
+    colour: impl Fn(usize, Pos2) -> Color32,
+    soft: bool,
+) {
+    const FEATHER: f32 = 0.7;
+    let n = points.len();
+    if n < 2 {
+        return;
+    }
+    let across = if soft { 3 } else { 4 };
+    let base = mesh.vertices.len() as u32;
+    for (i, &p) in points.iter().enumerate() {
+        let way = points[(i + 1).min(n - 1)] - points[i.saturating_sub(1)];
+        let normal = if way.length() > 1e-3 {
+            way.normalized().rot90()
+        } else {
+            vec2(0.0, 1.0)
+        };
+        let h = half(i).max(0.05);
+        let c = colour(i, p);
+        if soft {
+            mesh.colored_vertex(p - normal * h, Color32::TRANSPARENT);
+            mesh.colored_vertex(p, c);
+            mesh.colored_vertex(p + normal * h, Color32::TRANSPARENT);
+        } else {
+            mesh.colored_vertex(p - normal * (h + FEATHER), Color32::TRANSPARENT);
+            mesh.colored_vertex(p - normal * h, c);
+            mesh.colored_vertex(p + normal * h, c);
+            mesh.colored_vertex(p + normal * (h + FEATHER), Color32::TRANSPARENT);
+        }
+    }
+    for i in 0..n as u32 - 1 {
+        let a = base + across * i;
+        let b = a + across;
+        for k in 0..across - 1 {
+            mesh.add_triangle(a + k, a + k + 1, b + k + 1);
+            mesh.add_triangle(a + k, b + k + 1, b + k);
+        }
+    }
+}
+
+/// A soft light at `centre`, `colour` there fading to nothing at `radii`.
+pub fn ellipse(mesh: &mut Mesh, centre: Pos2, radii: Vec2, colour: Color32) {
+    const SIDES: u32 = 24;
+    if radii.min_elem() < 0.5 || colour == Color32::TRANSPARENT {
+        return;
+    }
+    let base = mesh.vertices.len() as u32;
+    mesh.colored_vertex(centre, colour);
+    for i in 0..SIDES {
+        let a = TAU * i as f32 / SIDES as f32;
+        mesh.colored_vertex(
+            centre + vec2(a.cos() * radii.x, a.sin() * radii.y),
+            Color32::TRANSPARENT,
+        );
+        mesh.add_triangle(base, base + 1 + i, base + 1 + (i + 1) % SIDES);
+    }
+}
+
+/// A soft ring about `centre`, `radius` to its middle, `colour` there
+/// fading to nothing `half` inside and outside it.
+pub fn ring(mesh: &mut Mesh, centre: Pos2, radius: f32, half: f32, colour: Color32) {
+    const SIDES: u32 = 48;
+    if radius < 0.5 || half < 0.1 || colour == Color32::TRANSPARENT {
+        return;
+    }
+    let base = mesh.vertices.len() as u32;
+    for i in 0..SIDES {
+        let a = TAU * i as f32 / SIDES as f32;
+        let way = vec2(a.cos(), a.sin());
+        mesh.colored_vertex(centre + way * (radius - half).max(0.0), Color32::TRANSPARENT);
+        mesh.colored_vertex(centre + way * radius, colour);
+        mesh.colored_vertex(centre + way * (radius + half), Color32::TRANSPARENT);
+    }
+    for i in 0..SIDES {
+        let a = base + 3 * i;
+        let b = base + 3 * ((i + 1) % SIDES);
+        for k in 0..2 {
+            mesh.add_triangle(a + k, a + k + 1, b + k + 1);
+            mesh.add_triangle(a + k, b + k + 1, b + k);
+        }
     }
 }
 

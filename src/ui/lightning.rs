@@ -20,7 +20,7 @@ use egui::{Color32, Mesh, Painter, Pos2, Rect, Vec2, pos2, vec2};
 use std::f32::consts::TAU;
 
 use crate::palette;
-use crate::ui::beat::{Beat, Rng, glow};
+use crate::ui::beat::{Beat, Rng, ellipse, glow, ribbon};
 
 /// The bands of the levels fed.
 pub const BANDS: usize = 32;
@@ -655,71 +655,6 @@ impl Lightning {
             );
         }
         painter.add(mesh);
-    }
-}
-
-/// A line through `points`, `half(i)` of its width either side of point
-/// `i`, `colour(i, p)` along its middle: fading to nothing at its sides
-/// (`soft`), else solid with an edge of `FEATHER` fading out.
-fn ribbon(
-    mesh: &mut Mesh,
-    points: &[Pos2],
-    half: impl Fn(usize) -> f32,
-    colour: impl Fn(usize, Pos2) -> Color32,
-    soft: bool,
-) {
-    const FEATHER: f32 = 0.7;
-    let n = points.len();
-    if n < 2 {
-        return;
-    }
-    let across = if soft { 3 } else { 4 };
-    let base = mesh.vertices.len() as u32;
-    for (i, &p) in points.iter().enumerate() {
-        let way = points[(i + 1).min(n - 1)] - points[i.saturating_sub(1)];
-        let normal = if way.length() > 1e-3 {
-            way.normalized().rot90()
-        } else {
-            vec2(0.0, 1.0)
-        };
-        let h = half(i).max(0.05);
-        let c = colour(i, p);
-        if soft {
-            mesh.colored_vertex(p - normal * h, Color32::TRANSPARENT);
-            mesh.colored_vertex(p, c);
-            mesh.colored_vertex(p + normal * h, Color32::TRANSPARENT);
-        } else {
-            mesh.colored_vertex(p - normal * (h + FEATHER), Color32::TRANSPARENT);
-            mesh.colored_vertex(p - normal * h, c);
-            mesh.colored_vertex(p + normal * h, c);
-            mesh.colored_vertex(p + normal * (h + FEATHER), Color32::TRANSPARENT);
-        }
-    }
-    for i in 0..n as u32 - 1 {
-        let a = base + across * i;
-        let b = a + across;
-        for k in 0..across - 1 {
-            mesh.add_triangle(a + k, a + k + 1, b + k + 1);
-            mesh.add_triangle(a + k, b + k + 1, b + k);
-        }
-    }
-}
-
-/// A soft light at `centre`, `colour` there fading to nothing at `radii`.
-fn ellipse(mesh: &mut Mesh, centre: Pos2, radii: Vec2, colour: Color32) {
-    const SIDES: u32 = 24;
-    if radii.min_elem() < 0.5 || colour == Color32::TRANSPARENT {
-        return;
-    }
-    let base = mesh.vertices.len() as u32;
-    mesh.colored_vertex(centre, colour);
-    for i in 0..SIDES {
-        let a = TAU * i as f32 / SIDES as f32;
-        mesh.colored_vertex(
-            centre + vec2(a.cos() * radii.x, a.sin() * radii.y),
-            Color32::TRANSPARENT,
-        );
-        mesh.add_triangle(base, base + 1 + i, base + 1 + (i + 1) % SIDES);
     }
 }
 
