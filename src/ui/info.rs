@@ -1229,7 +1229,7 @@ impl InfoView {
         }
         if let Some(path) = self.lyrics_file.take() {
             // The lyrics taken in are shown.
-            set_lyrics_open(ctx, true);
+            set_tab(ctx, Tab::Lyrics);
             self.take_lyrics_file(&path);
         }
         // `METALAMP_INFO_ZOOM=1`: the cover large once it is read (GUI
@@ -1460,9 +1460,8 @@ impl InfoView {
                     .form
                     .as_mut()
                     .filter(|f| editing && f.paths.first() == Some(&d.path));
-                scrolled(ui, room, |ui| {
-                    ui.add_enabled_ui(!saving, |ui| body_one(ui, d, form, genres, acts));
-                });
+                let own = height.is_none();
+                tabbed(ui, d, form, genres, room, own, saving, acts);
             }
         }
         if editing {
@@ -1479,21 +1478,286 @@ impl InfoView {
 
 /// The body in a scroll area of `room` points, with room for the scroll
 /// bar at the right edge (`set_max_width` here also shrank the area's
-/// height to its minimum).
-fn scrolled(ui: &mut Ui, room: f32, add: impl FnOnce(&mut Ui)) {
-    egui::ScrollArea::vertical()
+/// height to its minimum); the area's height: its content's, at most
+/// `room` (not `inner_rect`'s, which is the area before it shrinks to
+/// the content: `room`).
+fn scrolled(ui: &mut Ui, room: f32, add: impl FnOnce(&mut Ui)) -> f32 {
+    let shown = egui::ScrollArea::vertical()
         .id_salt("file_info_body")
         .min_scrolled_height(room)
         .max_height(room)
         .auto_shrink([false, true])
         .show(ui, |ui| {
-            egui::Frame::new()
-                .inner_margin(egui::Margin {
-                    right: 14,
-                    ..egui::Margin::ZERO
-                })
-                .show(ui, add);
+            right_margin().show(ui, add);
         });
+    shown.content_size.y.min(room)
+}
+
+/// One file's body: the tabs' row and the tab shown, in `room` (`own`: the
+/// rest of a window of its own).
+#[allow(clippy::too_many_arguments)]
+fn tabbed(
+    ui: &mut Ui,
+    d: &Details,
+    mut form: Option<&mut Form>,
+    genres: &[String],
+    room: f32,
+    own: bool,
+    saving: bool,
+    acts: &mut Vec<Act>,
+) {
+    match tab_row(ui, d, form.as_deref_mut(), saving, acts) {
+        Tab::Main => {
+            scrolled(ui, room, |ui| {
+                ui.add_enabled_ui(!saving, |ui| body_one(ui, d, form, genres));
+            });
+        }
+        Tab::Lyrics => {
+            // As tall as the main tab would be, so the window keeps its
+            // size between the tabs: that tab laid out unseen, in a child
+            // that takes no room. In a window of its own, the rest of it.
+            let tall = if own {
+                room
+            } else {
+                let mut probe = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(ui.available_rect_before_wrap())
+                        .invisible(),
+                );
+                scrolled(&mut probe, room, |ui| {
+                    body_one(ui, d, form.as_deref_mut(), genres)
+                })
+            };
+            ui.add_enabled_ui(!saving, |ui| lyrics_tab(ui, d, form, tall));
+        }
+    }
+}
+
+/// The body's margin on the right, where the scroll bar goes.
+fn right_margin() -> egui::Frame {
+    egui::Frame::new().inner_margin(egui::Margin {
+        right: 14,
+        ..egui::Margin::ZERO
+    })
+}
+
+/// The tabs of one file's body: the tags (with the file's lines) and the
+/// lyrics, apart since a song's lyrics shown whole made the window twice
+/// as tall. Kept for the session in egui's memory.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    Main,
+    Lyrics,
+}
+
+fn tab(ctx: &egui::Context) -> Tab {
+    ctx.data(|d| d.get_temp(tab_id()).unwrap_or(Tab::Main))
+}
+
+fn set_tab(ctx: &egui::Context, tab: Tab) {
+    ctx.data_mut(|d| d.insert_temp(tab_id(), tab));
+}
+
+fn tab_id() -> egui::Id {
+    egui::Id::new("info_tab")
+}
+
+/// The tabs' row under the hero, a line under it and the tab shown
+/// underlined in the accent; the lyrics' lines counted beside their name,
+/// a dot in the accent by a tab not shown that holds changes not saved.
+/// On the right what the "Main" section's heading had (the tags in the
+/// file and Edit; no heading repeats the tab's name under it), and on the
+/// lyrics' tab while editing Clear and From a file. The tab shown.
+fn tab_row(
+    ui: &mut Ui,
+    d: &Details,
+    form: Option<&mut Form>,
+    saving: bool,
+    acts: &mut Vec<Act>,
+) -> Tab {
+    let mut shown = tab(ui.ctx());
+    let editing = form.is_some();
+    let (count, touched) = {
+        let form = form.as_deref();
+        let lyrics = match form.and_then(|f| f.lyrics.as_ref()) {
+            Some(f) => f.value.as_str(),
+            None => value(d, &[ItemKey::UnsyncLyrics, ItemKey::Lyrics]),
+        };
+        let touched = |t: Tab| {
+            form.is_some_and(|f| match t {
+                Tab::Lyrics => f.lyrics.as_ref().is_some_and(|l| l.touched),
+                Tab::Main => {
+                    f.cover.is_some()
+                        || f.main
+                            .iter()
+                            .chain(f.other.iter().map(|(_, o)| o))
+                            .any(|o| o.touched)
+                }
+            })
+        };
+        (lyrics_lines(lyrics), [touched(Tab::Main), touched(Tab::Lyrics)])
+    };
+    ui.add_space(14.0);
+    right_margin().show(ui, |ui| {
+        let mut underlined = egui::Rect::NOTHING;
+        let row = ui.horizontal(|ui| {
+            let gap = ui.spacing().item_spacing.x;
+            ui.spacing_mut().item_spacing.x = 22.0;
+            for (t, name) in [
+                (Tab::Main, tr!("General", "Основные")),
+                (Tab::Lyrics, tr!("Lyrics", "Текст")),
+            ] {
+                let on = t == shown;
+                let note = (t == Tab::Lyrics && count > 0).then(|| count.to_string());
+                let dot = !on && touched[t as usize];
+                let mut resp = tab_button(ui, name, note, on, dot);
+                if t == Tab::Lyrics {
+                    resp = resp.on_hover_text(lyrics_note(count));
+                }
+                if resp.clicked() && !on {
+                    set_tab(ui.ctx(), t);
+                    shown = t;
+                }
+                if t == shown {
+                    underlined = resp.rect;
+                }
+            }
+            ui.spacing_mut().item_spacing.x = gap;
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_enabled_ui(!saving, |ui| {
+                    // Editing, until the fields are read: nothing to clear.
+                    let field = form
+                        .filter(|f| f.state != State::Reading)
+                        .and_then(|f| f.lyrics.as_mut());
+                    match (shown, field) {
+                        (Tab::Lyrics, Some(field)) => lyrics_tools(ui, field, acts),
+                        _ => {
+                            if !editing {
+                                let why_not = (!edit::writable(&d.path)).then_some(tr!(
+                                    "Tags of this format cannot be written",
+                                    "Теги этого формата записать нельзя"
+                                ));
+                                edit_button(ui, why_not, acts);
+                                ui.add_space(8.0);
+                            }
+                            ui.label(
+                                RichText::new(d.tags.join(" · "))
+                                    .size(11.0)
+                                    .color(palette::text_weak()),
+                            );
+                        }
+                    }
+                });
+            });
+        });
+        let r = ui.available_rect_before_wrap();
+        let y = row.response.rect.bottom() + 4.0;
+        let painter = ui.painter();
+        painter.hline(r.left()..=r.right(), y, egui::Stroke::new(1.0, palette::line()));
+        painter.hline(
+            underlined.left()..=underlined.right(),
+            y,
+            egui::Stroke::new(2.0, palette::accent()),
+        );
+        ui.add_space(6.0);
+    });
+    shown
+}
+
+/// Clear and From a file, right to left, for the lyrics being edited.
+fn lyrics_tools(ui: &mut Ui, field: &mut Field, acts: &mut Vec<Act>) {
+    if ui
+        .small_button(tr!("From a file…", "Из файла…"))
+        .on_hover_text(tr!(
+            "The lyrics from a text file (.txt, .lrc)",
+            "Текст из текстового файла (.txt, .lrc)"
+        ))
+        .clicked()
+    {
+        acts.push(Act::PickLyrics);
+    }
+    let clear = egui::Button::new(tr!("Clear", "Очистить")).small();
+    if ui.add_enabled(!field.value.is_empty(), clear).clicked() {
+        field.value.clear();
+        field.touched = field.value != field.shown;
+    }
+}
+
+/// A tab's name (bright when `on`; its underline is the row's), a weak
+/// `note` after it and a `dot` in the accent.
+fn tab_button(ui: &mut Ui, name: &str, note: Option<String>, on: bool, dot: bool) -> egui::Response {
+    let font = egui::FontId::proportional(14.0);
+    let small = egui::FontId::proportional(11.0);
+    let galley = ui.painter().layout_no_wrap(name.to_owned(), font, palette::text());
+    let note = note.map(|n| ui.painter().layout_no_wrap(n, small, palette::text_weak()));
+    let gap = 5.0;
+    let mut size = galley.size();
+    if let Some(n) = &note {
+        size.x += gap + n.size().x;
+    }
+    if dot {
+        size.x += gap + 6.0;
+    }
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let colour = if on {
+        palette::text_bright()
+    } else if resp.hovered() {
+        palette::text()
+    } else {
+        palette::text_weak()
+    };
+    let painter = ui.painter();
+    let mut x = rect.left();
+    let text_w = galley.size().x;
+    painter.galley_with_override_text_color(rect.left_top(), galley, colour);
+    x += text_w;
+    if let Some(n) = note {
+        x += gap;
+        let y = rect.bottom() - n.size().y - 1.0;
+        painter.galley(egui::pos2(x, y), n.clone(), palette::text_weak());
+        x += n.size().x;
+    }
+    if dot {
+        x += gap;
+        painter.circle_filled(egui::pos2(x + 3.0, rect.center().y), 3.0, palette::accent());
+    }
+    resp
+}
+
+/// The lyrics' tab, `tall` points high: the lyrics in a box filling it,
+/// scrolled within it (its tools are in the tabs' row).
+fn lyrics_tab(ui: &mut Ui, d: &Details, form: Option<&mut Form>, tall: f32) {
+    // Editing, until the fields are read: as shown.
+    let field = form
+        .filter(|f| f.state != State::Reading)
+        .and_then(|f| f.lyrics.as_mut());
+    let width = ui.available_width();
+    ui.allocate_ui(vec2(width, tall), |ui| {
+        ui.set_min_height(tall);
+        right_margin().show(ui, |ui| {
+            let top = ui.cursor().top();
+            // As the general tab's first field under the row.
+            ui.add_space(8.0);
+            let rest = (tall - (ui.cursor().top() - top)).max(60.0);
+            match field {
+                Some(field) => lyrics_field(ui, field, &d.path, rest),
+                None => {
+                    let lyrics = value(d, &[ItemKey::UnsyncLyrics, ItemKey::Lyrics]);
+                    lyrics_box(ui, &d.path, rest, |ui, h| {
+                        let mut text = lyrics;
+                        ui.add(
+                            egui::TextEdit::multiline(&mut text)
+                                .frame(egui::Frame::NONE)
+                                .hint_text(tr!("No lyrics", "Текста нет"))
+                                .desired_width(ui.available_width())
+                                .min_size(vec2(0.0, h)),
+                        )
+                    });
+                }
+            }
+        });
+    });
 }
 
 /// What the top of the window says: the title, the artist, the album with
@@ -1720,19 +1984,13 @@ enum Mode<'a> {
     Edit(&'a mut Form),
 }
 
-/// One file's sections: the main fields, the tag's other fields (only
-/// those it has), the lyrics, then the file. The names of every section
+/// One file's sections (the tab `Tab::Main`): the main fields, the tag's
+/// other fields (only those it has), then the file. The names of every section
 /// in one column. Editing (`form`), the fields of `edit` in text fields.
-fn body_one(
-    ui: &mut Ui,
-    d: &Details,
-    form: Option<&mut Form>,
-    genres: &[String],
-    acts: &mut Vec<Act>,
-) {
-    ui.add_space(18.0);
+fn body_one(ui: &mut Ui, d: &Details, form: Option<&mut Form>, genres: &[String]) {
+    // Under the tabs' row.
+    ui.add_space(8.0);
     ui.spacing_mut().item_spacing.y = 6.0;
-    let editing = form.is_some();
     // Editing: the fields `edit` read (in the order shown), the others as
     // they are.
     let form = form.filter(|f| f.state != State::Reading);
@@ -1776,18 +2034,8 @@ fn body_one(
     let width = names_width(ui, names);
     let pad = EDIT_PAD;
 
-    let tags = d.tags.join(" · ");
-    section(ui, tr!("Main", "Основное"), |ui| {
-        if !editing {
-            let why_not = (!edit::writable(&d.path)).then_some(tr!(
-                "Tags of this format cannot be written",
-                "Теги этого формата записать нельзя"
-            ));
-            edit_button(ui, why_not, acts);
-            ui.add_space(8.0);
-        }
-        ui.label(RichText::new(tags).size(11.0).color(palette::text_weak()));
-    });
+    // No "Main" heading: the tab is named so, and its row holds the tags
+    // in the file and Edit (`tab_row`).
     let mut form = form;
     match form.as_mut() {
         Some(f) => main_lines(ui, width, pad, &mut Mode::Edit(f), genres),
@@ -1828,47 +2076,7 @@ fn body_one(
         }
     }
 
-    // The lyrics apart: many lines, which the fields' grid would stretch.
-    // While editing they are folded unless unfolded (`lyrics_open`): a field
-    // of eight rows made the window grow by half.
-    let lyrics = value(d, &[ItemKey::UnsyncLyrics, ItemKey::Lyrics]);
-    if let Some(field) = form.as_mut().and_then(|f| f.lyrics.as_mut()) {
-        ui.add_space(14.0);
-        let open = lyrics_open(ui.ctx());
-        let note = (!open).then(|| lyrics_note(&field.value));
-        let mut toggled = false;
-        folding_section(ui, tr!("Lyrics", "Текст"), open, note, &mut toggled, |ui| {
-            let clear = egui::Button::new(tr!("Clear", "Очистить")).small();
-            if ui
-                .add_enabled(!field.value.is_empty(), clear)
-                .clicked()
-            {
-                field.value.clear();
-                field.touched = field.value != field.shown;
-            }
-            if ui
-                .small_button(tr!("From a file…", "Из файла…"))
-                .on_hover_text(tr!(
-                    "The lyrics from a text file (.txt, .lrc)",
-                    "Текст из текстового файла (.txt, .lrc)"
-                ))
-                .clicked()
-            {
-                acts.push(Act::PickLyrics);
-            }
-        });
-        if toggled {
-            set_lyrics_open(ui.ctx(), !open);
-        }
-        if open {
-            lyrics_field(ui, field);
-        }
-    } else if !lyrics.is_empty() {
-        ui.add_space(14.0);
-        section(ui, tr!("Lyrics", "Текст"), |_| {});
-        ui.add(egui::Label::new(RichText::new(lyrics).color(palette::text())).wrap());
-    }
-
+    // The lyrics are a tab of their own (`Tab::Lyrics`).
     ui.add_space(14.0);
     section(ui, tr!("File", "Файл"), |ui| {
         if ui
@@ -2392,18 +2600,69 @@ fn genre_lists<'a>(
     }
 }
 
-/// The lyrics in a text field of several lines (Enter starts a line).
-fn lyrics_field(ui: &mut Ui, f: &mut Field) {
-    let resp = ui.add(
-        egui::TextEdit::multiline(&mut f.value)
-            .hint_text(tr!("No lyrics", "Текста нет"))
-            .desired_rows(8)
-            .desired_width(ui.available_width()),
-    );
+/// The lyrics in a text field of several lines (Enter starts a line), in
+/// [`lyrics_box`] `tall` points high.
+fn lyrics_field(ui: &mut Ui, f: &mut Field, salt: &Path, tall: f32) {
+    let resp = lyrics_box(ui, salt, tall, |ui, h| {
+        ui.add(
+            egui::TextEdit::multiline(&mut f.value)
+                .frame(egui::Frame::NONE)
+                .hint_text(tr!("No lyrics", "Текста нет"))
+                .desired_width(ui.available_width())
+                .min_size(vec2(0.0, h)),
+        )
+    });
     if resp.changed() {
         f.touched = f.value != f.shown;
     }
     super::take_leaving_key(ui, &resp);
+}
+
+/// The lyrics' box, `tall` points high: `text` (a frameless text field,
+/// editable or not, given the height inside to fill, so a click anywhere
+/// in the box reaches it) in a scroll area, with the ground and border of
+/// a text field painted around it, so the box stays put while its text
+/// scrolls. `salt` (the file) keeps each file's place apart. The text's
+/// response.
+fn lyrics_box(
+    ui: &mut Ui,
+    salt: &Path,
+    tall: f32,
+    text: impl FnOnce(&mut Ui, f32) -> egui::Response,
+) -> egui::Response {
+    let ground = ui.painter().add(egui::Shape::Noop);
+    let margin = egui::Margin::symmetric(6, 4);
+    let inside = (tall - margin.sum().y).max(20.0);
+    let shown = egui::Frame::new()
+        .inner_margin(margin)
+        .show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt(("file_info_lyrics", salt))
+                .min_scrolled_height(inside)
+                .max_height(inside)
+                .auto_shrink([false, false])
+                .show(ui, |ui| text(ui, inside))
+                .inner
+        });
+    let resp = shown.inner;
+    let visuals = ui.visuals();
+    let stroke = if resp.has_focus() {
+        visuals.selection.stroke
+    } else {
+        ui.style().interact(&resp).bg_stroke
+    };
+    let radius = visuals.widgets.inactive.corner_radius;
+    ui.painter().set(
+        ground,
+        egui::epaint::RectShape::new(
+            shown.response.rect,
+            radius,
+            visuals.text_edit_bg_color(),
+            stroke,
+            egui::StrokeKind::Inside,
+        ),
+    );
+    resp
 }
 
 /// "Add a field" in the heading of "Additional" while editing: a menu of
@@ -2628,77 +2887,18 @@ fn section(ui: &mut Ui, title: &str, right: impl FnOnce(&mut Ui)) {
     ui.add_space(10.0);
 }
 
-/// Whether the lyrics' field is unfolded while editing: folded by default,
-/// kept for the session in egui's memory.
-fn lyrics_open(ctx: &egui::Context) -> bool {
-    ctx.data(|d| d.get_temp(lyrics_open_id()).unwrap_or(false))
+/// The lyrics' lines that are not empty.
+fn lyrics_lines(text: &str) -> usize {
+    text.lines().filter(|l| !l.trim().is_empty()).count()
 }
 
-fn set_lyrics_open(ctx: &egui::Context, open: bool) {
-    ctx.data_mut(|d| d.insert_temp(lyrics_open_id(), open));
-}
-
-fn lyrics_open_id() -> egui::Id {
-    egui::Id::new("info_lyrics_open")
-}
-
-/// What the folded lyrics' heading says of them: their lines, or none.
-fn lyrics_note(text: &str) -> String {
-    let lines = text.lines().filter(|l| !l.trim().is_empty()).count() as u64;
+/// The lyrics tab's tip: their lines counted, or none.
+fn lyrics_note(lines: usize) -> String {
     if lines == 0 {
-        tr!("none", "нет").to_owned()
+        tr!("No lyrics", "Текста нет").to_owned()
     } else {
-        crate::i18n::count(lines, ["line", "lines"], ["строка", "строки", "строк"])
+        crate::i18n::count(lines as u64, ["line", "lines"], ["строка", "строки", "строк"])
     }
-}
-
-/// [`section`]'s heading folding what is under it: a chevron before the
-/// title, a click on either sets `toggled`; `note` beside the title.
-fn folding_section(
-    ui: &mut Ui,
-    title: &str,
-    open: bool,
-    note: Option<String>,
-    toggled: &mut bool,
-    right: impl FnOnce(&mut Ui),
-) {
-    ui.horizontal(|ui| {
-        let openness = ui
-            .ctx()
-            .animate_bool(egui::Id::new(("fold", title)), open);
-        let gap = ui.spacing().item_spacing.x;
-        ui.spacing_mut().item_spacing.x = 2.0;
-        if super::settings::fold_button(ui, openness).clicked() {
-            *toggled = true;
-        }
-        let title = ui
-            .add(
-                egui::Label::new(
-                    RichText::new(title.to_uppercase())
-                        .size(11.0)
-                        .strong()
-                        .color(palette::text_weak()),
-                )
-                .sense(egui::Sense::click()),
-            )
-            .on_hover_cursor(egui::CursorIcon::PointingHand);
-        if title.clicked() {
-            *toggled = true;
-        }
-        if let Some(note) = note {
-            ui.add_space(8.0);
-            ui.label(RichText::new(note).size(11.0).color(palette::text_weak()));
-        }
-        ui.spacing_mut().item_spacing.x = gap;
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), right);
-    });
-    let r = ui.available_rect_before_wrap();
-    ui.painter().hline(
-        r.left()..=r.right(),
-        r.top() + 2.0,
-        egui::Stroke::new(1.0, palette::line()),
-    );
-    ui.add_space(10.0);
 }
 
 /// The names' column: as wide as the widest of `names`, at most
@@ -3547,6 +3747,77 @@ mod tests {
             c.rest(20);
             c.click(at, egui::PointerButton::Secondary);
             assert!(c.menu_seen(at), "opened again over the window");
+        }
+    }
+
+    /// A file's details with the usual fields and `lyrics`.
+    fn details_with(lyrics: &str) -> Details {
+        let fields = [
+            (ItemKey::TrackTitle, "Stargazers"),
+            (ItemKey::TrackArtist, "Nightwish"),
+            (ItemKey::AlbumTitle, "Oceanborn"),
+            (ItemKey::AlbumArtist, "Nightwish"),
+            (ItemKey::RecordingDate, "1998"),
+            (ItemKey::Genre, "Symphonic Power Metal"),
+            (ItemKey::TrackNumber, "01"),
+            (ItemKey::UnsyncLyrics, lyrics),
+        ];
+        Details {
+            path: PathBuf::from(r"D:\Music\Nightwish\01 - Stargazers.mp3"),
+            size: 10_000_000,
+            tags: vec!["ID3v2.3".to_owned()],
+            fields: fields.iter().map(|(k, v)| (*k, (*v).to_owned())).collect(),
+            pictures: Vec::new(),
+            duration_ms: 268_000,
+            bitrate: 320,
+            sample_rate: 44_100,
+            bit_depth: None,
+            channels: 2,
+            gapless: None,
+            encoder: None,
+            cover: None,
+            tag_cover: None,
+        }
+    }
+
+    /// The file info's modal around one file's tabs, laid out headless for
+    /// a few frames: its height on `tab`.
+    fn modal_height(d: &Details, tab: Tab) -> f32 {
+        let ctx = egui::Context::default();
+        let mut height = 0.0;
+        for frame in 0..4 {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    vec2(1000.0, 1400.0),
+                )),
+                time: Some(frame as f64 * 0.05),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                let ctx = ui.ctx().clone();
+                set_tab(&ctx, tab);
+                let shown = egui::Modal::new(egui::Id::new("file_info")).show(&ctx, |ui| {
+                    ui.set_width(WIDTH);
+                    let room = 1000.0;
+                    tabbed(ui, d, None, &[], room, false, false, &mut Vec::new());
+                });
+                height = shown.response.rect.height();
+            });
+            out.textures_delta.clear();
+        }
+        height
+    }
+
+    #[test]
+    fn the_lyrics_tab_is_as_tall_as_the_general_one() {
+        let long = "A grand oasis in the vastness of gloom\n".repeat(80);
+        for lyrics in [long.as_str(), "One line", ""] {
+            let d = details_with(lyrics);
+            let main = modal_height(&d, Tab::Main);
+            let text = modal_height(&d, Tab::Lyrics);
+            assert!(main > 300.0 && main < 900.0, "{main}");
+            assert!((main - text).abs() < 1.0, "{main} against {text}");
         }
     }
 
