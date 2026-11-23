@@ -1091,6 +1091,7 @@ mod tests {
             Visual::Ridges,
             Visual::Strata,
             Visual::Vortex,
+            Visual::Lightning,
             Visual::Spectrum,
             Visual::Fire,
             Visual::Fireworks,
@@ -1443,16 +1444,23 @@ mod tests {
         let rate = 48_000;
         let size = Vec2::new(760.0, 118.0);
         let rect = Rect::from_min_size(pos2(0.0, 0.0), size);
+        // METALAMP_FRAMES_EVERY=<n>: seven frames n apart (20 ms each; 25
+        // by default), to see a quick move such as a lightning's stroke.
+        let every: usize = std::env::var("METALAMP_FRAMES_EVERY")
+            .ok()
+            .and_then(|n| n.parse().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(25);
         let mut v = Visualizer::new();
         let mut renderer = crate::ui::raster::Renderer::new(2.0);
         let mut frames = Vec::new();
         let mut end = FETCH as u64;
-        for frame in 0..=400 {
+        for frame in 0..=250 + 6 * every {
             end += 960;
             let s: Vec<f32> = (end as usize - FETCH..end as usize).map(music).collect();
             v.last = Instant::now() - Duration::from_millis(20);
             v.feed(visual, Some((&s, Heard { rate, end })), Some(&s), Some(size));
-            if frame >= 250 && frame % 25 == 0 {
+            if frame >= 250 && (frame - 250) % every == 0 {
                 frames.push(renderer.frame(rect, palette::list_bg(), |p| v.paint(p, rect)));
             }
         }
