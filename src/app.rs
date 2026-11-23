@@ -22,6 +22,10 @@ use crate::{frameless, palette, win};
 const UNCLOAK_TIMEOUT: Duration = Duration::from_secs(1);
 /// Frames the window paints, cloaked, before it is shown.
 const PAINTED_TO_SHOW: u64 = 3;
+/// Paused, the visualization moves on until the frames heard have stood
+/// this long: more than the audio thread takes to the pause (a poll of
+/// 10 ms) and between its reports of what is heard (2 ms during the fade).
+const HEARD_REST: Duration = Duration::from_millis(150);
 /// How long the window must rest after a move or resize before its place
 /// is saved: not at every frame of a drag, and not only at exit, which a
 /// crash or a logoff may skip.
@@ -35,6 +39,10 @@ pub struct App {
     heard: Vec<f32>,
     /// Their side, for the goniometer.
     heard_side: Vec<f32>,
+    /// Where the frames heard ended last and when that last changed: a
+    /// pause still plays what the device holds and the fade out (about
+    /// 90 ms), which the visualization follows to its end.
+    heard_moved: (u64, Instant),
     /// The visualization's colours of the cover heard, moving to the next
     /// cover's.
     cover_fade: palette::CoverFade,
@@ -229,6 +237,7 @@ impl App {
             cover_fade: palette::CoverFade::default(),
             heard: Vec::new(),
             heard_side: Vec::new(),
+            heard_moved: (0, Instant::now()),
             player_area: egui::Rect::NOTHING,
             about,
             statistics: crate::ui::statistics::StatisticsView::from_env(),
@@ -719,6 +728,11 @@ impl App {
             self.player
                 .heard_samples(crate::ui::visual::FETCH, &mut heard)
         };
+        if let Some(h) = at
+            && h.end != self.heard_moved.0
+        {
+            self.heard_moved = (h.end, Instant::now());
+        }
         self.visual.feed(
             visual,
             at.map(|h| (heard.as_slice(), h)),
@@ -1911,7 +1925,11 @@ impl eframe::App for App {
         }
         self.count_play();
         // The visualization moves: 50 frames a second while playing, and
-        // after a stop while it falls; paused, it stands. Without one (off,
+        // after a stop while it falls; paused, it stands once the sound
+        // played after the pause (what the device holds and the fade out)
+        // has been heard: the frames heard have not moved for `HEARD_REST`
+        // (else the next frame, whenever something asked for one, took
+        // that sound at once and stepped on). Without one (off,
         // the compact bar, the window minimized) only the time, the seek
         // bar and the taskbar's progress move.
         let shown = self.bar_layout() != crate::settings::BarLayout::Classic
@@ -1920,7 +1938,7 @@ impl eframe::App for App {
             && ctx.input(|i| i.viewport().minimized) != Some(true);
         let moving = match self.player.status {
             crate::player::Status::Playing => true,
-            crate::player::Status::Paused => false,
+            crate::player::Status::Paused => self.heard_moved.1.elapsed() < HEARD_REST,
             crate::player::Status::Stopped => self.visual.active(),
         };
         if shown && moving {

@@ -1090,10 +1090,18 @@ impl Player<'_> {
                 return;
             }
         }
+        // The visualizations go on with the sound to its end: the tap is
+        // told what is heard meanwhile (else what the fade played came to
+        // them at once, a step after they had stood).
         let began = Instant::now();
         while began.elapsed() < FADE_WAIT {
             match self.out.as_mut().map(|o| o.heard()) {
-                Some(Ok(heard)) if heard < self.written => {}
+                Some(Ok(heard)) => {
+                    self.vis().set_heard(heard, self.format.0);
+                    if heard >= self.written {
+                        break;
+                    }
+                }
                 _ => break,
             }
             std::thread::sleep(Duration::from_millis(2));
