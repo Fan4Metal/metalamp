@@ -4,11 +4,14 @@
 //! pixel takes a mean of the pixel under it (the most), its two neighbours
 //! and the one under that (less: sideways they blurred the flames), less
 //! a cooling read from a map of soft blobs that rises with the flames
-//! (`cooling_map`; Hugo Elias's fire), more the higher: where a blob
-//! passes, a tongue thins and breaks off, so the flames lick upwards
-//! smoothly rather than as Doom's coarse grains (the user found those low
-//! in resolution). Each row is first moved aside by a gust (`shifted`), so
-//! the tongues sway. Every destination is written, leaving no old heat
+//! (`cooling_map`; Hugo Elias's fire, with a finer octave for ragged
+//! edges and wisps), more the higher: where a blob passes, a tongue thins
+//! and breaks off, so the flames lick upwards smoothly rather than as
+//! Doom's coarse grains (the user found those low in resolution). Each row
+//! is first moved aside by a gust, and each pixel further by a swirl that
+//! rises slower than the flames (`shifted`, `swirl_map`), so the tongues
+//! sway and each bends and curls on its own. Every destination is written,
+//! leaving no old heat
 //! floating between the flames. The bottom row is the source: each column
 //! the analyzer's level at its place across (the bass on the left), with
 //! hot spots and travelling ripples that break it into tongues, going from
@@ -25,9 +28,10 @@
 //! many as the sound is loud, swaying, cooling from white to red.
 //!
 //! Shown as a texture over the display, the heat in the visualization's
-//! colours, the hottest drawn towards white; the glows, rings and sparks
-//! over it in one mesh, added to the ground on a dark theme. Paused, it
-//! stands; stopped, it burns out.
+//! colours, the hottest drawn towards white; on a dark theme a blurred
+//! glow of it added over it (`bloom_image`), the flames lighting the air;
+//! the glows, rings and sparks over it in one mesh, added to the ground on
+//! a dark theme. Paused, it stands; stopped, it burns out.
 
 use egui::{
     Color32, ColorImage, Mesh, Painter, Pos2, Rect, TextureHandle, TextureOptions, Vec2, pos2,
@@ -52,6 +56,23 @@ const STEP_HZ: f32 = 210.0;
 const COOL_ACROSS: usize = 3;
 const COOL_DOWN: usize = 6;
 const COOL_CONTRAST: f32 = 2.0;
+/// A finer octave of it, `FINE_SHARE` of the cooling: ragged edges and
+/// thin wisps breaking off the tongues.
+const FINE_ACROSS: usize = 1;
+const FINE_DOWN: usize = 2;
+const FINE_SHARE: f32 = 0.35;
+/// The swirl: a field of sideways pushes (blobs `SWIRL_ACROSS` by
+/// `SWIRL_DOWN` pixels), up to `SWIRL` pixels a step at the top and a
+/// quarter of it at the base, rising `SWIRL_RISE` of a row a step (slower
+/// than the flames, so each tongue bends and curls on its own).
+const SWIRL_ACROSS: usize = 6;
+const SWIRL_DOWN: usize = 10;
+const SWIRL: f32 = 0.7;
+const SWIRL_RISE: f32 = 0.55;
+/// The glow about the flames on a dark ground: the heat in pixels of
+/// `BLOOM` by `BLOOM` blurred, added at `BLOOM_LIGHT`.
+const BLOOM: usize = 4;
+const BLOOM_LIGHT: f32 = 0.35;
 /// The places across the colours are worked out for, once per palette.
 const PLACES: usize = 32;
 /// On a light ground the colours go no higher than this level.
@@ -180,6 +201,10 @@ pub struct Fire {
     cooling: Vec<f32>,
     cool_rows: usize,
     scroll: usize,
+    /// The swirl (`width` × `cool_rows`, a mean of 0 and a spread of
+    /// 1), and how far it has risen.
+    swirl: Vec<f32>,
+    swirl_scroll: f32,
     width: usize,
     height: usize,
     /// The colours by place and heat, and the palette and ground they are
@@ -203,6 +228,8 @@ pub struct Fire {
     /// Embers owed (fractions carried on).
     embers_owed: f32,
     texture: Option<TextureHandle>,
+    /// The glow's texture (dark grounds only).
+    bloom: Option<TextureHandle>,
     /// The heat changed since the texture was set; the colours it was
     /// set in.
     changed: bool,
@@ -224,6 +251,8 @@ impl Fire {
             cooling: Vec::new(),
             cool_rows: 0,
             scroll: 0,
+            swirl: Vec::new(),
+            swirl_scroll: 0.0,
             width: 0,
             height: 0,
             lut: Vec::new(),
@@ -239,6 +268,7 @@ impl Fire {
             sparks: Vec::new(),
             embers_owed: 0.0,
             texture: None,
+            bloom: None,
             changed: false,
             drawn: None,
         }
@@ -257,6 +287,8 @@ impl Fire {
             self.cool_rows = (2 * h).max(64);
             self.cooling = cooling_map(&mut self.rng, w, self.cool_rows);
             self.scroll = 0;
+            self.swirl = swirl_map(&mut self.rng, w, self.cool_rows);
+            self.swirl_scroll = 0.0;
             self.source = vec![0.0; w];
             self.was = vec![0.0; w];
             self.lit = false;
@@ -491,26 +523,37 @@ impl Fire {
         // of the height.
         let cooling = 1.0 / (REACH * h as f32) * (1.0 - KICK_REACH * self.beat.kick);
         // Each row moved aside by a gust shared along it, so whole tongues
-        // sway, more the higher they reach; between pixels, smoothly.
+        // sway, more the higher they reach, and each pixel further by the
+        // swirl there, so each tongue bends on its own; between pixels,
+        // smoothly.
+        let rows = self.cool_rows;
+        self.scroll = (self.scroll + 1) % rows;
+        self.swirl_scroll = (self.swirl_scroll + SWIRL_RISE) % rows as f32;
+        let swirl_at = self.swirl_scroll as usize;
+        let last = w as isize - 1;
         for y in 0..h {
             let rise = 1.0 - y as f32 / h as f32;
             let wind = (self.time * 1.3).sin() * 0.22
                 + (self.time * 3.1 + rise * 4.0).sin() * 0.3 * rise
                 + (self.time * 0.7).sin() * 0.12;
-            let drift = wind.floor() as isize;
-            let blend = wind - wind.floor();
+            let push = SWIRL * (0.25 + 0.75 * rise);
+            let swirl = &self.swirl[((y + swirl_at) % rows) * w..][..w];
             let row = &self.heat[y * w..(y + 1) * w];
             let out = &mut self.shifted[y * pw..(y + 1) * pw];
-            let last = w as isize - 1;
+            // Kept positive by `PAD`, so a cast floors it (the hot loop:
+            // `floor` and two clamps doubled the step's cost).
+            const PAD: f32 = 64.0;
+            let start = wind - 1.0 + PAD;
             for (i, o) in out.iter_mut().enumerate() {
-                let x = i as isize - 1 + drift;
-                let a = row[x.clamp(0, last) as usize];
-                let b = row[(x + 1).clamp(0, last) as usize];
-                *o = a + (b - a) * blend;
+                let along = swirl[(i.saturating_sub(1)).min(w - 1)];
+                let from = (i as f32 + start + along * push).max(0.0);
+                let whole = from as usize;
+                let blend = from - whole as f32;
+                let x = (whole as isize - PAD as isize).clamp(0, last) as usize;
+                let next = (x + 1).min(w - 1);
+                *o = row[x] + (row[next] - row[x]) * blend;
             }
         }
-        let rows = self.cool_rows;
-        self.scroll = (self.scroll + 1) % rows;
         for y in 0..h - 1 {
             let here = &self.shifted[(y + 1) * pw..(y + 2) * pw];
             let under = (y + 2).min(h - 1);
@@ -522,7 +565,7 @@ impl Fire {
             let rise = 1.0 - (y + 1) as f32 / h as f32;
             let cooling = cooling * (0.4 + 1.2 * rise);
             for x in 0..w {
-                let v = 0.4 * here[x + 1] + 0.2 * (here[x] + here[x + 2] + below[x + 1]);
+                let v = 0.5 * here[x + 1] + 0.15 * (here[x] + here[x + 2]) + 0.2 * below[x + 1];
                 out[x] = (v - cool[x] * cooling).max(0.0);
             }
         }
@@ -597,6 +640,21 @@ impl Fire {
                         TextureOptions::LINEAR,
                     ));
                 }
+            }
+            if dark {
+                let image = bloom_image(&self.heat, w, h, colours);
+                match &mut self.bloom {
+                    Some(t) => t.set(image, TextureOptions::LINEAR),
+                    None => {
+                        self.bloom = Some(painter.ctx().load_texture(
+                            "fire glow",
+                            image,
+                            TextureOptions::LINEAR,
+                        ));
+                    }
+                }
+            } else {
+                self.bloom = None;
             }
             self.changed = false;
             self.drawn = Some((colours, ground));
@@ -722,8 +780,12 @@ impl Fire {
                 );
             }
         }
+        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
         if let Some(t) = &self.texture {
-            let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+            painter.image(t.id(), rect, uv, Color32::WHITE);
+        }
+        // The flames' light on the air about them, added over them.
+        if let Some(t) = &self.bloom {
             painter.image(t.id(), rect, uv, Color32::WHITE);
         }
         painter.add(mesh);
@@ -749,31 +811,38 @@ fn colour_table(colours: palette::VisualPalette, ground: Color32, bright: Color3
             if dark && v > 0.7 {
                 c = c.lerp_to_gamma(bright, (v - 0.7) / 0.3 * 0.7);
             }
-            let a = (v / 0.28).clamp(0.0, 1.0);
+            // Fading into the ground over a narrow band of heat: crisp
+            // edges to the tongues.
+            let a = ((v - 0.03) / 0.22).clamp(0.0, 1.0);
             lut.push(ground.lerp_to_gamma(c, a * a * (3.0 - 2.0 * a)));
         }
     }
     lut
 }
 
-/// The cooling map: noise gathered into soft blobs taller than wide
-/// (three box blurs, wrapping both ways, so it tiles as it rises), the
-/// contrast raised, a mean of 1.
+/// The cooling map: noise gathered into soft blobs taller than wide, the
+/// contrast raised, with a finer octave of it over them; a mean of 1.
 fn cooling_map(rng: &mut Rng, w: usize, rows: usize) -> Vec<f32> {
-    let mut map: Vec<f32> = (0..w * rows).map(|_| rng.unit()).collect();
-    let mut tmp = vec![0.0; w * rows];
-    for _ in 0..3 {
-        blur(&map, &mut tmp, w, rows, COOL_ACROSS, true);
-        blur(&tmp, &mut map, w, rows, COOL_DOWN, false);
-    }
-    let mean = map.iter().sum::<f32>() / map.len() as f32;
+    let coarse = cooling_blobs(rng, w, rows, COOL_ACROSS, COOL_DOWN);
+    let fine = cooling_blobs(rng, w, rows, FINE_ACROSS, FINE_DOWN);
+    coarse
+        .iter()
+        .zip(&fine)
+        .map(|(c, f)| c * (1.0 - FINE_SHARE) + f * FINE_SHARE)
+        .collect()
+}
+
+/// Noise gathered into blobs `across` by `down` pixels (three box blurs,
+/// wrapping both ways, so it tiles as it rises), spread to 0–1 and raised
+/// to `COOL_CONTRAST`: a few strong blobs breaking the tongues, gentle
+/// cooling between them; a mean of 1.
+fn cooling_blobs(rng: &mut Rng, w: usize, rows: usize, across: usize, down: usize) -> Vec<f32> {
+    let mut map = blobs(rng, w, rows, across, down);
     let (lo, hi) = map
         .iter()
         .fold((f32::MAX, f32::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
-    // Spread to 0–1 about the blobs, then raised: a few strong blobs
-    // breaking the tongues, gentle cooling between them.
     for v in &mut map {
-        let t = if hi > lo { (*v - lo) / (hi - lo) } else { mean };
+        let t = if hi > lo { (*v - lo) / (hi - lo) } else { 0.5 };
         *v = t.powf(COOL_CONTRAST);
     }
     let mean = map.iter().sum::<f32>() / map.len() as f32;
@@ -783,6 +852,76 @@ fn cooling_map(rng: &mut Rng, w: usize, rows: usize) -> Vec<f32> {
         }
     }
     map
+}
+
+/// The swirl: noise gathered into wide soft blobs, a mean of 0 and a
+/// spread (root mean square) of 1.
+fn swirl_map(rng: &mut Rng, w: usize, rows: usize) -> Vec<f32> {
+    let mut map = blobs(rng, w, rows, SWIRL_ACROSS, SWIRL_DOWN);
+    let mean = map.iter().sum::<f32>() / map.len() as f32;
+    let spread = (map.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / map.len() as f32)
+        .sqrt();
+    for v in &mut map {
+        *v = if spread > 0.0 { (*v - mean) / spread } else { 0.0 };
+    }
+    map
+}
+
+/// White noise blurred three times by boxes `across` by `down` pixels,
+/// wrapping both ways.
+fn blobs(rng: &mut Rng, w: usize, rows: usize, across: usize, down: usize) -> Vec<f32> {
+    let mut map: Vec<f32> = (0..w * rows).map(|_| rng.unit()).collect();
+    let mut tmp = vec![0.0; w * rows];
+    for _ in 0..3 {
+        blur(&map, &mut tmp, w, rows, across, true);
+        blur(&tmp, &mut map, w, rows, down, false);
+    }
+    map
+}
+
+/// The glow about the flames: the heat in blocks of `BLOOM` pixels,
+/// spread three times to their neighbours (not wrapping: the hot base would
+/// light the top), in the colours' upper part, premultiplied with no
+/// coverage so it is added to what is under it.
+fn bloom_image(heat: &[f32], w: usize, h: usize, colours: palette::VisualPalette) -> ColorImage {
+    let (bw, bh) = (w.div_ceil(BLOOM), h.div_ceil(BLOOM));
+    let mut blocks = vec![0.0f32; bw * bh];
+    for y in 0..h {
+        for x in 0..w {
+            blocks[(y / BLOOM) * bw + x / BLOOM] += heat[y * w + x];
+        }
+    }
+    let per = (BLOOM * BLOOM) as f32;
+    for v in &mut blocks {
+        *v /= per;
+    }
+    let mut tmp = vec![0.0; bw * bh];
+    for _ in 0..3 {
+        for y in 0..bh {
+            for x in 0..bw {
+                let at = |x: usize| blocks[y * bw + x];
+                let (l, r) = (at(x.saturating_sub(1)), at((x + 1).min(bw - 1)));
+                tmp[y * bw + x] = 0.25 * l + 0.5 * at(x) + 0.25 * r;
+            }
+        }
+        for y in 0..bh {
+            for x in 0..bw {
+                let at = |y: usize| tmp[y * bw + x];
+                let (u, d) = (at(y.saturating_sub(1)), at((y + 1).min(bh - 1)));
+                blocks[y * bw + x] = 0.25 * u + 0.5 * at(y) + 0.25 * d;
+            }
+        }
+    }
+    let mut image = ColorImage::filled([bw, bh], Color32::TRANSPARENT);
+    let across = 1.0 / (bw - 1).max(1) as f32;
+    for (i, out) in image.pixels.iter_mut().enumerate() {
+        let v = blocks[i];
+        if v > 0.005 {
+            let c = colours.at(0.75, (i % bw) as f32 * across);
+            *out = glow(c, BLOOM_LIGHT * v.sqrt(), true);
+        }
+    }
+    image
 }
 
 /// A box blur of `from` into `to`, `radius` pixels either way across or
