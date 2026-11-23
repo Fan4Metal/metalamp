@@ -171,8 +171,12 @@ impl Lightning {
     }
 
     /// Moves on by `dt` seconds with the levels heard now (`None`:
-    /// nothing) in a display of `size`.
-    pub fn feed(&mut self, levels: Option<&[f32]>, dt: f32, size: Vec2) {
+    /// nothing; `moved` false: paused, all stands) in a display of
+    /// `size`.
+    pub fn feed(&mut self, levels: Option<&[f32]>, moved: bool, dt: f32, size: Vec2) {
+        if levels.is_some() && !moved {
+            return;
+        }
         for b in &mut self.bolts {
             b.age += dt;
         }
@@ -734,13 +738,13 @@ mod tests {
         // Too quiet for arcs or tendrils, and no beat.
         let quiet = vec![0.1; BANDS];
         for _ in 0..20 {
-            l.feed(Some(&quiet), 0.02, size);
+            l.feed(Some(&quiet), true, 0.02, size);
         }
         assert!(l.bolts.is_empty());
         // The bass jumps: bolts from the middle to an edge.
         let mut beat = vec![0.3; BANDS];
         beat[..BANDS / 6].fill(0.9);
-        l.feed(Some(&beat), 0.02, size);
+        l.feed(Some(&beat), true, 0.02, size);
         assert!(strikes(&l).count() > 0);
         for b in strikes(&l) {
             let main = &b.paths[0].points;
@@ -761,13 +765,22 @@ mod tests {
         // Loud enough for arcs to both ends, and tendrils for the treble,
         // once they are drawn anew.
         for _ in 0..4 {
-            l.feed(Some(&beat), 0.02, size);
+            l.feed(Some(&beat), true, 0.02, size);
         }
         assert_eq!(l.bolts.iter().filter(|b| b.kind == Kind::Arc).count(), 2);
         assert!(l.bolts.iter().any(|b| b.kind == Kind::Tendril));
+        // Paused: the same levels, nothing new heard, however many frames
+        // (the pointer moving over the window): all stands.
+        let ages: Vec<f32> = l.bolts.iter().map(|b| b.age).collect();
+        let sparks = l.sparks.len();
+        for _ in 0..100 {
+            l.feed(Some(&beat), false, 0.02, size);
+        }
+        assert_eq!(l.bolts.iter().map(|b| b.age).collect::<Vec<_>>(), ages);
+        assert_eq!(l.sparks.len(), sparks);
         // Nothing heard for a second and a half: all gone, sparks too.
         for _ in 0..75 {
-            l.feed(None, 0.02, size);
+            l.feed(None, false, 0.02, size);
         }
         assert!(!l.active());
     }
@@ -778,18 +791,18 @@ mod tests {
         let size = vec2(600.0, 118.0);
         let quiet = vec![0.0; BANDS];
         for _ in 0..20 {
-            l.feed(Some(&quiet), 0.02, size);
+            l.feed(Some(&quiet), true, 0.02, size);
         }
         let mut beat = vec![0.0; BANDS];
         beat[..BANDS / 6].fill(1.0);
-        l.feed(Some(&beat), 0.01, size);
+        l.feed(Some(&beat), true, 0.01, size);
         let b = strikes(&l).next().unwrap();
         // The leader: not yet struck, dimmer than the stroke, no sparks.
         assert!(b.after().is_none() && !b.struck);
         assert!(b.hot() < 0.5);
         assert!(l.sparks.is_empty());
         // The stroke: white-hot, the sparks thrown into the display.
-        l.feed(Some(&quiet), LEADER_S, size);
+        l.feed(Some(&quiet), true, LEADER_S, size);
         let b = strikes(&l).next().unwrap();
         assert!(b.struck);
         assert!(b.hot() > 0.7, "{}", b.hot());
@@ -813,13 +826,13 @@ mod tests {
         };
         let before = b.hot();
         l.bolts.push(b);
-        l.feed(None, 0.002, size);
+        l.feed(None, false, 0.002, size);
         assert!(l.bolts[0].hot() > before + 0.4);
         // The sparks fall.
         let mut l = Lightning::new();
         l.throw_sparks(pos2(300.0, 0.0), vec2(0.0, 1.0), 1.0, size, 1.0);
         let start: f32 = l.sparks.iter().map(|s| s.speed.y).sum();
-        l.feed(None, 0.05, size);
+        l.feed(None, false, 0.05, size);
         let later: f32 = l.sparks.iter().map(|s| s.speed.y).sum();
         assert!(later > start * (1.0 - DRAG * 0.05));
     }

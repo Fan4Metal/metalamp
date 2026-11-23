@@ -257,7 +257,7 @@ impl Visualizer {
                     self.analyzer
                         .levels(&s[s.len() - spectrum::N..], h.rate, lightning::BANDS)
                 });
-                self.lightning.feed(levels.as_deref(), dt, size);
+                self.lightning.feed(levels.as_deref(), new > 0, dt, size);
             }
             Visual::Synthwave => {
                 let row = heard.map(|(s, h)| {
