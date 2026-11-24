@@ -346,10 +346,12 @@ impl Analyzer {
             .filter(|(_, (p, _))| *p > 0.0)
             .map(|(b, &(p, _))| at(b, p) - egui::vec2(0.0, PEAK_HEIGHT))
             .collect();
+        // The peaks a thin line in the tube's colour below them (pale tints
+        // of it read as grey).
         if peaks.len() > 1 {
             painter.add(Shape::line(
                 peaks,
-                PathStroke::new_uv(1.0, move |_, p| colours.peak(place(p)).gamma_multiply(0.6)),
+                PathStroke::new_uv(1.0, move |_, p| colours.at(1.0, place(p)).gamma_multiply(0.7)),
             ));
         }
         // The tube's core: its colour drawn towards white on a dark ground.
