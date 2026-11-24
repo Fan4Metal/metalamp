@@ -185,6 +185,18 @@ pub fn https_get(
             null(),
             WINHTTP_FLAG_SECURE,
         ))?;
+        // Answers compressed, which WinHTTP unpacks itself (Windows 8.1
+        // and later; refused before, then asked plain): on this machine an
+        // answer of LRCLIB's of 47 KB stalled after 25 KB sent plain (HTTPS
+        // scanning on the way, it seems) until the timeout, and came whole
+        // at once compressed.
+        let unpack = WINHTTP_DECOMPRESSION_FLAG_GZIP | WINHTTP_DECOMPRESSION_FLAG_DEFLATE;
+        WinHttpSetOption(
+            request.0,
+            WINHTTP_OPTION_DECOMPRESSION,
+            (&raw const unpack).cast(),
+            size_of::<u32>() as u32,
+        );
         check(WinHttpSendRequest(
             request.0,
             headers.as_ptr(),
