@@ -411,6 +411,9 @@ pub struct LyricsWindow {
     /// Where it was put as it opened, given to the builder each frame (a
     /// place following the window's own would fight its moves).
     opened: Option<Rect>,
+    /// The player's keys pressed in it, for the app to run (as the sound
+    /// tuning window's).
+    pub cmds: Vec<crate::keymap::Cmd>,
 }
 
 /// What the window shows: the title and the second line of the track.
@@ -425,7 +428,8 @@ pub struct Shown<'a> {
 impl LyricsWindow {
     /// Shows the window while `open`; `place` its rectangle, kept as it
     /// moves (returns whether it moved). The panel's acts are returned;
-    /// closed, `open` is cleared.
+    /// closed, `open` is cleared. The chords of `keymap` (none while a
+    /// modal is open) go to [`LyricsWindow::cmds`].
     pub fn show(
         &mut self,
         ctx: &egui::Context,
@@ -433,6 +437,7 @@ impl LyricsWindow {
         open: &mut bool,
         place: &mut Option<[f32; 4]>,
         shown: &Shown,
+        keymap: Option<&crate::keymap::Keymap>,
     ) -> (Vec<Act>, bool) {
         if !*open {
             if self.opened.take().is_some() {
@@ -460,8 +465,15 @@ impl LyricsWindow {
             let ctx = ui.ctx().clone();
             self.window.follow(&ctx, window_title(), owner, dark);
             close |= ctx.input(|i| i.viewport().close_requested());
-            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            if !egui::Popup::is_any_open(&ctx)
+                && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+            {
                 close = true;
+            }
+            // The player's keys: the window has no text field, so all of
+            // them.
+            if let Some(keymap) = keymap {
+                self.cmds.extend(crate::keymap::take(&ctx, keymap, |_| true));
             }
             if let (Some(outer), Some(inner)) =
                 ctx.input(|i| (i.viewport().outer_rect, i.viewport().inner_rect))

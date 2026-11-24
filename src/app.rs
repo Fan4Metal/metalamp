@@ -2335,9 +2335,13 @@ impl eframe::App for App {
             &mut window_open,
             &mut self.settings.lyrics_window_place,
             &shown,
+            (!modal).then_some(&self.settings.keys),
         );
         if was_open && !window_open {
             self.settings.lyrics_window = false;
+        }
+        for cmd in std::mem::take(&mut self.lyrics_window.cmds) {
+            self.run_key(cmd, &ctx);
         }
         for act in acts {
             match act {
