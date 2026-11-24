@@ -61,9 +61,6 @@ pub struct StatisticsView {
     took: Duration,
     /// Scrolled to this offset at start (`METALAMP_STATISTICS=<offset>`).
     scroll: Option<f32>,
-    /// No library is shown (the player and playlist layout): the artists
-    /// and tracks lead nowhere. Set by the app each frame.
-    pub no_library: bool,
 }
 
 /// Where a click takes the library.
@@ -73,9 +70,8 @@ enum Go {
     Track(AlbumId, TrackId),
 }
 
-/// Whether the rows lead to the library, and where the one clicked does.
+/// Where the row clicked leads.
 struct Going {
-    allowed: bool,
     to: Option<Go>,
 }
 
@@ -144,10 +140,7 @@ impl StatisticsView {
         // Over the first frames: the first ones do not know the content's
         // height yet, to which the offset is held.
         let scroll = self.scroll.filter(|_| ctx.cumulative_frame_nr() < 20);
-        let mut go = Going {
-            allowed: !self.no_library,
-            to: None,
-        };
+        let mut go = Going { to: None };
         let mut close = false;
         let modal = egui::Modal::new(Id::new("statistics"))
             .frame(
@@ -1430,7 +1423,7 @@ fn hbars(ui: &Ui, rect: Rect, id: Id, rows: &[Row], labels: f32, go: &mut Going)
     let room = (rect.right() - value_w - bar_left).max(10.0);
     let (accent, lit) = (palette::accent(), palette::accent_hover());
     for (i, r) in rows.iter().enumerate() {
-        let leads = r.go.filter(|_| go.allowed);
+        let leads = r.go;
         let row = Rect::from_min_size(
             pos2(rect.left(), rect.top() + i as f32 * row_h),
             vec2(rect.width(), row_h),

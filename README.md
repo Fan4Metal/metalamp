@@ -117,7 +117,7 @@ Albums are grouped by album artist (else artist) and album title, whatever the y
 
 ### Statistics
 
-The chart button in the library's bar (or `F6`) opens the library's statistics: tiles with the numbers of tracks, albums, artists and genres, the total length and size, the plays and the time heard, and charts under them. Every bar and slice shows its numbers under the pointer; a click on an artist or a track goes to it in the library. The cross, `Esc`, `Enter` or a click outside closes the window.
+The chart button in the library's bar (or `F6`) opens the library's statistics: tiles with the numbers of tracks, albums, artists and genres, the total length and size, the plays and the time heard, and charts under them. Every bar and slice shows its numbers under the pointer; a click on an artist or a track goes to it in the library. The cross, `Esc`, `Enter` or a click outside closes the window. The player and playlist layout, which shows no library, has no statistics either.
 
 <details>
 <summary>The charts</summary>

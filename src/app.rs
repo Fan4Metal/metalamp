@@ -1166,7 +1166,12 @@ impl App {
                 }
             }
             Cmd::Settings => self.settings_dialog.toggle(),
-            Cmd::Statistics => self.statistics.toggle(),
+            // The library's: the player and playlist layout has none.
+            Cmd::Statistics => {
+                if self.settings.window_layout == WindowLayout::Library {
+                    self.statistics.toggle();
+                }
+            }
             Cmd::About => self.about.toggle(),
         }
     }
@@ -2540,7 +2545,6 @@ impl eframe::App for App {
             self.outside.read_again(&ctx);
         }
         self.about.show(&ctx);
-        self.statistics.no_library = self.settings.window_layout == WindowLayout::Playlist;
         if let Some(action) = self.statistics.show(&ctx, &self.library, &self.stats) {
             self.library_action(action, &ctx);
         }

@@ -295,11 +295,15 @@ fn menu(ui: &mut Ui, ticks: Ticks, cmd: &mut Option<TitleCmd>) {
         ui.close();
     }
     ui.separator();
-    for (label, what) in [
+    // The statistics are the library's: not in the player and playlist
+    // layout, which has none.
+    let statistics = ticks.library.then(|| {
         (
             tr!("Library statistics", "Статистика библиотеки").to_owned(),
             Cmd::Statistics,
-        ),
+        )
+    });
+    for (label, what) in statistics.into_iter().chain([
         (tr!("Settings", "Настройки").to_owned(), Cmd::Settings),
         (
             tr!(
@@ -308,7 +312,7 @@ fn menu(ui: &mut Ui, ticks: Ticks, cmd: &mut Option<TitleCmd>) {
             ),
             Cmd::About,
         ),
-    ] {
+    ]) {
         if ui.button(with_key(&label, what)).clicked() {
             run = Some(what);
         }
