@@ -24,6 +24,8 @@ const EASE_S: f32 = 0.12;
 const HAND_S: f64 = 4.0;
 /// The fades at the top and the bottom.
 const FADE: f32 = 18.0;
+/// The round button asking LRCLIB again, without lyrics: its side.
+const AGAIN: f32 = 28.0;
 
 /// What the panel asks for.
 pub enum Act {
@@ -117,9 +119,22 @@ pub fn show(
                     "В файле нет текста. Поиск в интернете выключен в настройках."
                 ),
             };
-            note(ui, inner, rect.center().y, why);
+            // LRCLIB may be asked again from here: a round arrow under the
+            // word why.
+            let y = if online {
+                rect.center().y - AGAIN / 2.0
+            } else {
+                rect.center().y
+            };
+            let bottom = note(ui, inner, y, why);
             if let Some(e) = failed {
                 resp.clone().on_hover_text(e.as_str());
+            }
+            if online {
+                let centre = pos2(rect.center().x, bottom + GAP + AGAIN / 2.0);
+                if again_button(ui, id.with("again"), centre) {
+                    acts.push(Act::Ask(How::Fresh));
+                }
             }
         }
         State::Found(text) => {
@@ -281,8 +296,8 @@ pub fn show(
     acts
 }
 
-/// A word in the middle, wrapped to the width.
-fn note(ui: &Ui, inner: Rect, y: f32, text: &str) {
+/// A word in the middle, wrapped to the width: its bottom.
+fn note(ui: &Ui, inner: Rect, y: f32, text: &str) -> f32 {
     let mut job = egui::text::LayoutJob::simple(
         text.to_owned(),
         FontId::proportional(13.0),
@@ -292,8 +307,34 @@ fn note(ui: &Ui, inner: Rect, y: f32, text: &str) {
     job.halign = Align::Center;
     let galley = ui.fonts_mut(|f| f.layout_job(job));
     let top = y - galley.size().y / 2.0;
+    let bottom = top + galley.size().y;
     ui.painter_at(inner)
         .galley(pos2(inner.center().x, top), galley, palette::text_weak());
+    bottom
+}
+
+/// The round button asking LRCLIB again, at `centre`: clicked.
+fn again_button(ui: &mut Ui, id: egui::Id, centre: egui::Pos2) -> bool {
+    use crate::ui::icons::{self, Icon};
+    let rect = Rect::from_center_size(centre, vec2(AGAIN, AGAIN));
+    let resp = ui.interact(rect, id, Sense::click());
+    let (fill, colour) = if resp.hovered() {
+        let fill = if resp.is_pointer_button_down_on() {
+            palette::pressed()
+        } else {
+            palette::hover()
+        };
+        (fill, palette::text_bright())
+    } else {
+        (palette::list_bg(), palette::text_weak())
+    };
+    if resp.hovered() {
+        ui.painter().circle_filled(centre, AGAIN / 2.0, fill);
+    }
+    icons::paint(ui.painter(), Icon::Refresh, centre, icons::SIZE, colour, fill);
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(tr!("Look on LRCLIB again", "Искать в LRCLIB заново"))
+        .clicked()
 }
 
 /// The lines, scrolled; the time of a synced line clicked.
