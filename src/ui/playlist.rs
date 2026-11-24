@@ -201,6 +201,8 @@ pub enum PlaylistAction {
     Export,
     /// The lyrics' menu: the lyrics looked for again this way.
     Lyrics(crate::lyrics::How),
+    /// The lyrics' menu: LRCLIB's lyrics written into the file's tag.
+    SaveLyrics,
 }
 
 /// What the panel shows under the list: the cover of the track playing,
@@ -482,6 +484,7 @@ pub fn show(
                     *lyrics_window = true;
                 }
                 crate::ui::lyrics::Act::Ask(how) => actions.push(PlaylistAction::Lyrics(how)),
+                crate::ui::lyrics::Act::SaveToTag => actions.push(PlaylistAction::SaveLyrics),
             }
         }
     }

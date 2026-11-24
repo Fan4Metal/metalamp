@@ -35,6 +35,8 @@ pub enum Act {
     /// From under the playlist into a window of their own, and back.
     ToWindow,
     ToPanel,
+    /// LRCLIB's lyrics written into the file's tag.
+    SaveToTag,
 }
 
 /// Where the lyrics are shown, for their menu.
@@ -129,6 +131,10 @@ pub fn show(
                     "В LRCLIB нет текста этого трека"
                 )),
                 Note::LrclibFailed(_) => Some(tr!("LRCLIB did not answer", "LRCLIB не ответил")),
+                Note::SaveFailed(_) => Some(tr!(
+                    "The lyrics could not be written into the tag",
+                    "Не удалось записать текст в тег"
+                )),
             };
             let mut inner = inner;
             if let Some(why) = why {
@@ -145,7 +151,7 @@ pub fn show(
                     palette::text_weak(),
                 );
                 inner.min.y += h + GAP;
-                if let Note::LrclibFailed(e) = &text.note
+                if let Note::LrclibFailed(e) | Note::SaveFailed(e) = &text.note
                     && resp.hovered()
                 {
                     resp.clone().on_hover_text(e.as_str());
@@ -231,6 +237,20 @@ pub fn show(
                     .clicked()
             {
                 acts.push(Act::Ask(How::Lrclib));
+                ui.close();
+            }
+            if let State::Found(t) = state
+                && t.source == Source::Lrclib
+                && t.writable
+                && ui
+                    .button(tr!("Save into the tag", "Сохранить в тег"))
+                    .on_hover_text(tr!(
+                        "The lyrics written into the file's tag, synced ones with their times (LRC), as the file info writes tags; the file then has them without the internet.",
+                        "Текст записывается в тег файла, синхронизированный — с метками времени (LRC), так же, как теги пишет окно сведений о файле; после этого он есть в файле и без интернета."
+                    ))
+                    .clicked()
+            {
+                acts.push(Act::SaveToTag);
                 ui.close();
             }
             if let Some(own) = own {

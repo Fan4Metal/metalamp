@@ -562,6 +562,17 @@ impl App {
         self.lyrics.follow(ctx, Some(ask));
     }
 
+    /// LRCLIB's lyrics shown written into the file's tag, the MP3's other
+    /// tags as the settings say (as the file info writes them).
+    fn save_lyrics(&mut self, ctx: &egui::Context) {
+        let how = crate::library::edit::WriteTags {
+            id3v2: self.settings.id3v2_version,
+            id3v1: self.settings.id3v1,
+            ape: self.settings.ape,
+        };
+        self.lyrics.save_to_tag(ctx, self.player.releaser(), how);
+    }
+
     /// What the playlist shows under its list.
     fn under_playlist<'a>(
         settings: &'a mut Settings,
@@ -987,6 +998,7 @@ impl App {
                 }
                 crate::ui::playlist::PlaylistAction::Export => self.export_playlist(ctx),
                 crate::ui::playlist::PlaylistAction::Lyrics(how) => self.lyrics.ask_again(how),
+                crate::ui::playlist::PlaylistAction::SaveLyrics => self.save_lyrics(ctx),
                 crate::ui::playlist::PlaylistAction::EditTags(indices) => {
                     let paths = self.playlist_paths(&indices);
                     self.file_info.open(ctx, paths, true);
@@ -2250,6 +2262,12 @@ impl eframe::App for App {
         self.playlist_view.numbers = self.settings.playlist_numbers;
         self.playlist_view.lengths = self.settings.playlist_lengths;
         self.follow_lyrics(&ctx);
+        if self.lyrics.take_written() {
+            // A tag written: read again, as after the file info's.
+            self.rescan();
+            self.outside.read_again(&ctx);
+            self.playlist_view.loose.forget();
+        }
         let lyrics_shown = (
             self.settings.playlist_cover,
             self.settings.playlist_lyrics,
@@ -2353,6 +2371,7 @@ impl eframe::App for App {
                     self.settings.playlist_lyrics = true;
                     self.settings.playlist_visible = true;
                 }
+                crate::ui::lyrics::Act::SaveToTag => self.save_lyrics(&ctx),
                 crate::ui::lyrics::Act::ShowCover
                 | crate::ui::lyrics::Act::Hide
                 | crate::ui::lyrics::Act::ToWindow => {}

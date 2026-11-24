@@ -55,7 +55,7 @@ pub struct Line {
     pub text: String,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Text {
     pub lines: Vec<Line>,
     /// Every line has its time, in order.
@@ -63,19 +63,26 @@ pub struct Text {
     pub source: Source,
     /// LRCLIB's lyrics shown over the file's own: where those are.
     pub own: Option<Source>,
-    /// Why the file's own lyrics are shown though LRCLIB's were asked for.
+    /// Why the file's own lyrics are shown though LRCLIB's were asked for,
+    /// or why they could not be written into the tag.
     pub note: Note,
+    /// The file's tag can be written (`edit::writable`): LRCLIB's lyrics
+    /// may be saved into it.
+    pub writable: bool,
 }
 
-/// LRCLIB's lyrics were asked for and are not shown: why.
+/// Something to say over the lyrics shown.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum Note {
     #[default]
     None,
-    /// LRCLIB has no lyrics of the track.
+    /// LRCLIB's lyrics were asked for: it has none of the track.
     LrclibHasNone,
-    /// LRCLIB could not be asked (technical, in English).
+    /// LRCLIB's lyrics were asked for: it could not be asked (technical,
+    /// in English).
     LrclibFailed(String),
+    /// LRCLIB's lyrics could not be written into the tag: why.
+    SaveFailed(String),
 }
 
 /// How the lyrics are looked for.
@@ -104,6 +111,29 @@ impl Text {
             .lines
             .partition_point(|l| l.at_ms.is_some_and(|at| at <= ms));
         n.checked_sub(1)
+    }
+
+    /// The lines as a tag keeps them: synced ones as LRC (`[mm:ss.xx]`
+    /// before each line, the times as shown, any offset applied), else as
+    /// they are.
+    pub fn lrc(&self) -> String {
+        if !self.synced {
+            return self.plain();
+        }
+        self.lines
+            .iter()
+            .map(|l| {
+                let ms = l.at_ms.unwrap_or(0);
+                format!(
+                    "[{:02}:{:02}.{:02}]{}",
+                    ms / 60_000,
+                    ms / 1000 % 60,
+                    ms % 1000 / 10,
+                    l.text
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// The lines as text, for the clipboard.
@@ -155,6 +185,9 @@ pub struct Lyrics {
     /// How the next ask looks (then back to the usual way).
     how: How,
     state: State,
+    /// LRCLIB's lyrics being written into a file's tag: the file, and
+    /// what came of it.
+    saving: Option<(PathBuf, Receiver<Result<(), String>>)>,
 }
 
 impl Default for Lyrics {
@@ -166,6 +199,7 @@ impl Default for Lyrics {
             number: 0,
             how: How::Usual,
             state: State::Idle,
+            saving: None,
         }
     }
 }
@@ -239,6 +273,88 @@ impl Lyrics {
         self.asked = None;
         self.how = how;
     }
+
+    /// Writes LRCLIB's lyrics shown into the file's tag (as LRC when
+    /// synced) on a thread, as the file info writes tags: the player lets
+    /// go of the file meanwhile (`releaser`), the MP3's other tags as `how`.
+    pub fn save_to_tag(
+        &mut self,
+        ctx: &egui::Context,
+        releaser: crate::audio::Releaser,
+        how: crate::library::edit::WriteTags,
+    ) {
+        let (Some(ask), State::Found(text)) = (&self.asked, &self.state) else {
+            return;
+        };
+        if text.source != Source::Lrclib || !text.writable || self.saving.is_some() {
+            return;
+        }
+        let path = ask.path.clone();
+        let changes = crate::library::edit::Changes {
+            lyrics: Some(text.lrc()),
+            ..Default::default()
+        };
+        let (tx, rx) = channel();
+        let ctx = ctx.clone();
+        let file = path.clone();
+        let spawned = std::thread::Builder::new()
+            .name("lyrics tag".into())
+            .spawn(move || {
+                let held = releaser.hold(vec![file.clone()]);
+                let result = crate::guard::catch(&file, || {
+                    crate::library::edit::write(&file, &changes, how)
+                })
+                .unwrap_or_else(|| Err("cannot be written".into()));
+                drop(held);
+                let _ = tx.send(result);
+                ctx.request_repaint();
+            });
+        match spawned {
+            Ok(_) => self.saving = Some((path, rx)),
+            Err(e) => self.save_failed(e.to_string()),
+        }
+    }
+
+    /// Whether LRCLIB's lyrics were written into a file since the last
+    /// call (its tags are to be read again). Written, the track's own
+    /// lyrics are shown (now the same); not, why over them.
+    pub fn take_written(&mut self) -> bool {
+        let Some((path, rx)) = &self.saving else {
+            return false;
+        };
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("not written".into()),
+        };
+        let path = path.clone();
+        self.saving = None;
+        match result {
+            Ok(()) => {
+                log::debug!("lyrics: written into {}", path.display());
+                if self.asked.as_ref().is_some_and(|a| a.path == path) {
+                    self.ask_again(How::Own);
+                }
+                true
+            }
+            Err(e) => {
+                log::warn!("lyrics: cannot write {}: {e}", path.display());
+                if self.asked.as_ref().is_some_and(|a| a.path == path) {
+                    self.save_failed(e);
+                }
+                false
+            }
+        }
+    }
+
+    /// The lyrics shown with why they were not written.
+    fn save_failed(&mut self, why: String) {
+        if let State::Found(text) = &self.state {
+            let mut text = (**text).clone();
+            text.note = Note::SaveFailed(why);
+            self.state = State::Found(Arc::new(text));
+        }
+    }
 }
 
 fn lyrics_thread(asks: &Receiver<Job>, answers: &Sender<(u64, State)>, ctx: &egui::Context) {
@@ -248,7 +364,12 @@ fn lyrics_thread(asks: &Receiver<Job>, answers: &Sender<(u64, State)>, ctx: &egu
             job = later;
         }
         let started = std::time::Instant::now();
-        let state = look(&job.ask, job.how);
+        let mut state = look(&job.ask, job.how);
+        if let State::Found(text) = &mut state
+            && let Some(text) = Arc::get_mut(text)
+        {
+            text.writable = crate::library::edit::writable(&job.ask.path);
+        }
         log::debug!(
             "lyrics: {} {} in {} ms",
             job.ask.path.display(),
@@ -402,6 +523,7 @@ fn found(text: &str, source: Source, own: Option<Source>, note: Note) -> State {
         source,
         own,
         note,
+        writable: false,
     }))
 }
 
@@ -849,11 +971,34 @@ mod tests {
             source: Source::Tag,
             own: None,
             note: Note::None,
+            writable: false,
         };
         assert_eq!(text.current(0), None);
         assert_eq!(text.current(1000), Some(0));
         assert_eq!(text.current(4999), Some(1));
         assert_eq!(text.current(60_000), Some(2));
+    }
+
+    #[test]
+    fn synced_lyrics_go_back_to_lrc() {
+        let (lines, synced) = parse("[offset:+500]\n[00:02.00]a\n[01:02.53]\n[61:00.00]c");
+        let text = Text {
+            lines,
+            synced,
+            source: Source::Lrclib,
+            own: None,
+            note: Note::None,
+            writable: true,
+        };
+        assert_eq!(text.lrc(), "[00:01.50]a\n[01:02.03]\n[60:59.50]c");
+        assert_eq!(parse(&text.lrc()), (text.lines.clone(), true));
+        let (lines, synced) = parse("one\n\ntwo");
+        let plain = Text {
+            lines,
+            synced,
+            ..text
+        };
+        assert_eq!(plain.lrc(), "one\n\ntwo");
     }
 
     #[test]
@@ -1072,6 +1217,45 @@ mod tests {
         has.set(false);
         assert_eq!(source(&ask, How::Usual), Source::File);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With `METALAMP_SAMPLE`: synced lyrics written into a copy of it as
+    /// LRC are read back synced, the same.
+    #[test]
+    #[ignore]
+    fn lrc_written_into_a_copy_reads_back_synced() {
+        let sample = PathBuf::from(std::env::var("METALAMP_SAMPLE").expect("METALAMP_SAMPLE"));
+        let copy = std::env::temp_dir().join(format!(
+            "metalamp-lrc-{}.{}",
+            std::process::id(),
+            sample.extension().unwrap().to_string_lossy()
+        ));
+        std::fs::copy(&sample, &copy).unwrap();
+        // The copy takes a read-only file's attribute.
+        let mut permissions = std::fs::metadata(&copy).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        std::fs::set_permissions(&copy, permissions).unwrap();
+        let (lines, synced) = parse("[00:01.00]First\n[00:03.25]Second line\n[00:05.00]");
+        let text = Text {
+            lines,
+            synced,
+            source: Source::Lrclib,
+            own: None,
+            note: Note::None,
+            writable: true,
+        };
+        let changes = crate::library::edit::Changes {
+            lyrics: Some(text.lrc()),
+            ..Default::default()
+        };
+        let written = crate::library::edit::write(&copy, &changes, Default::default());
+        let back = tag_lyrics(&copy);
+        let _ = std::fs::remove_file(&copy);
+        written.unwrap();
+        let back = back.expect("lyrics in the tag");
+        println!("{back}");
+        assert_eq!(parse(&back), (text.lines, true));
     }
 
     /// LRCLIB asked for real, with a well-known song (not the user's).
