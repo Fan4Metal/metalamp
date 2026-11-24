@@ -216,6 +216,8 @@ enum Act {
     Save,
     /// To a file, or to all of them.
     Go(Option<usize>),
+    /// Editing one file: its changes written, then to the file given.
+    SaveAndGo(usize),
     Cover(CoverAct),
     /// The cover shown large.
     Zoom,
@@ -708,10 +710,10 @@ impl Form {
     }
 
     /// Why another file cannot be gone to now (`all`: all the files are
-    /// shown at once), while editing: LRCLIB is being asked, or all the
-    /// files hold changes typed in, which going would write into every one
-    /// of them unasked (going from one file saves it; LRCLIB's lyrics of
-    /// all the files go with the window, `InfoView::go`).
+    /// shown at once), while editing: LRCLIB is being asked, or changes
+    /// wait (of all the files, those typed in: LRCLIB's lyrics of all the
+    /// files go with the window, `InfoView::go`); going does not write
+    /// them, "Save and next" does (`InfoView::save_and_go`).
     fn held(&self, all: bool) -> Option<&'static str> {
         if self.looking() {
             Some(tr!(
@@ -722,6 +724,11 @@ impl Form {
             Some(tr!(
                 "Save or cancel the changes first",
                 "Сначала сохраните или отмените изменения"
+            ))
+        } else if !all && self.touched() {
+            Some(tr!(
+                "Save or cancel the changes first, or use \"Save and next\" below",
+                "Сначала сохраните или отмените изменения, или нажмите «Сохранить и далее» внизу"
             ))
         } else {
             None
@@ -1005,8 +1012,8 @@ impl InfoView {
         written || any
     }
 
-    /// Goes to the file `to` (or all of them), saving the fields typed in
-    /// first; not while one of them cannot be written (`stuck`).
+    /// Goes to the file `to` (or all of them), writing nothing: not while
+    /// changes typed in wait (`held`; "Save and next" writes and goes).
     /// From all the files at once, LRCLIB's lyrics found go with the
     /// window, not written: the file gone to has its own in its field (the
     /// lyrics' tab shown), to be looked at, and the others are kept.
@@ -1026,10 +1033,25 @@ impl InfoView {
                 set_tab(ctx, Tab::Lyrics);
             }
         }
-        if self.editing && self.form.as_ref().is_some_and(Form::touched) {
-            self.save(ctx, Some(to));
+        // Changes typed in hold going (`held`): it writes nothing.
+        self.switch(ctx, to);
+    }
+
+    /// "Save and next" / "Save and back": the file edited written when it
+    /// holds changes, then the file `to` edited (not when writing failed:
+    /// the error stays shown).
+    fn save_and_go(&mut self, ctx: &egui::Context, to: usize) {
+        if self.stuck() || self.at.is_none() || to >= self.paths.len() {
+            return;
+        }
+        let Some(form) = &self.form else { return };
+        if form.looking() || form.state != State::Ready {
+            return;
+        }
+        if form.touched() {
+            self.save(ctx, Some(Some(to)));
         } else {
-            self.switch(ctx, to);
+            self.switch(ctx, Some(to));
         }
     }
 
@@ -1149,6 +1171,7 @@ impl InfoView {
             Act::Cancel => self.stop_editing(),
             Act::Save => self.save(ctx, None),
             Act::Go(to) => self.go(ctx, to),
+            Act::SaveAndGo(to) => self.save_and_go(ctx, to),
             Act::Cover(act) => self.cover_act(ctx, act),
             Act::Zoom => self.zoom_in(ctx),
             Act::PickLyrics => self.pick_lyrics = true,
@@ -1876,7 +1899,14 @@ impl InfoView {
                     right: 14,
                     ..egui::Margin::ZERO
                 })
-                .show(ui, |ui| footer_row(ui, self.form.as_ref(), acts));
+                .show(ui, |ui| {
+                    // One of several files: the files before and after it.
+                    let steps = self.at.filter(|_| self.paths.len() > 1).map(|i| {
+                        let next = Some(i + 1).filter(|&n| n < self.paths.len());
+                        (i.checked_sub(1), next)
+                    });
+                    footer_row(ui, self.form.as_ref(), steps, acts)
+                });
         }
     }
 }
@@ -3341,8 +3371,16 @@ fn errors(ui: &mut Ui, errors: &[String]) {
 }
 
 /// Under the fields while editing: what could not be read or written,
-/// "Writing…", Cancel and Save.
-fn footer_row(ui: &mut Ui, form: Option<&Form>, acts: &mut Vec<Act>) {
+/// "Writing…", Cancel and Save; editing one of several files (`steps`:
+/// the files before and after it), "Save and back" and "Save and next"
+/// either side of Save, as Tag&Rename has them (the arrows in the corner
+/// wait while changes do).
+fn footer_row(
+    ui: &mut Ui,
+    form: Option<&Form>,
+    steps: Option<(Option<usize>, Option<usize>)>,
+    acts: &mut Vec<Act>,
+) {
     ui.add_space(6.0);
     if let Some(f) = form {
         errors(ui, &f.errors);
@@ -3352,25 +3390,68 @@ fn footer_row(ui: &mut Ui, form: Option<&Form>, acts: &mut Vec<Act>) {
     let can_save = form.is_some_and(|f| {
         f.state == State::Ready && f.touched() && f.valid() && !f.looking()
     });
+    let can_step = form.is_some_and(|f| f.state == State::Ready && f.valid() && !f.looking());
     let looking = form.is_some_and(Form::looking);
+    let looking_tip = |r: egui::Response| {
+        if looking {
+            r.on_disabled_hover_text(tr!(
+                "Looking on LRCLIB: wait for it to end",
+                "Идёт поиск в LRCLIB: дождитесь его окончания"
+            ))
+        } else {
+            r
+        }
+    };
+    let step = |ui: &mut Ui, to: Option<usize>, label: &str, tip: &str| {
+        looking_tip(
+            ui.add_enabled(
+                can_step && to.is_some(),
+                egui::Button::new(label).min_size(vec2(100.0, 0.0)),
+            )
+            .on_hover_text(tip),
+        )
+        .clicked()
+        .then_some(to)
+        .flatten()
+    };
     ui.horizontal(|ui| {
         if state == Some(&State::Saving) {
             ui.spinner();
             ui.weak(tr!("Writing…", "Запись…"));
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let mut save = ui.add_enabled(
+            if let Some((_, next)) = steps
+                && let Some(to) = step(
+                    ui,
+                    next,
+                    tr!("Save and next", "Сохранить и далее"),
+                    tr!(
+                        "Writes this file's changes (if any) and edits the next file",
+                        "Записывает изменения этого файла (если они есть) и переходит к правке следующего"
+                    ),
+                )
+            {
+                acts.push(Act::SaveAndGo(to));
+            }
+            let save = looking_tip(ui.add_enabled(
                 can_save,
                 egui::Button::new(tr!("Save", "Сохранить")).min_size(vec2(100.0, 0.0)),
-            );
-            if looking {
-                save = save.on_disabled_hover_text(tr!(
-                    "Looking on LRCLIB: wait for it to end",
-                    "Идёт поиск в LRCLIB: дождитесь его окончания"
-                ));
-            }
+            ));
             if save.clicked() {
                 acts.push(Act::Save);
+            }
+            if let Some((previous, _)) = steps
+                && let Some(to) = step(
+                    ui,
+                    previous,
+                    tr!("Save and back", "Сохранить и назад"),
+                    tr!(
+                        "Writes this file's changes (if any) and edits the file before it",
+                        "Записывает изменения этого файла (если они есть) и переходит к правке предыдущего"
+                    ),
+                )
+            {
+                acts.push(Act::SaveAndGo(to));
             }
             if ui
                 .add_enabled(
@@ -4097,7 +4178,7 @@ mod tests {
 
     /// No other file is gone to while LRCLIB is asked, nor from all the
     /// files at once while they hold changes (going would write them into
-    /// every file unasked); from one file, going saves it as before.
+    /// every file unasked), nor from one file holding changes.
     #[test]
     fn going_waits_for_lrclib_and_for_all_the_files_changes() {
         let ctx = egui::Context::default();
@@ -4128,7 +4209,12 @@ mod tests {
             source: None,
         });
         assert!(form.held(true).is_some());
-        assert_eq!(form.held(false), None);
+        // One file holding a change: the arrows wait too ("Save and next"
+        // writes and goes).
+        let mut one = Form::read(&ctx, vec![PathBuf::from("a.mp3")], Id3Version::default());
+        assert_eq!(one.held(false), None);
+        one.cover = form.cover.take();
+        assert!(one.held(false).is_some());
     }
 
     /// From all the files at once, LRCLIB's lyrics go with the window: the
