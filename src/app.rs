@@ -1139,13 +1139,14 @@ impl App {
                     self.file_info.open_spectrum(ctx, &path, heading, facts);
                 }
             }
-            // The selection of the playlist when it has the keys, else of
-            // the tracks' table.
+            // The selection of the playlist when it has the keys, else the
+            // library pane's that has them (`tracks_to_edit`).
             Cmd::EditTags => {
-                let paths = if self.playlist_view.focused {
+                let no_library = self.settings.window_layout == WindowLayout::Playlist;
+                let paths = if self.playlist_view.focused || no_library {
                     self.playlist_paths(&self.playlist_view.selection())
                 } else {
-                    let tracks = self.library_view.selected_tracks_of(&self.library);
+                    let tracks = self.library_view.tracks_to_edit(&self.library);
                     self.paths_of(&tracks)
                 };
                 self.file_info.open(ctx, paths, true);

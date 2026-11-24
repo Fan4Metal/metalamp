@@ -379,7 +379,7 @@ The keys below are the defaults; those of the player's actions can be changed in
 | `Alt+E` | Show or hide the playlist |
 | `I`, `Alt+3` | File info of the selected track (else of the one playing) |
 | `Shift+I` | Spectrum of the selected track (else of the one playing; in the file info, of the file shown) |
-| `Ctrl+E` | Edit the tags of the selected tracks (in the playlist when it was clicked last) |
+| `Ctrl+E` | Edit the tags of the selected tracks (in the playlist when it was clicked last); in the albums' pane, of every track of the album chosen, in the artists' pane, of the artist chosen |
 | `G`, `Shift+G` | Go to the album, to the artist of the selected track (else of the one playing) |
 | Arrows, `Page Up`, `Page Down`, `Home`, `End` | Move in the pane clicked last |
 | Letters, with the pointer over the artists | Go to the first artist starting with them (the same letter again goes on to the next one) |

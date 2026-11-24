@@ -393,6 +393,28 @@ impl LibraryView {
             .collect()
     }
 
+    /// The tracks whose tags Ctrl+E edits, by the pane that has the keys:
+    /// the tracks' table's selection (none: the album's or the artist's
+    /// tracks shown, when one is chosen); the album chosen's tracks; the
+    /// artist chosen's. "All" alone gives none (the whole library is not
+    /// edited by a key).
+    pub fn tracks_to_edit(&self, library: &Arc<Library>) -> Vec<TrackId> {
+        let selected = self.selected_tracks_of(library);
+        if self.focus == Pane::Tracks && !selected.is_empty() {
+            return selected;
+        }
+        let chosen = match self.focus {
+            Pane::Artists => self.artist.is_some(),
+            Pane::Albums | Pane::Tracks => self.album.is_some() || self.artist.is_some(),
+        };
+        match (&self.key, &self.view) {
+            (Some(key), Some(view)) if chosen && key.library == library.generation => {
+                view.tracks.clone()
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// The track selected last in the tracks' table, if any.
     pub fn selected_track(&self) -> Option<TrackId> {
         let row = self
