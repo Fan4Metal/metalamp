@@ -462,6 +462,7 @@ fn with_tag<R>(
         if let Some(changes) = changes {
             keep_numbers(tag, changes);
         }
+        mend_languages(tag);
     };
     let (view, file_type) = super::tags::first_tag_view(path).map_err(|e| e.to_string())?;
     let mut reader = BufReader::new(view);
@@ -492,6 +493,9 @@ fn with_tag<R>(
         Some(FileType::Mpeg) => {
             let file = lofty::mpeg::MpegFile::read_from(&mut reader, options).map_err(err)?;
             drop(reader);
+            if save && let Some(tag) = file.id3v2() {
+                not_losing(path, tag)?;
+            }
             let (write, kind) = id3(id3v23(file.id3v2()));
             let f = move |t: &mut Tag| f(t, kind);
             let tag = file.id3v2().cloned().unwrap_or_else(|| {
@@ -508,6 +512,7 @@ fn with_tag<R>(
                     .flatten(),
                 )
             });
+            let tag = mended(tag);
             edit(tag, f, save, path, write, numbers)
         }
         Some(FileType::Wav) => {
@@ -519,6 +524,7 @@ fn with_tag<R>(
                 .id3v2()
                 .cloned()
                 .unwrap_or_else(|| seeded(file.riff_info().cloned().map(Tag::from)));
+            let tag = mended(tag);
             edit(tag, f, save, path, write, numbers)
         }
         Some(FileType::Flac) => {
@@ -606,6 +612,129 @@ where
             .map_err(|e| in_use(&described(&e)))?;
     }
     Ok(out)
+}
+
+/// Comments and lyrics (COMM, USLT) as old taggers (MusicMatch) wrote them
+/// made such as lofty writes back: a language that is not three ASCII
+/// letters (`\0\0\0`, read, but refused when written, so such a file
+/// could not be edited at all: 29 of D:\Music's MP3s, Aqua's Aquarium
+/// among them) given ID3's "unknown", `XXX`; NULs at either end of the
+/// content or the description cut (MusicMatch wrote `\0Bio\0` as the
+/// content of the comment described "Bio"; lofty splits the content at NULs into
+/// values, the description only on the first, and the frames it made of
+/// them were written so that it could not read the tag back).
+fn mend_languages(tag: &mut Id3v2Tag) {
+    tag.retain_mut(|frame| {
+        let (language, description, content) = match frame {
+            Frame::Comment(f) => (&mut f.language, &mut f.description, &mut f.content),
+            Frame::UnsynchronizedText(f) => (&mut f.language, &mut f.description, &mut f.content),
+            _ => return true,
+        };
+        if !language.iter().all(u8::is_ascii_alphabetic) {
+            *language = *b"XXX";
+        }
+        for text in [description, content] {
+            if text.starts_with('\0') || text.ends_with('\0') {
+                *text = std::borrow::Cow::Owned(text.trim_matches('\0').to_owned());
+            }
+        }
+        true
+    });
+}
+
+/// Frames lofty turns into others as it reads an ID3v2.3 tag: TYER, TDAT
+/// and TIME into TDRC, TORY into TDOR, IPLS into TIPL.
+const CONVERTED: [&str; 5] = ["TYER", "TDAT", "TIME", "TORY", "IPLS"];
+
+/// Refuses to write an MP3 whose tag lofty did not read whole: it takes
+/// NULs after a frame's text (an old tagger's USLT, Aqua's Aquarium) for
+/// the padding and stops there without an error, so the frames after them
+/// (the cover, PRIV) were not in what it read and a write lost them.
+fn not_losing(path: &Path, tag: &Id3v2Tag) -> Result<(), String> {
+    let lost = lost_frames(path, tag);
+    if lost.is_empty() {
+        return Ok(());
+    }
+    log::warn!("{}: lofty did not read {lost:?}: not written", path.display());
+    let lost = lost.join(", ");
+    Err(tr!(
+        format!("the tag cannot be read whole: its frames {lost} would be lost, so it is not written"),
+        format!("тег читается не полностью: при записи потерялись бы кадры {lost}, поэтому файл не записан")
+    ))
+}
+
+/// The frames with something in them that the file's first ID3v2 tag
+/// holds (`raw_frames`) and lofty's `tag` lacks.
+fn lost_frames(path: &Path, tag: &Id3v2Tag) -> Vec<String> {
+    let Some(raw) = raw_frames(path) else {
+        return Vec::new();
+    };
+    let read: std::collections::HashSet<&str> = tag.iter().map(|f| f.id_str()).collect();
+    let mut lost: Vec<String> = raw
+        .into_iter()
+        .filter(|id| !read.contains(id.as_str()) && !CONVERTED.contains(&id.as_str()))
+        .collect();
+    lost.sort();
+    lost.dedup();
+    lost
+}
+
+/// The IDs of the frames of more than 8 bytes in the ID3v2.3 or 2.4 tag at
+/// the file's start, walked by their sizes as the bytes give them (2.4's
+/// syncsafe, or plain as iTunes wrote them when only those land on the
+/// next frame); `None` without such a tag, or one unsynchronised or not
+/// walked to its end so.
+fn raw_frames(path: &Path) -> Option<Vec<String>> {
+    use std::io::Read;
+    let syncsafe = |b: &[u8]| b.iter().fold(0usize, |n, &c| n << 7 | usize::from(c & 0x7f));
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut head = [0u8; 10];
+    file.read_exact(&mut head).ok()?;
+    if &head[..3] != b"ID3" || !(3..=4).contains(&head[3]) || head[5] & 0x80 != 0 {
+        return None;
+    }
+    let v4 = head[3] == 4;
+    let mut tag = vec![0; syncsafe(&head[6..10])];
+    file.read_exact(&mut tag).ok()?;
+    let is_id = |at: usize| {
+        tag.get(at..at + 4)
+            .is_some_and(|b| b.iter().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()))
+    };
+    // A frame ends at the tag's end, the padding or the next frame.
+    let fits = |next: usize| next == tag.len() || tag.get(next) == Some(&0) || is_id(next);
+    let mut at = 0;
+    if head[5] & 0x40 != 0 {
+        let size = tag.get(0..4)?;
+        at = if v4 {
+            syncsafe(size)
+        } else {
+            u32::from_be_bytes(size.try_into().ok()?) as usize + 4
+        };
+    }
+    let mut ids = Vec::new();
+    while at + 10 <= tag.len() && is_id(at) {
+        let bytes = &tag[at + 4..at + 8];
+        let plain = u32::from_be_bytes(bytes.try_into().ok()?) as usize;
+        let size = if v4 && fits(at + 10 + syncsafe(bytes)) {
+            syncsafe(bytes)
+        } else if fits(at + 10 + plain) {
+            plain
+        } else {
+            return None;
+        };
+        if size > 8 {
+            ids.push(String::from_utf8_lossy(&tag[at..at + 4]).into_owned());
+        }
+        at += 10 + size;
+    }
+    Some(ids)
+}
+
+/// `tag` with its languages mended before lofty splits it
+/// (`mend_languages`).
+fn mended(mut tag: Id3v2Tag) -> Id3v2Tag {
+    mend_languages(&mut tag);
+    tag
 }
 
 /// lofty writes an ID3v2 tag's track and disc numbers from numbers
@@ -1168,6 +1297,162 @@ mod tests {
         assert_eq!(tag.album().as_deref(), Some("Album"));
         drop(f);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// An MP3 of an ID3v2.3 tag of `frames` (ID, body) and a few frames of
+    /// silence.
+    fn mp3_with(frames: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
+        let mut tag = Vec::new();
+        for (id, body) in frames {
+            tag.extend_from_slice(&id[..]);
+            tag.extend_from_slice(&(body.len() as u32).to_be_bytes());
+            tag.extend_from_slice(&[0, 0]);
+            tag.extend_from_slice(body);
+        }
+        let size = tag.len() as u32;
+        let mut bytes = b"ID3\x03\x00\x00".to_vec();
+        bytes.extend_from_slice(&[
+            (size >> 21 & 0x7f) as u8,
+            (size >> 14 & 0x7f) as u8,
+            (size >> 7 & 0x7f) as u8,
+            (size & 0x7f) as u8,
+        ]);
+        bytes.extend_from_slice(&tag);
+        for _ in 0..4 {
+            bytes.extend_from_slice(&[0xFF, 0xFB, 0x90, 0x64]);
+            bytes.extend_from_slice(&[0; 413]);
+        }
+        bytes
+    }
+
+    /// An MP3 whose comments MusicMatch wrote (no language, `\0\0\0`; the
+    /// content `\0Bio\0` under the description "Bio") is written: the
+    /// comments kept as they were, their language "unknown".
+    #[test]
+    fn a_comment_without_a_language_is_written() {
+        // COMM: Latin-1, language 0 0 0, an empty description, "Hello".
+        let plain = [&[0u8, 0, 0, 0, 0][..], b"Hello"].concat();
+        let described = [&[0u8, 0, 0, 0][..], b"Bio\0\0Bio\0"].concat();
+        let bytes = mp3_with(&[(b"COMM", plain), (b"COMM", described)]);
+        let dir = std::env::temp_dir().join(format!("metalamp_comm_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("comment.mp3");
+        std::fs::write(&file, &bytes).unwrap();
+        let mut changes: Changes = Default::default();
+        changes.main[Key::Genre as usize] = Some("Metal".into());
+        changes.lyrics = Some("[00:01.00]words".into());
+        let written = write(&file, &changes, WriteTags::default());
+        let mut f = std::fs::File::open(&file).unwrap();
+        let mp3 = lofty::mpeg::MpegFile::read_from(
+            &mut f,
+            ParseOptions::new().parsing_mode(lofty::config::ParsingMode::Strict),
+        )
+        .unwrap();
+        drop(f);
+        std::fs::remove_dir_all(&dir).unwrap();
+        written.unwrap();
+        let tag = mp3.id3v2().unwrap();
+        // Every COMM frame (`comments()` gives those without a description).
+        let mut comments: Vec<_> = tag
+            .iter()
+            .filter_map(|frame| match frame {
+                Frame::Comment(c) => Some((
+                    c.language,
+                    c.description.to_string(),
+                    c.content.to_string(),
+                )),
+                _ => None,
+            })
+            .collect();
+        comments.sort();
+        assert_eq!(
+            comments,
+            [
+                (*b"XXX", String::new(), "Hello".to_owned()),
+                (*b"XXX", "Bio".to_owned(), "Bio".to_owned())
+            ]
+        );
+        assert_eq!(tag.genre().as_deref(), Some("Metal"));
+        assert_eq!(
+            tag.unsync_text().next().map(|t| t.content.to_string()),
+            Some("[00:01.00]words".to_owned())
+        );
+    }
+
+    /// A tag lofty stops reading in the middle of without an error (NULs
+    /// after a USLT's text taken for the padding, as in Aqua's Aquarium) is
+    /// not written: the frames after them would be lost.
+    #[test]
+    fn a_tag_read_in_part_is_not_written() {
+        // USLT: UTF-16, "eng", an empty description and text, then NULs.
+        let uslt = [
+            &[1u8][..],
+            b"eng",
+            &[0xFF, 0xFE, 0, 0, 0xFF, 0xFE, 0, 0, 0, 0],
+        ]
+        .concat();
+        let private = [&b"owner\0"[..], &[7u8; 24]].concat();
+        let bytes = mp3_with(&[
+            (b"TIT2", [&[0u8][..], b"Title"].concat()),
+            (b"USLT", uslt),
+            (b"PRIV", private),
+        ]);
+        let dir = std::env::temp_dir().join(format!("metalamp_part_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("part.mp3");
+        std::fs::write(&file, &bytes).unwrap();
+        let raw = raw_frames(&file);
+        let mut changes: Changes = Default::default();
+        changes.main[Key::Genre as usize] = Some("Metal".into());
+        let written = write(&file, &changes, WriteTags::default());
+        let after = std::fs::read(&file).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(raw.unwrap(), ["USLT", "PRIV"]);
+        let e = written.unwrap_err();
+        assert!(e.contains("PRIV"), "{e}");
+        assert_eq!(after, bytes);
+    }
+
+    /// With `METALAMP_MUSIC`: the MP3s of a folder whose tag lofty does not
+    /// read whole (`lost_frames`), which are not written, and the frames.
+    #[test]
+    #[ignore]
+    fn tags_read_in_part() {
+        let root = std::env::var("METALAMP_MUSIC").expect("METALAMP_MUSIC");
+        let (mut files, mut refused) = (0, 0);
+        let mut frames: std::collections::BTreeMap<String, usize> = Default::default();
+        for entry in walkdir::WalkDir::new(root).into_iter().flatten() {
+            let path = entry.path();
+            if !path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("mp3"))
+            {
+                continue;
+            }
+            files += 1;
+            let Ok((view, _)) = crate::library::tags::first_tag_view(path) else {
+                continue;
+            };
+            let mut reader = BufReader::new(view);
+            let options = ParseOptions::new().read_properties(false);
+            let Ok(file) = lofty::mpeg::MpegFile::read_from(&mut reader, options) else {
+                continue;
+            };
+            let Some(tag) = file.id3v2() else {
+                continue;
+            };
+            let lost = lost_frames(path, tag);
+            if !lost.is_empty() {
+                refused += 1;
+                if refused <= 10 {
+                    println!("{}: {lost:?}", path.display());
+                }
+                for id in lost {
+                    *frames.entry(id).or_default() += 1;
+                }
+            }
+        }
+        println!("{refused} of {files} not read whole; frames {frames:?}");
     }
 
     /// An MP3 with only an ID3v1 tag shows it, and keeps what it says when
