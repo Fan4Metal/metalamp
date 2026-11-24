@@ -1358,6 +1358,28 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
             50.0,
             |ui| switch(ui, &mut settings.lyrics_online),
         );
+        divider(ui);
+        row(
+            ui,
+            tr!("Source priority", "Приоритет источника"),
+            Some(tr!(
+                "Which lyrics are shown when both the file (its tag or an .lrc file) and LRCLIB have them; the other is shown when the preferred one has none. A choice made for a track in the lyrics' menu goes first.",
+                "Какой текст показывается, если он есть и в файле (в теге или файле .lrc), и в LRCLIB; если в выбранном источнике текста нет, показывается другой. Выбор, сделанный для трека в меню текста, важнее."
+            )),
+            CONTROL,
+            |ui| {
+                ui.add_enabled_ui(settings.lyrics_online, |ui| {
+                    egui::ComboBox::from_id_salt("settings_lyrics_priority")
+                        .selected_text(settings.lyrics_priority.label())
+                        .width(CONTROL - 10.0)
+                        .show_ui(ui, |ui| {
+                            for p in crate::settings::LyricsPriority::ALL {
+                                ui.selectable_value(&mut settings.lyrics_priority, p, p.label());
+                            }
+                        });
+                });
+            },
+        );
     });
     section(ui, tr!("Tags", "Теги"), |ui| tag_rows(ui, settings));
 }
@@ -3320,6 +3342,8 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     settings.language = d.language;
     settings.bar_layout = d.bar_layout;
     settings.cover_priority = d.cover_priority;
+    settings.lyrics_online = d.lyrics_online;
+    settings.lyrics_priority = d.lyrics_priority;
     settings.window_layout = d.window_layout;
     settings.visualization = d.visualization;
     settings.playlist_visualization = d.playlist_visualization;

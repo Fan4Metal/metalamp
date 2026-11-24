@@ -111,6 +111,8 @@ pub struct Settings {
     pub playlist_lyrics: bool,
     /// Lyrics a file lacks are looked for on LRCLIB (`lyrics.rs`).
     pub lyrics_online: bool,
+    /// The file's own lyrics or LRCLIB's first.
+    pub lyrics_priority: LyricsPriority,
     /// Playlists of the library's folders taken out of that section (the
     /// files stay).
     pub hidden_playlists: Vec<PathBuf>,
@@ -324,6 +326,28 @@ impl CoverPriority {
         match self {
             Self::Tags => tr!("Tags first", "Сначала из тегов"),
             Self::Folder => tr!("Folder first", "Сначала из папки"),
+        }
+    }
+}
+
+/// Which lyrics are shown when the file (its tag or an `.lrc` file beside
+/// it) and LRCLIB both have them. The other is shown when the preferred
+/// has none; a choice made for a track in the panel's menu goes first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LyricsPriority {
+    #[default]
+    File,
+    Lrclib,
+}
+
+impl LyricsPriority {
+    pub const ALL: [Self; 2] = [Self::File, Self::Lrclib];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::File => tr!("The file first", "Сначала из файла"),
+            Self::Lrclib => tr!("LRCLIB first", "Сначала из LRCLIB"),
         }
     }
 }
@@ -863,6 +887,7 @@ impl Default for Settings {
             playlist_cover: true,
             playlist_lyrics: false,
             lyrics_online: true,
+            lyrics_priority: LyricsPriority::default(),
             hidden_playlists: Vec::new(),
             playlist_current: None,
             playlist_position: 0,

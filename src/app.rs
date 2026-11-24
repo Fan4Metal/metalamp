@@ -549,6 +549,7 @@ impl App {
             album: field(|t| &t.album),
             duration_ms: track.map_or(0, |t| t.duration_ms),
             online: self.settings.lyrics_online,
+            lrclib_first: self.settings.lyrics_priority == crate::settings::LyricsPriority::Lrclib,
             path,
         };
         self.lyrics.follow(ctx, Some(ask));

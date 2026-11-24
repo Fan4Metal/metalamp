@@ -4,6 +4,10 @@
 //! LRCLIB (lrclib.net, an open database of lyrics, many of them synced):
 //! `/api/get` by the artist, the title, the album and the length, then
 //! `/api/search` by the artist and the title without a bracketed tail.
+//! With the priority `LyricsPriority::Lrclib` LRCLIB's go before the
+//! file's own (the own when it has none); a choice made for a track in the
+//! panel's menu (`How::Lrclib`, `How::Own`) is kept in its cache file and
+//! goes before the priority.
 //! What LRCLIB answered is kept in `lyrics\<hash>.json` next to the
 //! settings, by the artist, title, album and length (so a track tagged
 //! anew is looked up anew); an answer of none is asked again after
@@ -133,6 +137,8 @@ pub struct Ask {
     pub album: String,
     pub duration_ms: u32,
     pub online: bool,
+    /// LRCLIB's lyrics before the file's own (the settings' priority).
+    pub lrclib_first: bool,
 }
 
 struct Job {
@@ -299,12 +305,17 @@ fn look_in(ask: &Ask, how: How, cache: Option<&Path>, ask_lrclib: &Asker<'_>) ->
         write_cached(file, &answer);
         Ok(answer)
     };
+    // LRCLIB's lyrics go first: chosen for the track, or by the priority
+    // unless the own were chosen for it.
+    let chosen = cached.as_ref().is_some_and(|c| c.chosen);
+    let own_chosen = cached.as_ref().is_some_and(|c| c.own_chosen);
+    let lrclib_first = chosen || (ask.online && ask.lrclib_first && !own_chosen);
     match how {
         How::Own => {
-            if let (Some(file), Some(mut c)) = (&file, cached)
-                && c.chosen
-            {
+            if let Some(file) = &file {
+                let mut c = cached.unwrap_or_else(|| Cached::of(None));
                 c.chosen = false;
+                c.own_chosen = true;
                 write_cached(file, &c);
             }
             if own.is_some() {
@@ -323,8 +334,9 @@ fn look_in(ask: &Ask, how: How, cache: Option<&Path>, ask_lrclib: &Asker<'_>) ->
             };
             match answer {
                 Ok(mut c) if c.has_text() => {
-                    if !c.chosen {
+                    if !c.chosen || c.own_chosen {
                         c.chosen = true;
+                        c.own_chosen = false;
                         write_cached(file, &c);
                     }
                     c.state(own_source)
@@ -337,9 +349,9 @@ fn look_in(ask: &Ask, how: How, cache: Option<&Path>, ask_lrclib: &Asker<'_>) ->
             let Some(file) = &file else {
                 return show_own(Note::LrclibHasNone);
             };
-            let chosen = cached.as_ref().is_some_and(|c| c.chosen) || own.is_none();
+            let shown = lrclib_first || own.is_none();
             match fetch(file, chosen) {
-                Ok(c) if c.has_text() && (chosen || own.is_none()) => c.state(own_source),
+                Ok(c) if c.has_text() && shown => c.state(own_source),
                 Ok(c) if own.is_none() => c.state(None),
                 Ok(c) if !c.has_text() => show_own(Note::LrclibHasNone),
                 Ok(_) => show_own(Note::None),
@@ -347,25 +359,28 @@ fn look_in(ask: &Ask, how: How, cache: Option<&Path>, ask_lrclib: &Asker<'_>) ->
             }
         }
         How::Usual => {
-            if let Some(c) = &cached
-                && c.chosen
+            if chosen
+                && let Some(c) = &cached
                 && c.has_text()
             {
                 return c.state(own_source);
             }
-            if own.is_some() {
+            if own.is_some() && !lrclib_first {
                 return show_own(Note::None);
             }
             let Some(file) = file.filter(|_| ask.online) else {
-                return State::None(None);
+                return show_own(Note::None);
             };
-            if let Some(c) = cached
-                && (c.found || now().saturating_sub(c.at) < RETRY_NONE)
-            {
-                return c.state(None);
-            }
-            match fetch(&file, false) {
-                Ok(c) => c.state(None),
+            let answer = match cached {
+                Some(c) if c.found || now().saturating_sub(c.at) < RETRY_NONE => Ok(c),
+                _ => fetch(&file, false),
+            };
+            match answer {
+                Ok(c) if c.has_text() => c.state(own_source),
+                Ok(c) if own.is_none() => c.state(None),
+                // LRCLIB first, without them (or not answering): the own.
+                Ok(_) | Err(_) if own.is_some() => show_own(Note::None),
+                Ok(_) => State::None(None),
                 Err(e) => State::None(Some(e)),
             }
         }
@@ -676,6 +691,9 @@ struct Cached {
     plain: Option<String>,
     /// Shown over the file's own lyrics (chosen in the panel's menu).
     chosen: bool,
+    /// The file's own shown over these (chosen in the panel's menu), when
+    /// LRCLIB's come first by the priority.
+    own_chosen: bool,
 }
 
 impl Cached {
@@ -692,6 +710,7 @@ impl Cached {
                 .and_then(|r| r.plain_lyrics.clone())
                 .filter(|s| !s.trim().is_empty()),
             chosen: false,
+            own_chosen: false,
         }
     }
 
@@ -920,6 +939,7 @@ mod tests {
             album: "Endless Forms Most Beautiful".into(),
             duration_ms: 285_400,
             online: true,
+            lrclib_first: false,
         };
         let moved = Ask {
             path: PathBuf::from("b.mp3"),
@@ -951,6 +971,7 @@ mod tests {
             album: String::new(),
             duration_ms: 200_000,
             online: true,
+            lrclib_first: false,
         };
         let asked = Cell::new(0);
         let has = Cell::new(true);
@@ -1003,6 +1024,56 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// LRCLIB first by the priority: its lyrics over the file's own, the
+    /// own when it has none or they are chosen for the track.
+    #[test]
+    fn the_priority_puts_lrclib_first() {
+        use std::cell::Cell;
+        let dir = std::env::temp_dir().join(format!("metalamp-first-{}", std::process::id()));
+        let cache = dir.join("cache");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("song.lrc"), "Own words\n").unwrap();
+        let ask = Ask {
+            path: dir.join("song.mp3"),
+            artist: "Artist".into(),
+            title: "Song".into(),
+            album: String::new(),
+            duration_ms: 200_000,
+            online: true,
+            lrclib_first: true,
+        };
+        let has = Cell::new(true);
+        let lrclib = |_: &Ask| -> Result<Option<Record>, String> {
+            Ok(has.get().then(|| Record {
+                duration: Some(200.0),
+                plain_lyrics: Some("Their words".into()),
+                ..Default::default()
+            }))
+        };
+        let source = |ask: &Ask, how| match look_in(ask, how, Some(&cache), &lrclib) {
+            State::Found(t) => t.source,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(source(&ask, How::Usual), Source::Lrclib);
+        // The own chosen for the track, and so from then on.
+        assert_eq!(source(&ask, How::Own), Source::File);
+        assert_eq!(source(&ask, How::Usual), Source::File);
+        // LRCLIB's chosen again.
+        assert_eq!(source(&ask, How::Lrclib), Source::Lrclib);
+        assert_eq!(source(&ask, How::Usual), Source::Lrclib);
+        // Offline: the own.
+        let offline = Ask {
+            online: false,
+            ..ask.clone()
+        };
+        let _ = std::fs::remove_dir_all(&cache);
+        assert_eq!(source(&offline, How::Usual), Source::File);
+        // LRCLIB without them: the own.
+        has.set(false);
+        assert_eq!(source(&ask, How::Usual), Source::File);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// LRCLIB asked for real, with a well-known song (not the user's).
     #[test]
     #[ignore]
@@ -1014,6 +1085,7 @@ mod tests {
             album: String::new(),
             duration_ms: 355_000,
             online: true,
+            lrclib_first: false,
         };
         let record = ask_lrclib(&ask).unwrap().unwrap();
         println!("{record:?}");
