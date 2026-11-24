@@ -393,6 +393,62 @@ fn look(ask: &Ask, how: How) -> State {
     look_in(ask, how, cache.as_deref(), &ask_lrclib)
 }
 
+/// What LRCLIB has for a track, for the file info's tag editor.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Fetched {
+    /// Its lyrics as LRCLIB keeps them: synced ones as LRC, else plain.
+    Lyrics(String),
+    Instrumental,
+    None,
+}
+
+/// LRCLIB's lyrics of a track by its tags, from the cache when it has
+/// them, else asked (blocking; the answer kept, as the panel's). The
+/// artist (else the album artist) and the title are needed.
+pub fn fetch(artist: &str, title: &str, album: &str, duration_ms: u32) -> Result<Fetched, String> {
+    let ask = Ask {
+        path: PathBuf::new(),
+        artist: artist.to_owned(),
+        title: title.to_owned(),
+        album: album.to_owned(),
+        duration_ms,
+        online: true,
+        lrclib_first: false,
+    };
+    if ask.artist.trim().is_empty() || ask.title.trim().is_empty() {
+        return Ok(Fetched::None);
+    }
+    let file = crate::settings::data_dir().map(|d| d.join(FOLDER).join(cache_name(&ask)));
+    let cached = match file.as_deref().and_then(read_cached) {
+        Some(c) if c.found || now().saturating_sub(c.at) < RETRY_NONE => c,
+        kept => {
+            let record = ask_lrclib(&ask)?;
+            let mut answer = Cached::of(record.as_ref());
+            // A choice made for the track in the panel stays.
+            if let Some(kept) = kept {
+                answer.chosen = kept.chosen && answer.has_text();
+                answer.own_chosen = kept.own_chosen;
+            }
+            if let Some(file) = &file {
+                write_cached(file, &answer);
+            }
+            answer
+        }
+    };
+    Ok(match cached.text() {
+        Some(text) => Fetched::Lyrics(text.replace("\r\n", "\n").trim().to_owned()),
+        None if cached.instrumental => Fetched::Instrumental,
+        None => Fetched::None,
+    })
+}
+
+/// Whether the file's tag holds lyrics.
+pub fn tag_has_lyrics(path: &Path) -> bool {
+    crate::guard::catch(path, || tag_lyrics(path))
+        .flatten()
+        .is_some()
+}
+
 /// What LRCLIB answers for a track.
 type Asker<'a> = dyn Fn(&Ask) -> Result<Option<Record>, String> + 'a;
 

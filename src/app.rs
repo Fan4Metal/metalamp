@@ -2478,6 +2478,7 @@ impl eframe::App for App {
             self.place_changed = Some(Instant::now());
         }
         self.file_info.cover_side = self.settings.tag_cover_side;
+        self.file_info.lrclib = self.settings.lyrics_online;
         self.file_info.write_tags = crate::library::edit::WriteTags {
             id3v2: self.settings.id3v2_version,
             id3v1: self.settings.id3v1,
