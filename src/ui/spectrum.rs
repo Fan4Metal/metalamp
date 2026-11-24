@@ -186,16 +186,8 @@ impl Analyzer {
             // The band's place among them, for a rainbow.
             let place = b as f32 / (bands - 1).max(1) as f32;
             if h > 0.0 {
-                let y1 = rect.bottom();
-                let y0 = y1 - top_room * h;
-                let (top, foot) = (colours.at(h, place), colours.at(0.0, place));
-                let i = mesh.vertices.len() as u32;
-                mesh.colored_vertex(pos2(x0, y0), top);
-                mesh.colored_vertex(pos2(x1, y0), top);
-                mesh.colored_vertex(pos2(x1, y1), foot);
-                mesh.colored_vertex(pos2(x0, y1), foot);
-                mesh.add_triangle(i, i + 1, i + 2);
-                mesh.add_triangle(i, i + 2, i + 3);
+                let foot = rect.bottom();
+                bar(&mut mesh, x0, x1, foot, -top_room, h, |l| colours.at(l, place));
             }
             if peak > 0.0 {
                 let y = rect.bottom() - top_room * peak - PEAK_HEIGHT;
@@ -274,13 +266,7 @@ impl Analyzer {
                 // From the middle (half a point off it) outwards.
                 let foot = cy + side * 0.5;
                 if h > 0.0 {
-                    let tip = foot + side * room * h;
-                    let (top, base) = (colours.at(h, place), colours.at(0.0, place));
-                    quad(
-                        &mut mesh,
-                        [pos2(x0, tip), pos2(x1, tip), pos2(x1, foot), pos2(x0, foot)],
-                        [top, top, base, base],
-                    );
+                    bar(&mut mesh, x0, x1, foot, side * room, h, |l| colours.at(l, place));
                 }
                 if peak > 0.0 {
                     let y = foot + side * room * peak;
@@ -393,6 +379,36 @@ fn smooth(points: &[Pos2], top: f32, bottom: f32) -> Vec<Pos2> {
         out.push(last);
     }
     out
+}
+
+/// A bar from `foot` to `h` of `room` (points, signed: negative up), in
+/// pieces of at most `BAR_PIECE` of the height, each from the colour at
+/// its lower level to the one at its upper: a gradient of several colours
+/// (Winamp's green, yellow, red) is not one blend from the foot to the
+/// top, which went through a muddy olive.
+fn bar(
+    mesh: &mut Mesh,
+    x0: f32,
+    x1: f32,
+    foot: f32,
+    room: f32,
+    h: f32,
+    colour: impl Fn(f32) -> Color32,
+) {
+    const BAR_PIECE: f32 = 1.0 / 15.0;
+    let pieces = (h / BAR_PIECE).ceil().max(1.0) as usize;
+    for k in 0..pieces {
+        let (a, b) = (k as f32 * BAR_PIECE, ((k + 1) as f32 * BAR_PIECE).min(h));
+        let (ya, yb) = (foot + room * a, foot + room * b);
+        let (ca, cb) = (colour(a), colour(b));
+        let i = mesh.vertices.len() as u32;
+        mesh.colored_vertex(pos2(x0, yb), cb);
+        mesh.colored_vertex(pos2(x1, yb), cb);
+        mesh.colored_vertex(pos2(x1, ya), ca);
+        mesh.colored_vertex(pos2(x0, ya), ca);
+        mesh.add_triangle(i, i + 1, i + 2);
+        mesh.add_triangle(i, i + 2, i + 3);
+    }
 }
 
 #[cfg(test)]
