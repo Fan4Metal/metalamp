@@ -728,6 +728,9 @@ pub enum Visual {
     /// A flight over a grid with mountains of the spectrum, a sun over
     /// the horizon.
     Synthwave,
+    /// A flight through the stars, streaking as it speeds up with the
+    /// music, a jump on the strong beats.
+    Hyperspace,
     /// Bolts from a core in the middle, striking on the beats (the radial
     /// spectrum's place, which it takes in older settings).
     #[serde(alias = "radial")]
@@ -774,7 +777,7 @@ pub enum Visual {
 
 impl Visual {
     /// As the display's menu and the settings list them, "none" last.
-    pub const ALL: [Visual; 24] = [
+    pub const ALL: [Visual; 25] = [
         Visual::Spectrum,
         Visual::Led,
         Visual::Curve,
@@ -783,6 +786,7 @@ impl Visual {
         Visual::Strata,
         Visual::Spectrogram,
         Visual::Synthwave,
+        Visual::Hyperspace,
         Visual::Lightning,
         Visual::Vortex,
         Visual::Fire,
@@ -811,6 +815,7 @@ impl Visual {
             Visual::Strata => tr!("Strata", "Пласты"),
             Visual::Spectrogram => tr!("Spectrogram", "Спектрограмма"),
             Visual::Synthwave => tr!("Synthwave", "Синтвейв"),
+            Visual::Hyperspace => tr!("Hyperspace", "Гиперпространство"),
             Visual::Lightning => tr!("Lightning", "Молнии"),
             Visual::Vortex => tr!("Vortex", "Вихрь"),
             Visual::Fire => tr!("Fire", "Огонь"),
@@ -1285,6 +1290,7 @@ mod tests {
             (Visual::Chroma, "chroma"),
             (Visual::Fire, "fire"),
             (Visual::Fireworks, "fireworks"),
+            (Visual::Hyperspace, "hyperspace"),
             (Visual::Aurora, "aurora"),
             (Visual::Cloth, "cloth"),
             (Visual::Ripples, "ripples"),

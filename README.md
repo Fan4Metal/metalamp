@@ -28,7 +28,7 @@ MetalAMP is an audio player for Windows built around a media library: the music 
 - **Gapless playback**: the next track is opened before the current one ends, and MP3 files are cut to their music by their LAME tags (see [Playback](#playback)).
 - **Formats of Windows**: MP3, AAC (M4A), FLAC, WMA and WAV, decoded by Media Foundation; M3U and M3U8 playlists.
 - **Sound processing**: the same loudness for every track, a ten-band equalizer, an enhancer, crossfade and a limiter, all off by default (see [Sound processing](#sound-processing)).
-- **Visualizations**: spectrum analyzers, ridges, a spectrogram, synthwave, lightning, a vortex, fire, fireworks, an aurora, a cloth, ripples, ribbons, a waveform, an oscilloscope, a goniometer, the notes, a piano, guitar strings and a harp (see [Visualizations](#visualizations)).
+- **Visualizations**: spectrum analyzers, ridges, a spectrogram, synthwave, hyperspace, lightning, a vortex, fire, fireworks, an aurora, a cloth, ripples, ribbons, a waveform, an oscilloscope, a goniometer, the notes, a piano, guitar strings and a harp (see [Visualizations](#visualizations)).
 - **A playlist** beside the library, kept between runs, and saved playlists (see [The playlist](#the-playlist)).
 - **Library statistics**: the numbers of tracks, albums, artists and genres, the length and size, the plays, and charts of the bit rates, formats, years, genres, artists and the tracks played most (see [Statistics](#statistics)).
 - **File info and tags**: every field of a track's tag, its cover and its audio properties, in a window opened by a click on the player's cover or `I`, where the tags of one file or of several are also edited (see [File info](#file-info)).
@@ -229,6 +229,7 @@ The display right of the player shows the sound heard. A click on it goes on to 
 - **Strata**: a string per frequency band, the bass in front, held at a nut on the left and fanning out to the right; the loudness runs along them as vibrating swells, and the beats pluck them.
 - **Spectrogram**: the spectrum's history flowing left out of the spectrum heard now, drawn as bars with their peaks on the right; the columns heard on a beat are brighter.
 - **Synthwave**: a flight over a grid towards a striped sun, between mountains raised by the spectrum.
+- **Hyperspace**: a flight through the stars, which come out of a point ahead and stretch into streaks as the flight speeds up; the loudness sets the speed, each beat surges it, and a strong beat is a jump with a flash. The bass lights the stars going down, the treble those going up.
 - **Lightning**: bolts striking from a glowing core on the beats.
 - **Vortex**: the waves heard flying out from the middle in swirling trails that fade, thrown outwards on the beats, as the pictures of Winamp's MilkDrop. Its scenes follow one another on the beats and blend into each other: the wave across, a tunnel of rings, a mirrored spiral, rising smoke, a kaleidoscope, a starburst, a whirlpool and a corridor; the picture stays in the middle and flies forwards.
 - **Fire**: flames rising from the spectrum along the bottom, as the fire of Doom, thrown higher on the beats.

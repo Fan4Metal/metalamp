@@ -11,6 +11,7 @@ pub mod eq_window;
 pub mod fire;
 pub mod goniometer;
 pub mod harp;
+pub mod hyperspace;
 pub mod icons;
 pub mod info;
 pub mod library;

@@ -271,6 +271,16 @@ fn scheme(visual: Visual) -> Scheme {
             peak: &[0xfff2c8],
             by_level: false,
         },
+        // Hyperspace: azure at the bottom (the bass), ice to the sides,
+        // lilac at the top (the treble), the heads white-blue.
+        Visual::Hyperspace => Scheme {
+            rows: &[
+                (0.0, &[0x0a2050, 0x0e3450, 0x2a1858]),
+                (1.0, &[0x4a9cff, 0x9ae6ff, 0xb89cff]),
+            ],
+            peak: &[0xe4f0ff, 0xf0fcff, 0xf0e8ff],
+            by_level: false,
+        },
         // An electric arc: cyan at the ends, violet at the core.
         Visual::Lightning => Scheme {
             rows: &[

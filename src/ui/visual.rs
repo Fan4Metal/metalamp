@@ -46,6 +46,7 @@ use crate::ui::cloth::{self, Cloth};
 use crate::ui::fire::{self, Fire};
 use crate::ui::goniometer::Goniometer;
 use crate::ui::harp::Harp;
+use crate::ui::hyperspace::{self, Hyperspace};
 use crate::ui::lightning::{self, Lightning};
 use crate::ui::notes::{self, Notes};
 use crate::ui::ribbons::{self, Ribbons};
@@ -119,6 +120,7 @@ pub struct Visualizer {
     vortex: Vortex,
     fire: Fire,
     fireworks: Fireworks,
+    hyperspace: Hyperspace,
     aurora: Aurora,
     cloth: Cloth,
     ripples: Ripples,
@@ -178,6 +180,7 @@ impl Visualizer {
             vortex: Vortex::new(),
             fire: Fire::new(),
             fireworks: Fireworks::new(),
+            hyperspace: Hyperspace::new(),
             aurora: Aurora::new(),
             cloth: Cloth::new(),
             ripples: Ripples::new(),
@@ -296,10 +299,11 @@ impl Visualizer {
                         .feed(&self.notes.keys, heard.is_none() || new > 0, dt, size.x);
                 }
             }
-            Visual::Fire | Visual::Fireworks | Visual::Aurora => {
+            Visual::Fire | Visual::Fireworks | Visual::Hyperspace | Visual::Aurora => {
                 let bands = match visual {
                     Visual::Fire => fire::BANDS,
                     Visual::Fireworks => fireworks::BANDS,
+                    Visual::Hyperspace => hyperspace::BANDS,
                     _ => aurora::BANDS,
                 };
                 let levels = heard.map(|(s, h)| {
@@ -311,6 +315,7 @@ impl Visualizer {
                 match visual {
                     Visual::Fire => self.fire.feed(levels, moved, dt, size),
                     Visual::Fireworks => self.fireworks.feed(levels, moved, dt, size),
+                    Visual::Hyperspace => self.hyperspace.feed(levels, moved, dt, size),
                     _ => self.aurora.feed(levels.map(smoothed).as_deref(), moved, dt),
                 }
             }
@@ -525,6 +530,7 @@ impl Visualizer {
             Visual::Harp => self.harp.active(),
             Visual::Fire => self.fire.active(),
             Visual::Fireworks => self.fireworks.active(),
+            Visual::Hyperspace => self.hyperspace.active(),
             Visual::Aurora => self.aurora.active(),
             Visual::Cloth => self.cloth.active(),
             Visual::Ripples => self.ripples.active(),
@@ -551,6 +557,7 @@ impl Visualizer {
             Visual::Vortex => self.vortex.paint(painter, rect),
             Visual::Fire => self.fire.paint(painter, rect),
             Visual::Fireworks => self.fireworks.paint(painter, rect),
+            Visual::Hyperspace => self.hyperspace.paint(painter, rect),
             Visual::Aurora => self.aurora.paint(painter, rect),
             Visual::Cloth => self.cloth.paint(painter, rect),
             Visual::Ripples => self.ripples.paint(painter, rect),
@@ -1136,6 +1143,7 @@ pub(crate) mod tests {
             Visual::Spectrum,
             Visual::Fire,
             Visual::Fireworks,
+            Visual::Hyperspace,
             Visual::Aurora,
             Visual::Cloth,
             Visual::Ripples,
