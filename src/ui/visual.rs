@@ -1060,6 +1060,18 @@ pub(crate) mod tests {
     /// (`METALAMP_SAMPLE`, from `METALAMP_FROM` s, 60 by default), 50 a
     /// second: for checking by hand how a scene follows music.
     pub(crate) fn real_file_levels(bands: usize) -> Vec<Vec<f32>> {
+        let (mono, rate) = real_file_mono();
+        let mut analyzer = Analyzer::new();
+        let step = rate as usize / 50;
+        (spectrum::N..=mono.len())
+            .step_by(step)
+            .map(|end| analyzer.levels(&mono[end - spectrum::N..end], rate, bands))
+            .collect()
+    }
+
+    /// 20 s of a real file mixed to mono, and its rate (`METALAMP_SAMPLE`,
+    /// from `METALAMP_FROM` s, 60 by default).
+    pub(crate) fn real_file_mono() -> (Vec<f32>, u32) {
         use crate::audio::decoder::{Decoder, SECOND};
         let path = std::env::var_os("METALAMP_SAMPLE").expect("METALAMP_SAMPLE");
         let from: f32 = std::env::var("METALAMP_FROM")
@@ -1082,12 +1094,7 @@ pub(crate) mod tests {
                     .map(|f| f.iter().sum::<f32>() / channels as f32),
             );
         }
-        let mut analyzer = Analyzer::new();
-        let step = rate as usize / 50;
-        (spectrum::N..=mono.len())
-            .step_by(step)
-            .map(|end| analyzer.levels(&mono[end - spectrum::N..end], rate, bands))
-            .collect()
+        (mono, rate)
     }
 
     fn sine(f: f32, rate: u32, n: usize, offset: usize) -> Vec<f32> {
@@ -1475,7 +1482,14 @@ pub(crate) mod tests {
                 ..Default::default()
             });
         }
-        let rate = 48_000;
+        // METALAMP_SAMPLE=<file>: its sound (from METALAMP_FROM s) in place
+        // of the made-up music.
+        let (sound, rate) = if std::env::var_os("METALAMP_SAMPLE").is_some() {
+            real_file_mono()
+        } else {
+            ((0..FETCH + 960 * 300).map(music).collect(), 48_000)
+        };
+        let step = rate as usize / 50;
         let size = Vec2::new(760.0, 118.0);
         let rect = Rect::from_min_size(pos2(0.0, 0.0), size);
         // METALAMP_FRAMES_EVERY=<n>: seven frames n apart (20 ms each; 25
@@ -1490,10 +1504,13 @@ pub(crate) mod tests {
         let mut frames = Vec::new();
         let mut end = FETCH as u64;
         for frame in 0..=250 + 6 * every {
-            end += 960;
-            let s: Vec<f32> = (end as usize - FETCH..end as usize).map(music).collect();
+            end += step as u64;
+            if end as usize > sound.len() {
+                break;
+            }
+            let s = &sound[end as usize - FETCH..end as usize];
             v.last = Instant::now() - Duration::from_millis(20);
-            v.feed(visual, Some((&s, Heard { rate, end })), Some(&s), Some(size));
+            v.feed(visual, Some((s, Heard { rate, end })), Some(s), Some(size));
             if frame >= 250 && (frame - 250) % every == 0 {
                 frames.push(renderer.frame(rect, palette::list_bg(), |p| v.paint(p, rect)));
             }
