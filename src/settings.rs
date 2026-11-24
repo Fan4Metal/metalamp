@@ -106,6 +106,11 @@ pub struct Settings {
     pub playlist_width: f32,
     /// The cover of the track playing under the playlist.
     pub playlist_cover: bool,
+    /// The lyrics of the track playing under the playlist, in the cover's
+    /// place (`ui/lyrics.rs`).
+    pub playlist_lyrics: bool,
+    /// Lyrics a file lacks are looked for on LRCLIB (`lyrics.rs`).
+    pub lyrics_online: bool,
     /// Playlists of the library's folders taken out of that section (the
     /// files stay).
     pub hidden_playlists: Vec<PathBuf>,
@@ -856,6 +861,8 @@ impl Default for Settings {
             playlist_visible: true,
             playlist_width: 340.0,
             playlist_cover: true,
+            playlist_lyrics: false,
+            lyrics_online: true,
             hidden_playlists: Vec::new(),
             playlist_current: None,
             playlist_position: 0,

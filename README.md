@@ -49,7 +49,7 @@ The installer and the portable archive are on the [Releases](https://github.com/
 <details>
 <summary>What the program keeps, and where</summary>
 
-The installed program keeps its settings, the library index (`library.json`), the playlist (`playlist.m3u8`), the saved playlists (`playlists`), the plays and ratings (`stats.json`), the loudness measurements (`loudness.json`) and the cover thumbnails (`covers`) in `%APPDATA%\MetalAMP\config`.
+The installed program keeps its settings, the library index (`library.json`), the playlist (`playlist.m3u8`), the saved playlists (`playlists`), the plays and ratings (`stats.json`), the loudness measurements (`loudness.json`), the lyrics found on LRCLIB (`lyrics`) and the cover thumbnails (`covers`) in `%APPDATA%\MetalAMP\config`.
 
 The portable archive holds an empty `metalamp.json`. While that file is next to `metalamp.exe` and the folder is writable, the settings are kept in it and the rest beside it. Without the file, the program keeps them in `%APPDATA%\MetalAMP\config`, as the installed program does. The About window shows where the settings are kept.
 
@@ -289,12 +289,13 @@ Processing keeps a fixed delay of about 29 milliseconds at 44.1 kHz (27 millisec
 The playlist on the right (`Alt+E` shows or hides it) lists "Artist – Title" with the length of each entry and the total at the bottom; its search field narrows the list (by the line, the artist, the title and the album). A double click or `Enter` plays an entry. Files and folders dropped on the window are added to the end of the playlist, a folder as the audio files in it and in its subfolders, in the order Explorer shows them (and played if nothing plays); `Ctrl+O` opens files instead of it. The playlist is kept between runs.
 
 <details>
-<summary>The line, dragging, the menu, the cover</summary>
+<summary>The line, dragging, the menu, the cover, the lyrics</summary>
 
 - **The line** is set on the General page of the settings: ready forms (title alone, title – artist, with the album or the year) or a template of one's own with the fields `%artist%`, `%title%`, `%album%`, `%albumartist%`, `%year%`, `%track%`, `%disc%`, `%genre%` and `%filename%`, where a part in square brackets is shown only when a field in it has something (`[%artist% – ]%title%`, the default); the numbers and the lengths can be hidden.
 - **Dragging**: tracks (the selection) and albums (from the table or the covers) are dragged from the library into the playlist, to the place a line shows. Entries are selected with `Ctrl` and `Shift`, dragged to another place, removed with `Delete`.
 - **The menu**: the right button's menu also has **Play next** (the entries moved right after the one playing), **Go to album** and **Go to artist**, which show an entry's album or artist in the library.
 - **The cover** of the track playing is shown under the list, as large as the panel allows; the picture button in the playlist's bar hides it, and a click on it opens the file info.
+- **The lyrics** of the track playing take the cover's place by the microphone's button: from an `.lrc` file of the track's name beside it, else from its tag, else (unless turned off on the General page of the settings, **Lyrics**) from [LRCLIB](https://lrclib.net), an open database of lyrics, which is sent the artist, the title, the album and the length; what it answers is kept in the `lyrics` folder next to the settings. Synced lyrics light the line sung and keep it in sight, a click on a line goes to it, and the mouse wheel scrolls them by hand. The right button copies the lyrics, asks LRCLIB again or brings the cover back.
 
 </details>
 

@@ -16,6 +16,7 @@ pub mod info;
 pub mod library;
 pub mod licenses;
 pub mod lightning;
+pub mod lyrics;
 pub mod mini;
 pub mod notes;
 pub mod player_bar;

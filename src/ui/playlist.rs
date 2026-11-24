@@ -6,7 +6,8 @@
 //! button lists the saved playlists and those of the library's folders (a
 //! click opens one, the cross deletes or takes it out). Under the list,
 //! the cover of the track playing (a button in the bar hides it; a click
-//! on it opens the file info).
+//! on it opens the file info), or in its place the track's lyrics (the
+//! microphone's button, `ui/lyrics.rs`).
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -198,6 +199,19 @@ pub enum PlaylistAction {
     ShowHidden,
     Delete(String),
     Export,
+    /// The lyrics' menu: LRCLIB asked again.
+    SearchLyrics,
+}
+
+/// What the panel shows under the list: the cover of the track playing,
+/// or its lyrics in the cover's place (the settings' switches).
+pub struct Under<'a> {
+    pub cover: Option<&'a TextureHandle>,
+    pub show_cover: &'a mut bool,
+    pub show_lyrics: &'a mut bool,
+    pub lyrics: &'a crate::lyrics::State,
+    /// LRCLIB may be asked (the setting).
+    pub online: bool,
 }
 
 /// The line of an entry by `template` from the library or the file's tags
@@ -237,10 +251,16 @@ pub fn show(
     player: &mut Player,
     library: &Library,
     keys: bool,
-    cover: Option<&TextureHandle>,
-    show_cover: &mut bool,
+    under: Under,
     hidden: &[std::path::PathBuf],
 ) -> Vec<PlaylistAction> {
+    let Under {
+        cover,
+        show_cover,
+        show_lyrics,
+        lyrics,
+        online,
+    } = under;
     let mut actions = Vec::new();
     if pv.saved_at.is_none_or(|at| at.elapsed() >= SAVED_FOR) {
         let own = crate::playlists::list().into_iter().filter_map(|name| {
@@ -311,17 +331,31 @@ pub fn show(
         player.stop();
         player.queue.clear();
     }
-    // Without the library the list is the window, with no cover.
+    // Without the library the list is the window, with no cover (the
+    // lyrics may be under it). The cover and the lyrics take the same
+    // place: lit, a button hides its own, else shows it.
+    let cover_shown = *show_cover && !*show_lyrics;
     if !pv.no_library
         && crate::ui::icon_button(
             &mut bar,
             Icon::Image,
-            *show_cover,
+            cover_shown,
             tr!("The cover of the track playing", "Обложка играющего трека"),
         )
         .clicked()
     {
-        *show_cover = !*show_cover;
+        *show_cover = !cover_shown;
+        *show_lyrics = false;
+    }
+    if crate::ui::icon_button(
+        &mut bar,
+        Icon::Mic,
+        *show_lyrics,
+        tr!("The lyrics of the track playing", "Текст играющего трека"),
+    )
+    .clicked()
+    {
+        *show_lyrics = !*show_lyrics;
     }
     playlists_menu(
         &mut bar,
@@ -380,28 +414,55 @@ pub fn show(
         .and_then(|id| player.queue.index_of(id))
         .or(current);
 
-    // The cover under the list, when it is shown and the list keeps
-    // enough rows above it.
+    // The cover (or the lyrics) under the list, when it is shown and the
+    // list keeps enough rows above it. The lyrics are as tall as the cover
+    // would be, as wide as the panel.
     let side = (full.width() - 2.0 * COVER_PAD).min(COVER_MAX);
     let cover_h = side + COVER_PAD;
     let list_h = full.height() - HEADER - FOOTER;
-    let cover_rect =
-        (*show_cover && !pv.no_library && side > 40.0 && list_h - cover_h >= COVER_MIN_LIST).then(
-            || {
-                Rect::from_center_size(
-                    pos2(full.center().x, full.bottom() - FOOTER - cover_h / 2.0),
-                    vec2(side, side),
-                )
-            },
-        );
+    let wanted = *show_lyrics || (*show_cover && !pv.no_library);
+    let under_rect = (wanted && side > 40.0 && list_h - cover_h >= COVER_MIN_LIST).then(|| {
+        let width = if *show_lyrics {
+            full.width() - 2.0 * COVER_PAD
+        } else {
+            side
+        };
+        Rect::from_center_size(
+            pos2(full.center().x, full.bottom() - FOOTER - cover_h / 2.0),
+            vec2(width, side),
+        )
+    });
     let body = Rect::from_min_max(
         pos2(full.left(), header.bottom()),
         pos2(
             full.right(),
-            full.bottom() - FOOTER - cover_rect.map_or(0.0, |_| cover_h + COVER_PAD),
+            full.bottom() - FOOTER - under_rect.map_or(0.0, |_| cover_h + COVER_PAD),
         ),
     );
     painter.rect_filled(body, 0.0, palette::list_bg());
+    let lyrics_rect = under_rect.filter(|_| *show_lyrics);
+    let cover_rect = under_rect.filter(|_| !*show_lyrics);
+    if let Some(r) = lyrics_rect {
+        let acts = crate::ui::lyrics::show(
+            ui,
+            r,
+            egui::Id::new("playlist_lyrics"),
+            lyrics,
+            player.position_ms(),
+            online,
+        );
+        for act in acts {
+            match act {
+                crate::ui::lyrics::Act::Seek(ms) => player.seek(ms),
+                crate::ui::lyrics::Act::ShowCover => {
+                    *show_lyrics = false;
+                    *show_cover = true;
+                }
+                crate::ui::lyrics::Act::Hide => *show_lyrics = false,
+                crate::ui::lyrics::Act::SearchAgain => actions.push(PlaylistAction::SearchLyrics),
+            }
+        }
+    }
     if let Some(r) = cover_rect {
         match cover {
             Some(t) => {
@@ -428,6 +489,10 @@ pub fn show(
         egui::Popup::context_menu(&resp)
             .id(egui::Id::new("playlist_cover_menu"))
             .show(|ui| {
+                if ui.button(tr!("Show the lyrics", "Показать текст")).clicked() {
+                    *show_lyrics = true;
+                    ui.close();
+                }
                 if ui.button(tr!("Hide the cover", "Скрыть обложку")).clicked() {
                     *show_cover = false;
                     ui.close();

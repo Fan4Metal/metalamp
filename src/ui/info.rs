@@ -286,7 +286,7 @@ fn other_fields(read: &[&Values]) -> Vec<(ItemKey, Field)> {
 /// The text of a lyrics file: UTF-8 or UTF-16 by its BOM, else UTF-8,
 /// else the ANSI code page of Windows (an old `.txt` or `.lrc`); its lines
 /// ending with `\n`.
-fn text_of_file(bytes: &[u8]) -> String {
+pub(crate) fn text_of_file(bytes: &[u8]) -> String {
     let utf16 = |bytes: &[u8], read: fn([u8; 2]) -> u16| {
         let units: Vec<u16> = bytes.as_chunks::<2>().0.iter().map(|c| read(*c)).collect();
         String::from_utf16_lossy(&units)

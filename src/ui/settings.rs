@@ -1347,6 +1347,18 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
             },
         );
     });
+    section(ui, tr!("Lyrics", "Тексты песен"), |ui| {
+        row(
+            ui,
+            tr!("Look on the internet", "Искать в интернете"),
+            Some(tr!(
+                "Lyrics that neither the file's tag nor an .lrc file beside it has are looked for on LRCLIB (lrclib.net), synced ones first: the artist, the title, the album and the length of the track playing are sent there. What it answers is kept, so a track is asked for once. The lyrics show under the playlist, by the microphone's button.",
+                "Текст, которого нет ни в теге файла, ни в файле .lrc рядом с ним, ищется в LRCLIB (lrclib.net), в первую очередь синхронизированный: туда отправляются исполнитель, название, альбом и длительность играющего трека. Ответ сохраняется, так что о каждом треке сервис спрашивается один раз. Текст показывается под плейлистом, по кнопке с микрофоном."
+            )),
+            50.0,
+            |ui| switch(ui, &mut settings.lyrics_online),
+        );
+    });
     section(ui, tr!("Tags", "Теги"), |ui| tag_rows(ui, settings));
 }
 

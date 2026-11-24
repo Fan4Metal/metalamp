@@ -126,6 +126,9 @@ pub struct App {
     mini_icon: Option<egui::TextureHandle>,
     /// The file heard when the library does not hold it, read.
     outside: crate::library::outside::Outside,
+    /// The lyrics of the track heard, looked for while the playlist shows
+    /// them.
+    lyrics: crate::lyrics::Lyrics,
     /// Back from the mini player, the window not grown yet: the whole
     /// window's panels wait, else the playlist and the library's panes
     /// took the mini player's size as their own (at most 1 s).
@@ -282,6 +285,7 @@ impl App {
             mini_cover: Default::default(),
             mini_spin: Default::default(),
             outside: Default::default(),
+            lyrics: Default::default(),
             mini_icon: None,
             growing: None,
             kept_for_the_end: Instant::now(),
@@ -521,6 +525,48 @@ impl App {
             .cloned();
         self.outside
             .follow(ctx, path.as_deref(), self.settings.cover_priority);
+    }
+
+    /// Looks for the lyrics of the track heard (else the playlist's current
+    /// one) while the playlist shows them.
+    fn follow_lyrics(&mut self, ctx: &egui::Context) {
+        if !self.settings.playlist_lyrics {
+            return;
+        }
+        let Some(path) = self.playing_or_current_path() else {
+            self.lyrics.clear();
+            return;
+        };
+        let track = self.shown_track();
+        let field = |f: fn(&crate::library::Track) -> &String| track.map(f).cloned().unwrap_or_default();
+        let mut artist = field(|t| &t.artist);
+        if artist.trim().is_empty() {
+            artist = field(|t| &t.album_artist);
+        }
+        let ask = crate::lyrics::Ask {
+            artist,
+            title: field(|t| &t.title),
+            album: field(|t| &t.album),
+            duration_ms: track.map_or(0, |t| t.duration_ms),
+            online: self.settings.lyrics_online,
+            path,
+        };
+        self.lyrics.follow(ctx, Some(ask));
+    }
+
+    /// What the playlist shows under its list.
+    fn under_playlist<'a>(
+        settings: &'a mut Settings,
+        lyrics: &'a crate::lyrics::Lyrics,
+        cover: Option<&'a egui::TextureHandle>,
+    ) -> crate::ui::playlist::Under<'a> {
+        crate::ui::playlist::Under {
+            cover,
+            show_cover: &mut settings.playlist_cover,
+            show_lyrics: &mut settings.playlist_lyrics,
+            lyrics: lyrics.state(),
+            online: settings.lyrics_online,
+        }
     }
 
     /// The title and the second line of the player bar: the track heard,
@@ -931,6 +977,7 @@ impl App {
                     self.place_changed = Some(Instant::now());
                 }
                 crate::ui::playlist::PlaylistAction::Export => self.export_playlist(ctx),
+                crate::ui::playlist::PlaylistAction::SearchLyrics => self.lyrics.search_again(),
                 crate::ui::playlist::PlaylistAction::EditTags(indices) => {
                     let paths = self.playlist_paths(&indices);
                     self.file_info.open(ctx, paths, true);
@@ -2203,7 +2250,9 @@ impl eframe::App for App {
             });
         } else if alone {
             let cover = self.playing_cover(&ctx);
-            let shown_cover = self.settings.playlist_cover;
+            self.follow_lyrics(&ctx);
+            let shown = (self.settings.playlist_cover, self.settings.playlist_lyrics);
+            let hidden = self.settings.hidden_playlists.clone();
             let panel = egui::CentralPanel::no_frame().show(root_ui, |ui| {
                 crate::ui::playlist::show(
                     ui,
@@ -2211,12 +2260,11 @@ impl eframe::App for App {
                     &mut self.player,
                     &self.library,
                     !modal,
-                    cover.as_ref(),
-                    &mut self.settings.playlist_cover,
-                    &self.settings.hidden_playlists,
+                    Self::under_playlist(&mut self.settings, &self.lyrics, cover.as_ref()),
+                    &hidden,
                 )
             });
-            if self.settings.playlist_cover != shown_cover {
+            if (self.settings.playlist_cover, self.settings.playlist_lyrics) != shown {
                 self.place_changed = Some(Instant::now());
             }
             self.playlist_view.focused = true;
@@ -2225,7 +2273,9 @@ impl eframe::App for App {
         // or dropped play without a library.
         } else if self.settings.playlist_visible && !mini {
             let cover = self.playing_cover(&ctx);
-            let shown_cover = self.settings.playlist_cover;
+            self.follow_lyrics(&ctx);
+            let shown = (self.settings.playlist_cover, self.settings.playlist_lyrics);
+            let hidden = self.settings.hidden_playlists.clone();
             let panel = egui::Panel::right("playlist")
                 .resizable(true)
                 .default_size(self.settings.playlist_width)
@@ -2238,12 +2288,11 @@ impl eframe::App for App {
                         &mut self.player,
                         &self.library,
                         !modal,
-                        cover.as_ref(),
-                        &mut self.settings.playlist_cover,
-                        &self.settings.hidden_playlists,
+                        Self::under_playlist(&mut self.settings, &self.lyrics, cover.as_ref()),
+                        &hidden,
                     )
                 });
-            if self.settings.playlist_cover != shown_cover {
+            if (self.settings.playlist_cover, self.settings.playlist_lyrics) != shown {
                 self.place_changed = Some(Instant::now());
             }
             let width = panel.response.rect.width();
@@ -2364,6 +2413,7 @@ impl eframe::App for App {
             self.rescan();
             self.outside.read_again(&ctx);
             self.playlist_view.loose.forget();
+            self.lyrics.again();
         }
         // The size chosen in the cover's menu is kept.
         if self.file_info.cover_side != self.settings.tag_cover_side {

@@ -25,6 +25,7 @@ mod kept;
 mod keymap;
 mod library;
 mod loudness;
+mod lyrics;
 mod notice;
 mod palette;
 mod player;
