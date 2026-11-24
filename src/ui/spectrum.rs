@@ -14,6 +14,7 @@ use egui::epaint::PathStroke;
 use egui::{Color32, Mesh, Painter, Pos2, Rect, Shape, pos2};
 
 use crate::palette;
+use crate::ui::beat::{glow, ribbon};
 
 /// The window: 2048 frames, 46 ms at 44.1 kHz; bins of 21.5 Hz.
 pub const N: usize = 2048;
@@ -316,11 +317,25 @@ impl Analyzer {
                 &mut mesh,
                 [a, b, fb, fa],
                 [
-                    colours.at(level(a), place(a)).gamma_multiply(0.75),
-                    colours.at(level(b), place(b)).gamma_multiply(0.75),
-                    colours.at(0.0, place(b)).gamma_multiply(0.35),
-                    colours.at(0.0, place(a)).gamma_multiply(0.35),
+                    colours.at(level(a), place(a)).gamma_multiply(0.7),
+                    colours.at(level(b), place(b)).gamma_multiply(0.7),
+                    colours.at(0.0, place(b)).gamma_multiply(0.3),
+                    colours.at(0.0, place(a)).gamma_multiply(0.3),
                 ],
+            );
+        }
+        // A neon tube along the tops: a wide soft glow and a narrower one
+        // about it, added to the ground on a dark theme.
+        let dark = colours.is_dark();
+        let tube = |p: Pos2| colours.at(1.0, place(p));
+        let haze = if dark { 1.0 } else { 0.45 };
+        for (half, alpha) in [(7.0, 0.22), (3.0, 0.45)] {
+            ribbon(
+                &mut mesh,
+                &line,
+                |_| half,
+                |_, p| glow(tube(p), alpha * haze, dark),
+                true,
             );
         }
         painter.add(mesh);
@@ -337,9 +352,14 @@ impl Analyzer {
                 PathStroke::new_uv(1.0, move |_, p| colours.peak(place(p)).gamma_multiply(0.6)),
             ));
         }
+        // The tube's core: its colour drawn towards white on a dark ground.
+        let core = move |p: Pos2| {
+            let c = colours.at(1.0, place(p));
+            if dark { c.lerp_to_gamma(Color32::WHITE, 0.3) } else { c }
+        };
         painter.add(Shape::line(
             line,
-            PathStroke::new_uv(1.6, move |_, p| colours.at(level(p).max(0.6), place(p))),
+            PathStroke::new_uv(1.8, move |_, p| core(p)),
         ));
     }
 }

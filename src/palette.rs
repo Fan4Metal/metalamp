@@ -210,22 +210,22 @@ fn scheme(visual: Visual) -> Scheme {
             peak: &[0xffece0],
             by_level: true,
         },
-        // Tropical: emerald at the bass, lime, gold, orange, raspberry,
-        // violet, and azure only at the top of the treble (the sea's
-        // turquoise and azure the user found out of place as the main
-        // colours, then amber alone too plain).
+        // Neon tubes: green at the bass, lime, yellow, orange, pink,
+        // violet, blue at the treble (the user asked for the tropical
+        // colours brighter, as neon; the sea's turquoise and azure as the
+        // main colours, then amber alone, were found out of place before).
         Visual::Curve => Scheme {
             rows: &[
                 (
                     0.0,
-                    &[0x064a2a, 0x2e4a06, 0x4c3c06, 0x4c2006, 0x4c0a26, 0x30105a, 0x0a2a5a],
+                    &[0x00552a, 0x3a5500, 0x5a4a00, 0x5a2400, 0x5a0034, 0x3a0a66, 0x0a2c66],
                 ),
                 (
                     1.0,
-                    &[0x22e88a, 0xa6f02a, 0xffd22a, 0xff7a1e, 0xff2f7e, 0xa45cff, 0x4aa8ff],
+                    &[0x1aff7c, 0xb6ff1a, 0xffe81a, 0xff7a12, 0xff1f8e, 0xb43cff, 0x2e9bff],
                 ),
             ],
-            peak: &[0xd8ffea, 0xf0ffd4, 0xfff6d2, 0xffe6d2, 0xffdcea, 0xeee0ff, 0xdceeff],
+            peak: &[0xd8ffea, 0xf2ffd0, 0xfff8cc, 0xffe6cc, 0xffd6ee, 0xf0dcff, 0xd6ecff],
             by_level: false,
         },
         // Acid neon: mint at the bass, lime, lemon at the treble (moonlit
