@@ -94,6 +94,11 @@ pub struct InfoView {
     paths: Vec<PathBuf>,
     /// The one shown, or none: all of them at once (several only).
     at: Option<usize>,
+    /// What LRCLIB gave each file while all of them were edited, kept while
+    /// one of them is shown (in `paths`' order; empty: nothing asked or
+    /// it is the form's): a file's lyrics found go into its field when it
+    /// is edited, to be looked at before they are written.
+    lrclib_found: Vec<Found>,
     /// The file whose details are asked for: the one shown (with all of
     /// them, the first, for its cover).
     wanted: Option<PathBuf>,
@@ -378,6 +383,9 @@ struct Form {
     /// LRCLIB's lyrics looked for: of the one file, into its field; of
     /// every file at once, each written into its own file with the fields.
     lrclib: Option<Lrclib>,
+    /// LRCLIB's lyrics found for this one file while all the files were
+    /// shown: put into its field once it is read, as if typed in.
+    prefill: Option<String>,
 }
 
 /// LRCLIB asked for the files' lyrics on a thread, one file after another.
@@ -390,7 +398,7 @@ struct Lrclib {
 }
 
 /// What came of a file's lyrics asked of LRCLIB.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Debug)]
 enum Found {
     Waiting,
     Lyrics(String),
@@ -401,6 +409,10 @@ enum Found {
     None,
     /// LRCLIB could not be asked, or the file read (technical, English).
     Failed(String),
+    /// Its lyrics were written, looked at on their own (`InfoView::go`).
+    Written,
+    /// Its lyrics were given up while looked at on their own.
+    Declined,
 }
 
 impl Lrclib {
@@ -441,6 +453,20 @@ impl Lrclib {
                 format!("Найдено: {found} из {total}")
             )
         }];
+        let written = count(|f| *f == Found::Written);
+        if written > 0 {
+            parts.push(tr!(
+                format!("{written} written"),
+                format!("записано: {written}")
+            ));
+        }
+        let declined = count(|f| *f == Found::Declined);
+        if declined > 0 {
+            parts.push(tr!(
+                format!("{declined} given up"),
+                format!("отменено: {declined}")
+            ));
+        }
         if has > 0 {
             parts.push(tr!(
                 format!("{has} have lyrics already"),
@@ -467,7 +493,22 @@ impl Found {
             Found::Instrumental => tr!("an instrumental", "инструментальная"),
             Found::None => tr!("not in LRCLIB", "нет в LRCLIB"),
             Found::Failed(_) => tr!("not asked", "не удалось"),
+            Found::Written => tr!("lyrics written", "текст записан"),
+            Found::Declined => tr!("given up", "отменён"),
         })
+    }
+}
+
+impl Lrclib {
+    /// What came of each file before, kept while one of them was looked
+    /// at on its own.
+    fn kept(found: Vec<Found>) -> Lrclib {
+        let (_, rx) = channel();
+        Lrclib {
+            rx,
+            found,
+            one: false,
+        }
     }
 }
 
@@ -515,6 +556,7 @@ impl Form {
             cover: None,
             lrclib_on: false,
             lrclib: None,
+            prefill: None,
         }
     }
 
@@ -624,6 +666,16 @@ impl Form {
                         }
                         _ => None,
                     };
+                    if let (Some(text), Some(field)) = (self.prefill.take(), self.lyrics.as_mut()) {
+                        field.value = text.clone();
+                        field.touched = field.value != field.shown;
+                        let (_, rx) = channel();
+                        self.lrclib = Some(Lrclib {
+                            rx,
+                            found: vec![Found::Lyrics(text)],
+                            one: true,
+                        });
+                    }
                     self.state = State::Ready;
                 }
                 Msg::Written(written, errors) => {
@@ -657,15 +709,16 @@ impl Form {
 
     /// Why another file cannot be gone to now (`all`: all the files are
     /// shown at once), while editing: LRCLIB is being asked, or all the
-    /// files hold changes, which going would write into every one of them
-    /// unasked (going from one file saves it).
+    /// files hold changes typed in, which going would write into every one
+    /// of them unasked (going from one file saves it; LRCLIB's lyrics of
+    /// all the files go with the window, `InfoView::go`).
     fn held(&self, all: bool) -> Option<&'static str> {
         if self.looking() {
             Some(tr!(
                 "Looking on LRCLIB: wait for it to end",
                 "Идёт поиск в LRCLIB: дождитесь его окончания"
             ))
-        } else if all && self.touched() {
+        } else if all && self.typed() {
             Some(tr!(
                 "Save or cancel the changes first",
                 "Сначала сохраните или отмените изменения"
@@ -675,9 +728,13 @@ impl Form {
         }
     }
 
+    /// Fields typed in or a cover chosen.
+    fn typed(&self) -> bool {
+        self.fields().any(|f| f.touched) || self.cover.is_some()
+    }
+
     fn touched(&self) -> bool {
-        self.fields().any(|f| f.touched)
-            || self.cover.is_some()
+        self.typed()
             || self
                 .lrclib
                 .as_ref()
@@ -802,6 +859,7 @@ impl InfoView {
             Some(0)
         };
         self.paths = paths;
+        self.lrclib_found.clear();
         // Another file's details are not shown while these are read.
         self.shown = None;
         self.cover = None;
@@ -820,9 +878,18 @@ impl InfoView {
             self.editing = false;
         }
         self.form = match to {
-            None => Some(Form::read(ctx, self.paths.clone(), self.write_tags.id3v2)),
-            Some(_) if self.editing => {
-                Some(Form::read(ctx, vec![path.clone()], self.write_tags.id3v2))
+            None => {
+                let mut form = Form::read(ctx, self.paths.clone(), self.write_tags.id3v2);
+                // LRCLIB's lyrics of all the files come back with them.
+                if self.editing && !self.lrclib_found.is_empty() {
+                    form.lrclib = Some(Lrclib::kept(std::mem::take(&mut self.lrclib_found)));
+                }
+                Some(form)
+            }
+            Some(i) if self.editing => {
+                let mut form = Form::read(ctx, vec![path.clone()], self.write_tags.id3v2);
+                form.prefill = self.found_lyrics(i);
+                Some(form)
             }
             Some(_) => None,
         };
@@ -902,6 +969,23 @@ impl InfoView {
         let Polled::Written { any, ok } = form.poll() else {
             return written;
         };
+        // One file's lyrics written (or cleared) while LRCLIB's of all the
+        // files are kept: its line in the list says so.
+        let lyrics = form
+            .lyrics
+            .as_ref()
+            .filter(|f| f.touched)
+            .map(|f| f.value.trim().is_empty());
+        if ok
+            && let (Some(i), Some(cleared)) = (self.at, lyrics)
+            && let Some(found) = self.lrclib_found.get_mut(i)
+        {
+            *found = if cleared {
+                Found::Declined
+            } else {
+                Found::Written
+            };
+        }
         if ok {
             let to = match self.then.take() {
                 Some(to) => to,
@@ -923,14 +1007,38 @@ impl InfoView {
 
     /// Goes to the file `to` (or all of them), saving the fields typed in
     /// first; not while one of them cannot be written (`stuck`).
+    /// From all the files at once, LRCLIB's lyrics found go with the
+    /// window, not written: the file gone to has its own in its field (the
+    /// lyrics' tab shown), to be looked at, and the others are kept.
     fn go(&mut self, ctx: &egui::Context, to: Option<usize>) {
         if self.stuck() || self.held().is_some() {
             return;
+        }
+        if self.editing
+            && self.at.is_none()
+            && let Some(form) = &mut self.form
+            && let Some(lrclib) = form.lrclib.take_if(|l| !l.one)
+        {
+            self.lrclib_found = lrclib.found;
+            if let Some(i) = to
+                && self.found_lyrics(i).is_some()
+            {
+                set_tab(ctx, Tab::Lyrics);
+            }
         }
         if self.editing && self.form.as_ref().is_some_and(Form::touched) {
             self.save(ctx, Some(to));
         } else {
             self.switch(ctx, to);
+        }
+    }
+
+    /// LRCLIB's lyrics found for the file `i` while all the files were
+    /// edited, not yet written nor given up.
+    fn found_lyrics(&self, i: usize) -> Option<String> {
+        match self.lrclib_found.get(i) {
+            Some(Found::Lyrics(text)) => Some(text.clone()),
+            _ => None,
         }
     }
 
@@ -975,6 +1083,7 @@ impl InfoView {
                 }
                 let mut form = Form::read(ctx, vec![path], self.write_tags.id3v2);
                 form.focus_first = true;
+                form.prefill = self.found_lyrics(i);
                 self.form = Some(form);
             }
             None => {
@@ -984,6 +1093,9 @@ impl InfoView {
                 }
                 form.reset();
                 form.focus_first = true;
+                if !self.lrclib_found.is_empty() {
+                    form.lrclib = Some(Lrclib::kept(std::mem::take(&mut self.lrclib_found)));
+                }
             }
         }
         self.editing = true;
@@ -996,7 +1108,19 @@ impl InfoView {
         self.editing = false;
         self.then = None;
         match self.at {
-            Some(_) => self.form = None,
+            Some(i) => {
+                // LRCLIB's lyrics put in the field are given up with it.
+                let prefilled = self
+                    .form
+                    .as_ref()
+                    .is_some_and(|f| f.lrclib.as_ref().is_some_and(|l| l.one));
+                if prefilled
+                    && let Some(found @ Found::Lyrics(_)) = self.lrclib_found.get_mut(i)
+                {
+                    *found = Found::Declined;
+                }
+                self.form = None;
+            }
             None => {
                 if let Some(form) = &mut self.form {
                     form.reset();
@@ -3994,14 +4118,48 @@ mod tests {
         }
         drop(tx);
         assert!(!form.looking());
+        // LRCLIB's lyrics go with the window, not written: going is free.
         assert!(form.touched());
+        assert_eq!(form.held(true), None);
+        // A cover chosen for all the files holds it.
+        form.cover = Some(NewCover {
+            change: CoverChange::Remove,
+            preview: None,
+            source: None,
+        });
         assert!(form.held(true).is_some());
         assert_eq!(form.held(false), None);
-        // Nothing found: nothing to write, so going is free.
-        if let Some(l) = form.lrclib.as_mut() {
-            l.found[0] = Found::Has;
-        }
-        assert_eq!(form.held(true), None);
+    }
+
+    /// From all the files at once, LRCLIB's lyrics go with the window: the
+    /// file gone to gets its own into its field, nothing written, and
+    /// going back to all of them brings them back.
+    #[test]
+    fn lrclibs_lyrics_go_with_the_file_looked_at() {
+        let ctx = egui::Context::default();
+        let mut view = InfoView {
+            paths: vec![PathBuf::from("a.mp3"), PathBuf::from("b.mp3")],
+            editing: true,
+            ..Default::default()
+        };
+        let mut form = Form::read(&ctx, view.paths.clone(), Id3Version::default());
+        form.lrclib = Some(Lrclib::kept(vec![Found::Lyrics("one".into()), Found::None]));
+        view.form = Some(form);
+        view.go(&ctx, Some(0));
+        assert_eq!(view.at, Some(0));
+        assert!(view.editing);
+        let form = view.form.as_ref().unwrap();
+        assert_eq!(form.paths, [PathBuf::from("a.mp3")]);
+        assert_eq!(form.prefill.as_deref(), Some("one"));
+        assert!(form.state == State::Reading);
+        assert_eq!(view.lrclib_found.len(), 2);
+        // The second file has none: its field is left as it is.
+        view.go(&ctx, Some(1));
+        assert_eq!(view.form.as_ref().unwrap().prefill, None);
+        view.go(&ctx, None);
+        let back = view.form.as_ref().unwrap().lrclib.as_ref().unwrap();
+        assert_eq!(back.found, [Found::Lyrics("one".into()), Found::None]);
+        assert!(view.lrclib_found.is_empty());
     }
 
     /// LRCLIB's lyrics of all the files at once: only those found are
