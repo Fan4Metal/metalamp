@@ -9,14 +9,12 @@
 //! (the RMS) slowly (`FOLLOW_S`, at most `MOST_GAIN` times), so a quiet
 //! passage fills the screen and the wave between the kicks is not a flat
 //! line under them (following the peaks, it was), and a peak over the
-//! knee is pressed softly to the edge (`soft`), not cut. The wave is
-//! drawn smoothed (`smoothed`, a Gaussian without a shift in time, half
-//! its height at `SMOOTH_HZ`): heavy music's distorted guitars and cymbals
-//! drew a fuzz of teeth over the riff. A sweep before the newest fades
-//! the faster the more the newest departs from it (`agree`): on such music
-//! they did not line up and stood as ghost traces. The user liked the
-//! plain one; this keeps its look. Paused, it stands; stopped, the
-//! afterglow fades.
+//! knee is pressed softly to the edge (`soft`), not cut. A sweep before
+//! the newest fades the faster the more the newest departs from it
+//! (`agree`): on heavy music they did not line up and stood as ghost
+//! traces, which made the trace look noisy (smoothing the wave instead
+//! made it too smooth, the user found). The user liked the plain one; this
+//! keeps its look. Paused, it stands; stopped, the afterglow fades.
 
 use std::collections::VecDeque;
 
@@ -40,7 +38,7 @@ const MATCH_STEP: usize = 4;
 /// together).
 const PERSIST_S: f32 = 0.03;
 const GONE_S: f32 = 0.11;
-const AFTERGLOW: f32 = 0.55;
+const AFTERGLOW: f32 = 0.4;
 /// The sweeps' RMS, followed over `FOLLOW_S`, stands at `FILL` of the half
 /// height, the gain at most `MOST_GAIN` (silence's noise is not blown up);
 /// over `KNEE` the trace is pressed softly towards the edge.
@@ -48,9 +46,6 @@ const FILL: f32 = 0.3;
 const FOLLOW_S: f32 = 0.8;
 const MOST_GAIN: f32 = 8.0;
 const KNEE: f32 = 0.75;
-/// The wave drawn smoothed to about this: its power halved here, a
-/// quarter left at twice it.
-const SMOOTH_HZ: f32 = 1200.0;
 /// The graticule's divisions across and up.
 const DIVISIONS: (usize, usize) = (10, 4);
 
@@ -91,9 +86,6 @@ impl Scope {
             return;
         };
         let span = ((rate as f32 * SCOPE_S) as usize).clamp(16, samples.len() / 2);
-        let reach = (rate as f32 * TRIGGER_S) as usize;
-        let smooth = smoothed(samples, rate, span + reach);
-        let samples = smooth.as_slice();
         let start = self.trigger(samples, rate, span);
         let sweep = &samples[start..start + span];
         let rms = (sweep.iter().map(|x| x * x).sum::<f32>() / span as f32).sqrt();
@@ -247,49 +239,16 @@ impl Scope {
     }
 }
 
-/// The last `len` of `samples` (or all of them) smoothed by a Gaussian of
-/// the width that halves the power at `SMOOTH_HZ`, the same both ways, so
-/// nothing moves in time; at the ends, of the samples there are.
-fn smoothed(samples: &[f32], rate: u32, len: usize) -> Vec<f32> {
-    // A Gaussian's response at f: exp(−(2πfσ)²/2); half the power where
-    // (2πfσ)² = ln 2.
-    let sigma = std::f32::consts::LN_2.sqrt() / (std::f32::consts::TAU * SMOOTH_HZ)
-        * rate as f32;
-    let radius = (3.0 * sigma).ceil() as usize;
-    let weights: Vec<f32> = (0..=radius)
-        .map(|k| (-0.5 * (k as f32 / sigma).powi(2)).exp())
-        .collect();
-    // The samples before the part kept are read too, so its start is
-    // smoothed as its middle is.
-    let len = len.min(samples.len());
-    let from = samples.len() - len;
-    (from..samples.len())
-        .map(|i| {
-            let (mut sum, mut weight) = (samples[i], 1.0);
-            for (k, w) in weights.iter().enumerate().skip(1) {
-                for j in [i.checked_sub(k), Some(i + k).filter(|&j| j < samples.len())]
-                    .into_iter()
-                    .flatten()
-                {
-                    sum += samples[j] * w;
-                    weight += w;
-                }
-            }
-            sum / weight
-        })
-        .collect()
-}
-
 /// How much of an older sweep's light is kept as `new` comes: 1 where
 /// they are alike, less the further apart they are against `new`'s own
-/// swing, nothing when as far apart as the swing.
+/// swing, nothing when half as far apart as the swing.
 fn agree(old: &[Pos2], new: &[Pos2]) -> f32 {
     if old.len() != new.len() || new.is_empty() {
         return 0.0;
     }
     let apart: f32 = old.iter().zip(new).map(|(a, b)| (a.y - b.y).abs()).sum();
     let swing: f32 = new.iter().map(|p| p.y.abs()).sum();
-    (1.0 - apart / swing.max(1e-3)).clamp(0.0, 1.0)
+    (1.0 - 2.0 * apart / swing.max(1e-3)).clamp(0.0, 1.0)
 }
 
 /// `y` (1: the edge) as is up to `KNEE`, over it pressed softly towards
@@ -418,35 +377,6 @@ mod tests {
             s.feed(None, true, 0.02, 300.0);
         }
         assert!(!s.active());
-    }
-
-    /// Treble over a bass note (a distorted guitar's teeth): drawn about
-    /// as the note alone.
-    #[test]
-    fn the_treble_is_smoothed_away() {
-        let note = |t: f32| 0.4 * (TAU * 110.0 * t).sin();
-        let fuzzy = |t: f32| note(t) + 0.15 * (TAU * 3700.0 * t).sin();
-        let drawn = |f: &dyn Fn(f32) -> f32| {
-            let mut s = Scope::default();
-            for frame in 0..30 {
-                let samples = wave(8192, frame * 960, f);
-                s.feed(Some((&samples, 48_000)), true, 0.02, 300.0);
-            }
-            s.sweeps.back().unwrap().points.clone()
-        };
-        let (clean, fuzz) = (drawn(&note), drawn(&fuzzy));
-        let off = clean
-            .iter()
-            .zip(&fuzz)
-            .map(|(a, b)| (a.y - b.y).abs())
-            .fold(0.0f32, f32::max);
-        assert!(off < 0.04, "{off}");
-        // Smoothing moves nothing in time: a crossing stays where it is.
-        let tone = wave(4096, 0, |t| (TAU * 200.0 * t).sin());
-        let smooth = smoothed(&tone, 48_000, 4096);
-        let mid = 2040..2100;
-        let crossing = |v: &[f32]| mid.clone().find(|&i| v[i - 1] < 0.0 && v[i] >= 0.0);
-        assert_eq!(crossing(&tone), crossing(&smooth));
     }
 
     #[test]
