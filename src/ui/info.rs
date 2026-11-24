@@ -649,6 +649,32 @@ impl Form {
             .chain(self.lyrics.iter())
     }
 
+    /// LRCLIB is being asked: nothing is saved nor another file gone to
+    /// meanwhile, so no answer is lost.
+    fn looking(&self) -> bool {
+        self.lrclib.as_ref().is_some_and(Lrclib::busy)
+    }
+
+    /// Why another file cannot be gone to now (`all`: all the files are
+    /// shown at once), while editing: LRCLIB is being asked, or all the
+    /// files hold changes, which going would write into every one of them
+    /// unasked (going from one file saves it).
+    fn held(&self, all: bool) -> Option<&'static str> {
+        if self.looking() {
+            Some(tr!(
+                "Looking on LRCLIB: wait for it to end",
+                "Идёт поиск в LRCLIB: дождитесь его окончания"
+            ))
+        } else if all && self.touched() {
+            Some(tr!(
+                "Save or cancel the changes first",
+                "Сначала сохраните или отмените изменения"
+            ))
+        } else {
+            None
+        }
+    }
+
     fn touched(&self) -> bool {
         self.fields().any(|f| f.touched)
             || self.cover.is_some()
@@ -898,7 +924,7 @@ impl InfoView {
     /// Goes to the file `to` (or all of them), saving the fields typed in
     /// first; not while one of them cannot be written (`stuck`).
     fn go(&mut self, ctx: &egui::Context, to: Option<usize>) {
-        if self.stuck() {
+        if self.stuck() || self.held().is_some() {
             return;
         }
         if self.editing && self.form.as_ref().is_some_and(Form::touched) {
@@ -906,6 +932,12 @@ impl InfoView {
         } else {
             self.switch(ctx, to);
         }
+    }
+
+    /// Why another file cannot be gone to while editing (`Form::held`).
+    fn held(&self) -> Option<&'static str> {
+        let form = self.form.as_ref().filter(|_| self.editing)?;
+        form.held(self.at.is_none())
     }
 
     /// A field typed in holds what cannot be written (a number that is
@@ -920,7 +952,12 @@ impl InfoView {
 
     fn save(&mut self, ctx: &egui::Context, then: Option<Option<usize>>) {
         let Some(form) = &mut self.form else { return };
-        if self.editing && form.state == State::Ready && form.touched() && form.valid() {
+        if self.editing
+            && form.state == State::Ready
+            && form.touched()
+            && form.valid()
+            && !form.looking()
+        {
             form.save(ctx, self.releaser.clone(), self.write_tags);
             self.then = then;
         }
@@ -1605,6 +1642,7 @@ impl InfoView {
             at: self.at,
             count: self.paths.len(),
             enabled: !saving && !self.stuck(),
+            held: self.held(),
         };
         let top = match (self.at, shown) {
             (None, _) => Top::all(self.paths.len(), self.form.as_ref()),
@@ -2208,6 +2246,9 @@ struct Nav {
     at: Option<usize>,
     count: usize,
     enabled: bool,
+    /// Why another file cannot be gone to now (`InfoView::held`), the
+    /// disabled buttons' tip.
+    held: Option<&'static str>,
 }
 
 /// The top of the window: the cover, the title, the artist, the album
@@ -2232,7 +2273,9 @@ fn hero(
                     }
                     if nav.count > 1 {
                         ui.add_space(6.0);
-                        ui.add_enabled_ui(nav.enabled, |ui| nav_buttons(ui, nav, acts));
+                        ui.add_enabled_ui(nav.enabled && nav.held.is_none(), |ui| {
+                            nav_buttons(ui, nav, acts)
+                        });
                     }
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                         ui.add(
@@ -2299,11 +2342,16 @@ fn nav_buttons(ui: &mut Ui, nav: &Nav, acts: &mut Vec<Act>) {
         Some(_) => None,
     };
     let previous = nav.at.and_then(|i| i.checked_sub(1));
+    let held = |r: egui::Response| match nav.held {
+        Some(why) => r.on_disabled_hover_text(why),
+        None => r,
+    };
     let tip = tr!("Next file", "Следующий файл");
-    if ui
-        .add_enabled_ui(next.is_some(), |ui| super::icon_button(ui, Icon::Next, false, tip))
-        .inner
-        .clicked()
+    if held(
+        ui.add_enabled_ui(next.is_some(), |ui| super::icon_button(ui, Icon::Next, false, tip))
+            .inner,
+    )
+    .clicked()
     {
         acts.push(Act::Go(next));
     }
@@ -2311,24 +2359,26 @@ fn nav_buttons(ui: &mut Ui, nav: &Nav, acts: &mut Vec<Act>) {
         ui.label(RichText::new(format!("{} / {n}", i + 1)).color(palette::text_weak()));
     }
     let tip = tr!("Previous file", "Предыдущий файл");
-    if ui
-        .add_enabled_ui(previous.is_some(), |ui| {
+    if held(
+        ui.add_enabled_ui(previous.is_some(), |ui| {
             super::icon_button(ui, Icon::Prev, false, tip)
         })
-        .inner
-        .clicked()
+        .inner,
+    )
+    .clicked()
     {
         acts.push(Act::Go(previous));
     }
     ui.add_space(4.0);
     let all = nav.at.is_none();
-    if ui
-        .add(egui::Button::new(tr!(format!("All {n}"), format!("Все {n}"))).selected(all))
-        .on_hover_text(tr!(
-            "The main fields of all the files at once",
-            "Основные поля всех файлов сразу"
-        ))
-        .clicked()
+    if held(
+        ui.add(egui::Button::new(tr!(format!("All {n}"), format!("Все {n}"))).selected(all))
+            .on_hover_text(tr!(
+                "The main fields of all the files at once",
+                "Основные поля всех файлов сразу"
+            )),
+    )
+    .clicked()
         && !all
     {
         acts.push(Act::Go(None));
@@ -2502,6 +2552,7 @@ fn body_all(
     ui.add_space(14.0);
     section(ui, tr!("Files", "Файлы"), |_| {});
     let found = form.lrclib.as_ref().filter(|l| !l.one).map(|l| &l.found);
+    let held = if editing { form.held(true) } else { None };
     for (i, path) in paths.iter().enumerate() {
         let text = path
             .file_name()
@@ -2527,6 +2578,12 @@ fn body_all(
         let mut tip = path.display().to_string();
         if let Some(Found::Failed(e)) = state {
             tip = format!("{tip}\n{e}");
+        }
+        // Going to the file is not offered while it cannot be done.
+        if let Some(why) = held {
+            ui.add(egui::Label::new(job).truncate())
+                .on_hover_text(format!("{tip}\n\n{why}"));
+            continue;
         }
         let resp = ui
             .add(
@@ -3168,20 +3225,27 @@ fn footer_row(ui: &mut Ui, form: Option<&Form>, acts: &mut Vec<Act>) {
     }
     ui.add_space(6.0);
     let state = form.map(|f| &f.state);
-    let can_save = form.is_some_and(|f| f.state == State::Ready && f.touched() && f.valid());
+    let can_save = form.is_some_and(|f| {
+        f.state == State::Ready && f.touched() && f.valid() && !f.looking()
+    });
+    let looking = form.is_some_and(Form::looking);
     ui.horizontal(|ui| {
         if state == Some(&State::Saving) {
             ui.spinner();
             ui.weak(tr!("Writing…", "Запись…"));
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .add_enabled(
-                    can_save,
-                    egui::Button::new(tr!("Save", "Сохранить")).min_size(vec2(100.0, 0.0)),
-                )
-                .clicked()
-            {
+            let mut save = ui.add_enabled(
+                can_save,
+                egui::Button::new(tr!("Save", "Сохранить")).min_size(vec2(100.0, 0.0)),
+            );
+            if looking {
+                save = save.on_disabled_hover_text(tr!(
+                    "Looking on LRCLIB: wait for it to end",
+                    "Идёт поиск в LRCLIB: дождитесь его окончания"
+                ));
+            }
+            if save.clicked() {
                 acts.push(Act::Save);
             }
             if ui
@@ -3905,6 +3969,39 @@ mod tests {
             };
             println!("{:?} {} ms: {what}", path.file_name().unwrap(), t.elapsed().as_millis());
         }
+    }
+
+    /// No other file is gone to while LRCLIB is asked, nor from all the
+    /// files at once while they hold changes (going would write them into
+    /// every file unasked); from one file, going saves it as before.
+    #[test]
+    fn going_waits_for_lrclib_and_for_all_the_files_changes() {
+        let ctx = egui::Context::default();
+        let paths = vec![PathBuf::from("a.mp3"), PathBuf::from("b.mp3")];
+        let mut form = Form::read(&ctx, paths, Id3Version::default());
+        assert_eq!(form.held(true), None);
+        let (tx, rx) = channel();
+        form.lrclib = Some(Lrclib {
+            rx,
+            found: vec![Found::Lyrics("one".into()), Found::Waiting],
+            one: false,
+        });
+        assert!(form.looking());
+        assert!(form.held(false).is_some());
+        assert!(form.held(true).is_some());
+        if let Some(l) = form.lrclib.as_mut() {
+            l.found[1] = Found::None;
+        }
+        drop(tx);
+        assert!(!form.looking());
+        assert!(form.touched());
+        assert!(form.held(true).is_some());
+        assert_eq!(form.held(false), None);
+        // Nothing found: nothing to write, so going is free.
+        if let Some(l) = form.lrclib.as_mut() {
+            l.found[0] = Found::Has;
+        }
+        assert_eq!(form.held(true), None);
     }
 
     /// LRCLIB's lyrics of all the files at once: only those found are
