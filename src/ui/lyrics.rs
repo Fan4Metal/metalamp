@@ -131,6 +131,10 @@ pub fn show(
                     "В LRCLIB нет текста этого трека"
                 )),
                 Note::LrclibFailed(_) => Some(tr!("LRCLIB did not answer", "LRCLIB не ответил")),
+                Note::SaveFailed(e) if *e == crate::library::edit::read_only() => Some(tr!(
+                    "The file is read-only: the lyrics were not written",
+                    "Файл только для чтения: текст не записан"
+                )),
                 Note::SaveFailed(_) => Some(tr!(
                     "The lyrics could not be written into the tag",
                     "Не удалось записать текст в тег"

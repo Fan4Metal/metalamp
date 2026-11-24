@@ -369,6 +369,11 @@ pub fn write(path: &Path, changes: &Changes, how: WriteTags) -> Result<(), Strin
             number_text(*key, v)?;
         }
     }
+    // A read-only file is left as it is (the user's choice), and said so
+    // plainly rather than as Windows' "access denied".
+    if std::fs::metadata(path).is_ok_and(|m| m.permissions().readonly()) {
+        return Err(read_only());
+    }
     with_tag(path, |tag, _| apply(tag, changes), Some(changes), how.id3v2)?;
     if FileType::from_path(path) == Some(FileType::Mpeg) {
         other_tags(path, changes, how)?;
@@ -654,6 +659,11 @@ fn in_use(error: &str) -> String {
     } else {
         error.to_owned()
     }
+}
+
+/// Why a file with the read-only attribute is not written.
+pub fn read_only() -> String {
+    tr!("the file is read-only", "файл только для чтения").to_owned()
 }
 
 /// The file's ID3v2 tag is of version 2.3 (most taggers' default).
@@ -1098,6 +1108,31 @@ mod tests {
         drop(held);
         write(&file, &changes, WriteTags::default()).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A read-only file is not written, and said so; its bytes stay.
+    #[test]
+    fn a_read_only_file_is_said_so() {
+        let dir = std::env::temp_dir().join(format!("metalamp_read_only_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("kept.flac");
+        let bytes = flac_with_cover();
+        std::fs::write(&file, &bytes).unwrap();
+        let set = |read_only: bool| {
+            let mut p = std::fs::metadata(&file).unwrap().permissions();
+            p.set_readonly(read_only);
+            std::fs::set_permissions(&file, p).unwrap();
+        };
+        set(true);
+        let mut changes: Changes = Default::default();
+        changes.main[Key::Genre as usize] = Some("Metal".into());
+        changes.lyrics = Some("[00:01.00]words".into());
+        let result = write(&file, &changes, WriteTags::default());
+        let after = std::fs::read(&file).unwrap();
+        set(false);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(result, Err(read_only()));
+        assert_eq!(after, bytes);
     }
 
     /// An MP3 without ID3v2 gets one with the cover (APIC) and a field.
