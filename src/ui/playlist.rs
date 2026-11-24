@@ -209,6 +209,9 @@ pub struct Under<'a> {
     pub cover: Option<&'a TextureHandle>,
     pub show_cover: &'a mut bool,
     pub show_lyrics: &'a mut bool,
+    /// Without the library (the player and playlist layout) the lyrics
+    /// are in a window of their own: the microphone's button opens it.
+    pub lyrics_window: &'a mut bool,
     pub lyrics: &'a crate::lyrics::State,
     /// LRCLIB may be asked (the setting).
     pub online: bool,
@@ -258,6 +261,7 @@ pub fn show(
         cover,
         show_cover,
         show_lyrics,
+        lyrics_window,
         lyrics,
         online,
     } = under;
@@ -347,15 +351,20 @@ pub fn show(
         *show_cover = !cover_shown;
         *show_lyrics = false;
     }
+    let lyrics_shown = if pv.no_library {
+        &mut *lyrics_window
+    } else {
+        &mut *show_lyrics
+    };
     if crate::ui::icon_button(
         &mut bar,
         Icon::Mic,
-        *show_lyrics,
+        *lyrics_shown,
         tr!("The lyrics of the track playing", "Текст играющего трека"),
     )
     .clicked()
     {
-        *show_lyrics = !*show_lyrics;
+        *lyrics_shown = !*lyrics_shown;
     }
     playlists_menu(
         &mut bar,
@@ -420,7 +429,7 @@ pub fn show(
     let side = (full.width() - 2.0 * COVER_PAD).min(COVER_MAX);
     let cover_h = side + COVER_PAD;
     let list_h = full.height() - HEADER - FOOTER;
-    let wanted = *show_lyrics || (*show_cover && !pv.no_library);
+    let wanted = (*show_lyrics || *show_cover) && !pv.no_library;
     let under_rect = (wanted && side > 40.0 && list_h - cover_h >= COVER_MIN_LIST).then(|| {
         let width = if *show_lyrics {
             full.width() - 2.0 * COVER_PAD
@@ -450,6 +459,7 @@ pub fn show(
             lyrics,
             player.position_ms(),
             online,
+            false,
         );
         for act in acts {
             match act {

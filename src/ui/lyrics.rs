@@ -4,7 +4,8 @@
 //! easing to it (the wheel scrolls by hand, and the following waits
 //! [`HAND_S`]), a click on a line seeking to it; plain ones scrolled by the
 //! wheel. While looking, a spinner; without lyrics, a word why. The right
-//! button: the cover, copy, LRCLIB asked again, hide.
+//! button: the cover, copy, LRCLIB asked again, hide. `LyricsWindow`
+//! shows them in a window of their own (the player and playlist layout).
 
 use egui::{Align, FontId, Rect, Sense, Ui, pos2, vec2};
 
@@ -43,6 +44,8 @@ struct Scroll {
     hand_until: f64,
 }
 
+/// The lyrics in `rect`; `in_window`: in a window of their own, whose menu
+/// has no cover to go back to.
 pub fn show(
     ui: &mut Ui,
     rect: Rect,
@@ -50,6 +53,7 @@ pub fn show(
     state: &State,
     position_ms: u64,
     online: bool,
+    in_window: bool,
 ) -> Vec<Act> {
     let mut acts = Vec::new();
     let painter = ui.painter_at(rect);
@@ -157,7 +161,7 @@ pub fn show(
     egui::Popup::context_menu(&resp)
         .id(id.with("menu"))
         .show(|ui| {
-            if ui.button(tr!("Show the cover", "Показать обложку")).clicked() {
+            if !in_window && ui.button(tr!("Show the cover", "Показать обложку")).clicked() {
                 acts.push(Act::ShowCover);
                 ui.close();
             }
@@ -207,7 +211,12 @@ pub fn show(
                 }
             }
             ui.separator();
-            if ui.button(tr!("Hide the lyrics", "Скрыть текст")).clicked() {
+            let hide = if in_window {
+                tr!("Close", "Закрыть")
+            } else {
+                tr!("Hide the lyrics", "Скрыть текст")
+            };
+            if ui.button(hide).clicked() {
                 acts.push(Act::Hide);
                 ui.close();
             }
@@ -371,5 +380,195 @@ fn fades(painter: &egui::Painter, inner: Rect, top: bool, bottom: bool) {
     }
     if !mesh.is_empty() {
         painter.add(mesh);
+    }
+}
+
+/// The window's title, by which it is found.
+fn window_title() -> &'static str {
+    tr!("Lyrics", "Текст песни")
+}
+
+fn window_viewport() -> egui::ViewportId {
+    egui::ViewportId::from_hash_of("lyrics_window")
+}
+
+/// The window's size at first, and its least.
+const WINDOW_SIZE: egui::Vec2 = vec2(420.0, 560.0);
+const WINDOW_MIN: egui::Vec2 = vec2(260.0, 220.0);
+/// The heading's height (it moves the window) and the room round it all.
+const HEADING: f32 = 48.0;
+const MARGIN: f32 = 10.0;
+
+/// The lyrics in a window of their own (the player and playlist layout,
+/// whose playlist has no room for them): frameless, resizable, owned by
+/// the program's window, off the taskbar; the track's title and artist
+/// on top (moving it), the cross; Esc closes it. Its place is the
+/// settings' (`lyrics_window_place`, points), else right of the program's
+/// window when the screen has room there, else over it.
+#[derive(Default)]
+pub struct LyricsWindow {
+    window: super::OwnWindow,
+    /// Where it was put as it opened, given to the builder each frame (a
+    /// place following the window's own would fight its moves).
+    opened: Option<Rect>,
+}
+
+/// What the window shows: the title and the second line of the track.
+pub struct Shown<'a> {
+    pub title: &'a str,
+    pub second: &'a str,
+    pub state: &'a State,
+    pub position_ms: u64,
+    pub online: bool,
+}
+
+impl LyricsWindow {
+    /// Shows the window while `open`; `place` its rectangle, kept as it
+    /// moves (returns whether it moved). The panel's acts are returned;
+    /// closed, `open` is cleared.
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        owner: Option<isize>,
+        open: &mut bool,
+        place: &mut Option<[f32; 4]>,
+        shown: &Shown,
+    ) -> (Vec<Act>, bool) {
+        if !*open {
+            if self.opened.take().is_some() {
+                self.window.reset();
+            }
+            return (Vec::new(), false);
+        }
+        let opened = *self.opened.get_or_insert_with(|| first_place(ctx, *place));
+        let builder = super::OwnWindow::builder(egui::ViewportBuilder::default())
+            .with_title(window_title())
+            .with_decorations(false)
+            .with_resizable(true)
+            .with_inner_size(opened.size())
+            .with_min_inner_size(WINDOW_MIN)
+            .with_position(opened.min)
+            .with_minimize_button(false)
+            .with_maximize_button(false)
+            .with_taskbar(false)
+            .with_icon(crate::window_icon());
+        let dark = palette::current().dark;
+        let mut acts = Vec::new();
+        let mut close = false;
+        let mut moved = false;
+        ctx.show_viewport_immediate(window_viewport(), builder, |ui, _class| {
+            let ctx = ui.ctx().clone();
+            self.window.follow(&ctx, window_title(), owner, dark);
+            close |= ctx.input(|i| i.viewport().close_requested());
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                close = true;
+            }
+            if let (Some(outer), Some(inner)) =
+                ctx.input(|i| (i.viewport().outer_rect, i.viewport().inner_rect))
+                && self.window.hwnd().is_some()
+            {
+                let now = [outer.left(), outer.top(), inner.width(), inner.height()];
+                if place.is_none_or(|p| p.iter().zip(now).any(|(a, b)| (a - b).abs() > 0.5)) {
+                    *place = Some(now);
+                    moved = true;
+                }
+            }
+            crate::frameless::resize_edges(ui, true);
+            egui::CentralPanel::default()
+                .frame(
+                    egui::Frame::NONE
+                        .fill(palette::panel_bg())
+                        .inner_margin(egui::Margin::same(MARGIN as i8)),
+                )
+                .show(ui, |ui| {
+                    let top = Rect::from_min_size(
+                        ctx.content_rect().min,
+                        vec2(ctx.content_rect().width(), HEADING),
+                    );
+                    crate::frameless::drag_area(ui, top, ui.id().with("lyrics_drag"), Sense::hover());
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            close |= super::close_cross(ui);
+                            ui.with_layout(egui::Layout::top_down(Align::Min), |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(shown.title)
+                                            .size(16.0)
+                                            .strong()
+                                            .color(palette::text_bright()),
+                                    )
+                                    .truncate()
+                                    .selectable(false),
+                                );
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(shown.second)
+                                            .size(12.0)
+                                            .color(palette::text_weak()),
+                                    )
+                                    .truncate()
+                                    .selectable(false),
+                                );
+                            });
+                        });
+                    });
+                    ui.add_space(8.0);
+                    let room = ui.available_rect_before_wrap();
+                    ui.allocate_rect(room, Sense::hover());
+                    acts = show(
+                        ui,
+                        room,
+                        egui::Id::new("lyrics_window_panel"),
+                        shown.state,
+                        shown.position_ms,
+                        shown.online,
+                        true,
+                    );
+                });
+        });
+        if acts.iter().any(|a| matches!(a, Act::Hide)) {
+            close = true;
+        }
+        if close {
+            *open = false;
+            self.opened = None;
+            self.window.reset();
+        }
+        (acts, moved)
+    }
+}
+
+/// Where the window opens: its place kept when it is still on a monitor,
+/// else right of the program's window when the work area has room there,
+/// else over its middle.
+fn first_place(ctx: &egui::Context, place: Option<[f32; 4]>) -> Rect {
+    let ppp = ctx.pixels_per_point();
+    let pixels = |r: Rect| {
+        [
+            (r.left() * ppp) as i32,
+            (r.top() * ppp) as i32,
+            (r.right() * ppp) as i32,
+            (r.bottom() * ppp) as i32,
+        ]
+    };
+    if let Some([x, y, w, h]) = place {
+        let r = Rect::from_min_size(pos2(x, y), vec2(w, h).max(WINDOW_MIN));
+        if crate::win::on_a_monitor(pixels(r)) {
+            return r;
+        }
+    }
+    let main = ctx
+        .input(|i| i.viewport().outer_rect)
+        .unwrap_or(ctx.content_rect());
+    // As tall as the program's window, beside it.
+    let size = vec2(WINDOW_SIZE.x, main.height().max(WINDOW_MIN.y));
+    let beside = Rect::from_min_size(pos2(main.right() + 8.0, main.top()), size);
+    let fits = crate::win::work_area_at(pixels(main)).is_some_and(|[_, _, right, bottom]| {
+        beside.right() * ppp <= right as f32 && beside.bottom() * ppp <= bottom as f32
+    });
+    if fits {
+        beside
+    } else {
+        Rect::from_center_size(main.center(), WINDOW_SIZE)
     }
 }

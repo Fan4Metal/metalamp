@@ -129,6 +129,8 @@ pub struct App {
     /// The lyrics of the track heard, looked for while the playlist shows
     /// them.
     lyrics: crate::lyrics::Lyrics,
+    /// The lyrics' window of the player and playlist layout.
+    lyrics_window: crate::ui::lyrics::LyricsWindow,
     /// Back from the mini player, the window not grown yet: the whole
     /// window's panels wait, else the playlist and the library's panes
     /// took the mini player's size as their own (at most 1 s).
@@ -286,6 +288,7 @@ impl App {
             mini_spin: Default::default(),
             outside: Default::default(),
             lyrics: Default::default(),
+            lyrics_window: Default::default(),
             mini_icon: None,
             growing: None,
             kept_for_the_end: Instant::now(),
@@ -530,7 +533,12 @@ impl App {
     /// Looks for the lyrics of the track heard (else the playlist's current
     /// one) while the playlist shows them.
     fn follow_lyrics(&mut self, ctx: &egui::Context) {
-        if !self.settings.playlist_lyrics {
+        let wanted = if self.settings.window_layout == WindowLayout::Playlist {
+            self.settings.lyrics_window
+        } else {
+            self.settings.playlist_lyrics && self.settings.playlist_visible
+        };
+        if !wanted {
             return;
         }
         let Some(path) = self.playing_or_current_path() else {
@@ -565,6 +573,7 @@ impl App {
             cover,
             show_cover: &mut settings.playlist_cover,
             show_lyrics: &mut settings.playlist_lyrics,
+            lyrics_window: &mut settings.lyrics_window,
             lyrics: lyrics.state(),
             online: settings.lyrics_online,
         }
@@ -2241,6 +2250,12 @@ impl eframe::App for App {
             .clone_from(&self.settings.playlist_format);
         self.playlist_view.numbers = self.settings.playlist_numbers;
         self.playlist_view.lengths = self.settings.playlist_lengths;
+        self.follow_lyrics(&ctx);
+        let lyrics_shown = (
+            self.settings.playlist_cover,
+            self.settings.playlist_lyrics,
+            self.settings.lyrics_window,
+        );
         if alone && self.settings.player_only {
             // The player alone: nothing under the bar (the window's ground
             // while it shrinks).
@@ -2251,8 +2266,6 @@ impl eframe::App for App {
             });
         } else if alone {
             let cover = self.playing_cover(&ctx);
-            self.follow_lyrics(&ctx);
-            let shown = (self.settings.playlist_cover, self.settings.playlist_lyrics);
             let hidden = self.settings.hidden_playlists.clone();
             let panel = egui::CentralPanel::no_frame().show(root_ui, |ui| {
                 crate::ui::playlist::show(
@@ -2265,17 +2278,12 @@ impl eframe::App for App {
                     &hidden,
                 )
             });
-            if (self.settings.playlist_cover, self.settings.playlist_lyrics) != shown {
-                self.place_changed = Some(Instant::now());
-            }
             self.playlist_view.focused = true;
             self.playlist_actions(panel.inner, &ctx);
         // Also beside the start screen: files opened from Explorer, Ctrl+O
         // or dropped play without a library.
         } else if self.settings.playlist_visible && !mini {
             let cover = self.playing_cover(&ctx);
-            self.follow_lyrics(&ctx);
-            let shown = (self.settings.playlist_cover, self.settings.playlist_lyrics);
             let hidden = self.settings.hidden_playlists.clone();
             let panel = egui::Panel::right("playlist")
                 .resizable(true)
@@ -2293,9 +2301,6 @@ impl eframe::App for App {
                         &hidden,
                     )
                 });
-            if (self.settings.playlist_cover, self.settings.playlist_lyrics) != shown {
-                self.place_changed = Some(Instant::now());
-            }
             let width = panel.response.rect.width();
             if (width - self.settings.playlist_width).abs() > 0.5 {
                 self.settings.playlist_width = width;
@@ -2311,6 +2316,45 @@ impl eframe::App for App {
             self.playlist_actions(panel.inner, &ctx);
         } else {
             self.playlist_view.hidden();
+        }
+        // The player and playlist layout: the lyrics in a window of their
+        // own (also with the playlist folded away).
+        let mut window_open = alone && !mini && self.settings.lyrics_window;
+        let was_open = window_open;
+        let (title, second, _) = self.now_playing();
+        let shown = crate::ui::lyrics::Shown {
+            title: &title,
+            second: &second,
+            state: self.lyrics.state(),
+            position_ms: self.player.position_ms(),
+            online: self.settings.lyrics_online,
+        };
+        let (acts, moved) = self.lyrics_window.show(
+            &ctx,
+            self.hwnd,
+            &mut window_open,
+            &mut self.settings.lyrics_window_place,
+            &shown,
+        );
+        if was_open && !window_open {
+            self.settings.lyrics_window = false;
+        }
+        for act in acts {
+            match act {
+                crate::ui::lyrics::Act::Seek(ms) => self.player.seek(ms),
+                crate::ui::lyrics::Act::Ask(how) => self.lyrics.ask_again(how),
+                crate::ui::lyrics::Act::ShowCover | crate::ui::lyrics::Act::Hide => {}
+            }
+        }
+        if moved
+            || lyrics_shown
+                != (
+                    self.settings.playlist_cover,
+                    self.settings.playlist_lyrics,
+                    self.settings.lyrics_window,
+                )
+        {
+            self.place_changed = Some(Instant::now());
         }
         if !mini && !alone {
             egui::Panel::bottom("status")

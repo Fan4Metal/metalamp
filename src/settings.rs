@@ -109,6 +109,11 @@ pub struct Settings {
     /// The lyrics of the track playing under the playlist, in the cover's
     /// place (`ui/lyrics.rs`).
     pub playlist_lyrics: bool,
+    /// The player and playlist layout: the lyrics in a window of their own
+    /// (`ui::lyrics::LyricsWindow`), and its place (points: left, top, and
+    /// the inner width and height).
+    pub lyrics_window: bool,
+    pub lyrics_window_place: Option<[f32; 4]>,
     /// Lyrics a file lacks are looked for on LRCLIB (`lyrics.rs`).
     pub lyrics_online: bool,
     /// The file's own lyrics or LRCLIB's first.
@@ -886,6 +891,8 @@ impl Default for Settings {
             playlist_width: 340.0,
             playlist_cover: true,
             playlist_lyrics: false,
+            lyrics_window: false,
+            lyrics_window_place: None,
             lyrics_online: true,
             lyrics_priority: LyricsPriority::default(),
             hidden_playlists: Vec::new(),
