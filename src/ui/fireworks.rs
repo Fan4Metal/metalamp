@@ -64,10 +64,10 @@ const STRONG: f32 = 0.7;
 const SECOND: f32 = 0.8;
 /// The stars fall at this many heights a second squared, times their
 /// weight, slowed by their drag.
-const GRAVITY: f32 = 0.9;
+const GRAVITY: f32 = 1.25;
 /// A shell's radius, of the height: the smallest and the largest; at
 /// most `SHELL_WIDE` of the width.
-const SHELL: [f32; 2] = [0.2, 0.8];
+const SHELL: [f32; 2] = [0.28, 1.1];
 const SHELL_WIDE: f32 = 0.35;
 /// The stars kept at most (the oldest go).
 const MOST: usize = 2200;
@@ -91,15 +91,16 @@ const TRAIL: usize = 10;
 /// A star without a trail is a streak as long as its flight in
 /// `STREAK_S`, at most `STREAK_MOST` points.
 const STREAK_S: f32 = 0.06;
-const STREAK_MOST: f32 = 36.0;
+const STREAK_MOST: f32 = 50.0;
 /// A willow's and a rocket's embers on a dark theme, whatever the colours.
 const GOLD: Color32 = Color32::from_rgb(255, 190, 100);
 /// The widths are for a display this high (the full bar's), thinner in a
 /// lower one.
 const REFERENCE_HEIGHT: f32 = 118.0;
 /// The stars this many times their widths: near, not far off (the user
-/// found them far at 1).
-const NEAR: f32 = 1.7;
+/// found them far at 1, still small at 1.7 with shells of 0.2–0.8 of the
+/// height and a gravity of 0.9; brought nearer, everything grew alike).
+const NEAR: f32 = 2.5;
 
 /// How a shell bursts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1060,10 +1061,12 @@ mod tests {
     #[test]
     fn a_shell_opens_to_its_radius_crowding_at_the_rim() {
         let mut f = settled(0.0);
-        let at = pos2(380.0, 40.0);
-        f.burst(at, 0.5, 1.0, Shell::Peony);
+        // The smallest, high up: a large one is taller than the display
+        // (near), and its stars leaving it would move the middle.
+        let at = pos2(380.0, 20.0);
+        f.burst(at, 0.5, 0.0, Shell::Peony);
         let radius = f.flashes[0].radius;
-        assert!((radius - SIZE.y * SHELL[1]).abs() < 0.01);
+        assert!((radius - SIZE.y * SHELL[0]).abs() < 0.01);
         for _ in 0..50 {
             f.step(0.02, false);
         }
