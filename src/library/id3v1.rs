@@ -5,7 +5,9 @@
 //! Russian Windows), as Winamp and the old taggers wrote them. The text is
 //! written in the ANSI code page (`CP_ACP`), a letter it lacks as "?", each
 //! field cut to its length on a letter's boundary; the genre is its number
-//! in the list of genres (255, none, for another).
+//! in the list of genres (255, none, for another). Read, lofty takes the
+//! bytes as Latin-1 too: `read_in_ansi` reads its text again in the same
+//! code page, so a tag in Windows-1251 is not shown as "Àðèÿ".
 
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -114,6 +116,57 @@ fn genre_number(genre: &str) -> u8 {
         .map_or(NO_GENRE, |i| i as u8)
 }
 
+/// The text of an ID3v1 tag lofty read (`TagType::Id3v1`, each byte taken
+/// as the Latin-1 letter of its number) read again in the ANSI code page,
+/// the one it is written in.
+pub fn read_in_ansi(tag: &mut lofty::tag::Tag) {
+    use lofty::tag::{ItemValue, TagItem};
+    let items: Vec<TagItem> = tag.items().cloned().collect();
+    tag.retain(|_| false);
+    for item in items {
+        let (key, value) = item.consume();
+        let value = match value {
+            ItemValue::Text(text) => ItemValue::Text(from_latin1(text)),
+            other => other,
+        };
+        tag.push_unchecked(TagItem::new(key, value));
+    }
+}
+
+/// `text`, made of Latin-1 letters standing for bytes, read as those bytes
+/// in the ANSI code page. Text with a letter past U+00FF did not come of
+/// such bytes and stays as it is, so does ASCII.
+fn from_latin1(text: String) -> String {
+    use windows_sys::Win32::Globalization::{CP_ACP, MultiByteToWideChar};
+    let Some(bytes) = text
+        .chars()
+        .map(|c| u8::try_from(c).ok())
+        .collect::<Option<Vec<u8>>>()
+    else {
+        return text;
+    };
+    if bytes.is_ascii() {
+        return text;
+    }
+    // At most a letter a byte (a code page of one byte a letter, or two).
+    let mut wide = vec![0u16; bytes.len()];
+    // SAFETY: both buffers are valid for the lengths given.
+    let n = unsafe {
+        MultiByteToWideChar(
+            CP_ACP,
+            0,
+            bytes.as_ptr(),
+            bytes.len() as i32,
+            wide.as_mut_ptr(),
+            wide.len() as i32,
+        )
+    };
+    if n <= 0 {
+        return text;
+    }
+    String::from_utf16_lossy(&wide[..n as usize])
+}
+
 /// `text` in the ANSI code page, at most `size` bytes, cut between
 /// letters.
 fn ansi(text: &str, size: usize) -> Vec<u8> {
@@ -210,6 +263,28 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), vec![0x55u8; 1000]);
         assert!(!remove(&path).unwrap());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Latin-1 letters standing for bytes are read in the code page; ASCII
+    /// and text with letters past U+00FF stay as they are.
+    #[test]
+    fn latin1_read_in_the_ansi_code_page() {
+        assert_eq!(from_latin1("Abc 12".into()), "Abc 12");
+        assert_eq!(from_latin1("Ария".into()), "Ария");
+        let ansi = unsafe { windows_sys::Win32::Globalization::GetACP() };
+        if ansi == 1251 {
+            assert_eq!(from_latin1("Àðèÿ".into()), "Ария");
+        } else if ansi == 1252 {
+            assert_eq!(from_latin1("Mot\u{f6}rhead".into()), "Motörhead");
+            // 0x80: the euro sign in 1252, a control letter in Latin-1.
+            assert_eq!(from_latin1("\u{80}".into()), "€");
+        }
+        let mut tag = lofty::tag::Tag::new(lofty::tag::TagType::Id3v1);
+        tag.insert_text(lofty::tag::ItemKey::TrackTitle, "Abc".into());
+        tag.insert_text(lofty::tag::ItemKey::Genre, "Metal".into());
+        read_in_ansi(&mut tag);
+        assert_eq!(tag.get_string(lofty::tag::ItemKey::TrackTitle), Some("Abc"));
+        assert_eq!(tag.get_string(lofty::tag::ItemKey::Genre), Some("Metal"));
     }
 
     /// A letter the code page has is one byte; one it lacks is "?". On a

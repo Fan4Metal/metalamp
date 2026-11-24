@@ -13,10 +13,14 @@ use super::Track;
 
 /// Raised when the meaning of a field changes: an index of another version
 /// is dropped and the library read again.
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 /// Older versions whose tracks are shown until they are read again: 1
 /// took an MP3's later ID3v2 tags over its first (`tags::open`).
 const READ_AGAIN: [u32; 1] = [1];
+/// Older versions of which only the MP3s whose text may have come of an
+/// ID3v1 tag read as Latin-1 (`latin1_suspect`) are read again: 2 read
+/// ID3v1 as Latin-1, not in the ANSI code page (`id3v1::read_in_ansi`).
+const ANSI_AGAIN: [u32; 1] = [2];
 const FILE: &str = "library.json";
 
 #[derive(Serialize, Deserialize)]
@@ -69,12 +73,42 @@ pub fn load() -> Loaded {
             stale: index.version != VERSION,
             playlists: index.playlists,
         },
+        Ok(index) if ANSI_AGAIN.contains(&index.version) => Loaded {
+            tracks: to_read_in_ansi(dated(index.tracks)),
+            stale: false,
+            playlists: index.playlists,
+        },
         Ok(_) => none(),
         Err(e) => {
             log::warn!("cannot read {}: {e}", path.display());
             none()
         }
     }
+}
+
+/// `tracks` with the time of each `latin1_suspect` one forgotten, so the
+/// scan reads it again (its `added` is set by then, and kept).
+fn to_read_in_ansi(mut tracks: Vec<Track>) -> Vec<Track> {
+    let mut n = 0;
+    for t in tracks.iter_mut().filter(|t| latin1_suspect(t)) {
+        t.mtime = 0;
+        n += 1;
+    }
+    log::debug!("{n} MP3s read again for their ID3v1 tags' code page");
+    tracks
+}
+
+/// An MP3 whose title, artist, album or genre holds a letter of
+/// U+0080–U+00FF, which an ID3v1 tag read as Latin-1 gave for each byte
+/// past ASCII.
+fn latin1_suspect(t: &Track) -> bool {
+    let mp3 = t
+        .path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("mp3"));
+    mp3 && [&t.title, &t.artist, &t.album, &t.genre]
+        .iter()
+        .any(|s| s.chars().any(|c| ('\u{80}'..='\u{ff}').contains(&c)))
 }
 
 /// Writes the index (to a temporary file, then renamed over the old one).
@@ -151,5 +185,26 @@ mod tests {
         // Before the playlists were kept: none.
         assert!(index.playlists.is_empty());
         assert_eq!(index.tracks[0].year, 0);
+    }
+
+    /// Of an index of version 2, only the MP3s with letters an ID3v1 tag
+    /// read as Latin-1 gives are read again; the others keep their times.
+    #[test]
+    fn mp3s_read_as_latin1_are_read_again() {
+        let track = |path: &str, title: &str| Track {
+            path: path.into(),
+            title: title.into(),
+            mtime: 7,
+            ..Track::default()
+        };
+        let tracks = to_read_in_ansi(vec![
+            track("a.mp3", "Àðèÿ"),
+            track("b.MP3", "Motörhead"),
+            track("c.flac", "Àðèÿ"),
+            track("d.mp3", "Ария"),
+            track("e.mp3", "Plain"),
+        ]);
+        let times: Vec<u64> = tracks.iter().map(|t| t.mtime).collect();
+        assert_eq!(times, [0, 0, 7, 7, 7]);
     }
 }

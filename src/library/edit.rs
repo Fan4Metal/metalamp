@@ -493,7 +493,11 @@ fn with_tag<R>(
                 seeded(
                     [
                         file.ape().cloned().map(Tag::from),
-                        file.id3v1().cloned().map(Tag::from),
+                        file.id3v1().cloned().map(|v1| {
+                            let mut tag = Tag::from(v1);
+                            super::id3v1::read_in_ansi(&mut tag);
+                            tag
+                        }),
                     ]
                     .into_iter()
                     .flatten(),
@@ -1170,6 +1174,57 @@ mod tests {
         assert_eq!(after[Key::Artist as usize], "Old artist");
         assert_eq!(after[Key::Album as usize], "Old album");
         assert_eq!(after[Key::Year as usize], "1999");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// An MP3 with only an ID3v1 tag in the ANSI code page (Windows-1251 on
+    /// a Russian Windows, as `id3v1::write` writes it): the library, the
+    /// file info and its editing read it in that code page, not as Latin-1.
+    #[test]
+    fn id3v1_is_read_in_the_ansi_code_page() {
+        let mut bytes = Vec::new();
+        for _ in 0..4 {
+            bytes.extend_from_slice(&[0xFF, 0xFB, 0x90, 0x64]);
+            bytes.extend_from_slice(&[0; 413]);
+        }
+        // Cyrillic where the code page has it, else Western letters.
+        let (title, artist) = if unsafe { windows_sys::Win32::Globalization::GetACP() } == 1251 {
+            ("Беспечный ангел", "Ария")
+        } else {
+            ("Café", "Motörhead")
+        };
+        bytes.extend_from_slice(&super::super::id3v1::block(&super::super::id3v1::Fields {
+            title,
+            artist,
+            album: "Album",
+            year: "1997",
+            genre: "Metal",
+            ..Default::default()
+        }));
+        let dir = std::env::temp_dir().join(format!("metalamp_id3v1_ansi_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("ansi.mp3");
+        std::fs::write(&file, &bytes).unwrap();
+        let track = super::super::tags::read(&file, bytes.len() as u64, 0).unwrap();
+        assert_eq!((track.title.as_str(), track.artist.as_str()), (title, artist));
+        assert_eq!((track.album.as_str(), track.genre.as_str()), ("Album", "Metal"));
+        let details = super::super::details::read(&file).unwrap();
+        assert!(
+            details.fields.iter().any(|(_, value)| value == title),
+            "{:?}",
+            details.fields
+        );
+        let values = read(&file, Id3Version::default()).unwrap().main;
+        assert_eq!(values[Key::Title as usize], title);
+        assert_eq!(values[Key::Artist as usize], artist);
+        // An ID3v2 seeded from it by a change keeps the letters.
+        let mut changes: Changes = Default::default();
+        changes.main[Key::AlbumArtist as usize] = Some(artist.into());
+        write(&file, &changes, WriteTags::default()).unwrap();
+        let mut f = std::fs::File::open(&file).unwrap();
+        let mp3 = lofty::mpeg::MpegFile::read_from(&mut f, ParseOptions::new()).unwrap();
+        assert_eq!(mp3.id3v2().unwrap().title().as_deref(), Some(title));
+        drop(f);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
