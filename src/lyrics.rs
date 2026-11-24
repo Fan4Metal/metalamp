@@ -57,6 +57,37 @@ pub struct Text {
     /// Every line has its time, in order.
     pub synced: bool,
     pub source: Source,
+    /// LRCLIB's lyrics shown over the file's own: where those are.
+    pub own: Option<Source>,
+    /// Why the file's own lyrics are shown though LRCLIB's were asked for.
+    pub note: Note,
+}
+
+/// LRCLIB's lyrics were asked for and are not shown: why.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum Note {
+    #[default]
+    None,
+    /// LRCLIB has no lyrics of the track.
+    LrclibHasNone,
+    /// LRCLIB could not be asked (technical, in English).
+    LrclibFailed(String),
+}
+
+/// How the lyrics are looked for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum How {
+    /// The file's own first, unless LRCLIB's were chosen for the track;
+    /// then the cache; then LRCLIB.
+    #[default]
+    Usual,
+    /// LRCLIB asked again whatever the cache holds.
+    Fresh,
+    /// LRCLIB's lyrics shown over the file's own, and so from then on
+    /// (kept in the cache).
+    Lrclib,
+    /// The file's own lyrics shown again.
+    Own,
 }
 
 impl Text {
@@ -107,8 +138,7 @@ pub struct Ask {
 struct Job {
     number: u64,
     ask: Ask,
-    /// LRCLIB asked again whatever the cache holds.
-    fresh: bool,
+    how: How,
 }
 
 pub struct Lyrics {
@@ -116,7 +146,8 @@ pub struct Lyrics {
     answers: Option<Receiver<(u64, State)>>,
     asked: Option<Ask>,
     number: u64,
-    fresh: bool,
+    /// How the next ask looks (then back to the usual way).
+    how: How,
     state: State,
 }
 
@@ -127,7 +158,7 @@ impl Default for Lyrics {
             answers: None,
             asked: None,
             number: 0,
-            fresh: false,
+            how: How::Usual,
             state: State::Idle,
         }
     }
@@ -174,7 +205,7 @@ impl Lyrics {
         let job = Job {
             number: self.number,
             ask: ask.clone(),
-            fresh: std::mem::take(&mut self.fresh),
+            how: std::mem::take(&mut self.how),
         };
         if let Some(asks) = &self.asks {
             let _ = asks.send(job);
@@ -197,10 +228,10 @@ impl Lyrics {
         self.asked = None;
     }
 
-    /// LRCLIB asked again at the next `follow`, whatever the cache holds.
-    pub fn search_again(&mut self) {
+    /// The track's lyrics looked for again `how` at the next `follow`.
+    pub fn ask_again(&mut self, how: How) {
         self.asked = None;
-        self.fresh = true;
+        self.how = how;
     }
 }
 
@@ -211,7 +242,7 @@ fn lyrics_thread(asks: &Receiver<Job>, answers: &Sender<(u64, State)>, ctx: &egu
             job = later;
         }
         let started = std::time::Instant::now();
-        let state = look(&job.ask, job.fresh);
+        let state = look(&job.ask, job.how);
         log::debug!(
             "lyrics: {} {} in {} ms",
             job.ask.path.display(),
@@ -228,40 +259,124 @@ fn lyrics_thread(asks: &Receiver<Job>, answers: &Sender<(u64, State)>, ctx: &egu
     }
 }
 
-/// The lyrics of `ask`: its `.lrc` file, its tag, the cache, LRCLIB.
-fn look(ask: &Ask, fresh: bool) -> State {
-    if let Some(text) = lrc_beside(&ask.path) {
-        return found(&text, Source::File);
-    }
-    if let Some(text) = crate::guard::catch(&ask.path, || tag_lyrics(&ask.path)).flatten() {
-        return found(&text, Source::Tag);
-    }
-    if !ask.online || ask.artist.trim().is_empty() || ask.title.trim().is_empty() {
-        return State::None(None);
-    }
-    let file = crate::settings::data_dir().map(|d| d.join(FOLDER).join(cache_name(ask)));
-    if !fresh
-        && let Some(cached) = file.as_deref().and_then(read_cached)
-        && (cached.found || now().saturating_sub(cached.at) < RETRY_NONE)
-    {
-        return cached.state();
-    }
-    match ask_lrclib(ask) {
-        Ok(record) => {
-            let cached = Cached::of(record.as_ref());
-            if let Some(file) = &file {
-                write_cached(file, &cached);
+/// The lyrics of `ask`, looked for `how`: its `.lrc` file, its tag, the
+/// cache, LRCLIB; LRCLIB's first for a track they were chosen for.
+fn look(ask: &Ask, how: How) -> State {
+    let cache = crate::settings::data_dir().map(|d| d.join(FOLDER));
+    look_in(ask, how, cache.as_deref(), &ask_lrclib)
+}
+
+/// What LRCLIB answers for a track.
+type Asker<'a> = dyn Fn(&Ask) -> Result<Option<Record>, String> + 'a;
+
+/// `look` with the cache's folder and LRCLIB given (the tests' own).
+fn look_in(ask: &Ask, how: How, cache: Option<&Path>, ask_lrclib: &Asker<'_>) -> State {
+    let own = lrc_beside(&ask.path)
+        .map(|t| (t, Source::File))
+        .or_else(|| {
+            crate::guard::catch(&ask.path, || tag_lyrics(&ask.path))
+                .flatten()
+                .map(|t| (t, Source::Tag))
+        })
+        .filter(|(t, _)| has_words(t));
+    let own_source = own.as_ref().map(|(_, s)| *s);
+    let show_own = |note: Note| match &own {
+        Some((text, source)) => found(text, *source, None, note),
+        None => match note {
+            Note::LrclibFailed(e) => State::None(Some(e)),
+            _ => State::None(None),
+        },
+    };
+    // LRCLIB is asked by the artist and the title.
+    let file = cache
+        .filter(|_| !ask.artist.trim().is_empty() && !ask.title.trim().is_empty())
+        .map(|d| d.join(cache_name(ask)));
+    let cached = file.as_deref().and_then(read_cached);
+    let fetch = |file: &Path, chosen: bool| -> Result<Cached, String> {
+        let record = ask_lrclib(ask).inspect_err(|e| log::warn!("lyrics: LRCLIB: {e}"))?;
+        let mut answer = Cached::of(record.as_ref());
+        answer.chosen = chosen && answer.has_text();
+        write_cached(file, &answer);
+        Ok(answer)
+    };
+    match how {
+        How::Own => {
+            if let (Some(file), Some(mut c)) = (&file, cached)
+                && c.chosen
+            {
+                c.chosen = false;
+                write_cached(file, &c);
             }
-            cached.state()
+            if own.is_some() {
+                show_own(Note::None)
+            } else {
+                look_in(ask, How::Usual, cache, ask_lrclib)
+            }
         }
-        Err(e) => {
-            log::warn!("lyrics: LRCLIB: {e}");
-            State::None(Some(e))
+        How::Lrclib => {
+            let Some(file) = &file else {
+                return show_own(Note::LrclibHasNone);
+            };
+            let answer = match cached {
+                Some(c) if c.has_text() => Ok(c),
+                _ => fetch(file, true),
+            };
+            match answer {
+                Ok(mut c) if c.has_text() => {
+                    if !c.chosen {
+                        c.chosen = true;
+                        write_cached(file, &c);
+                    }
+                    c.state(own_source)
+                }
+                Ok(_) => show_own(Note::LrclibHasNone),
+                Err(e) => show_own(Note::LrclibFailed(e)),
+            }
+        }
+        How::Fresh => {
+            let Some(file) = &file else {
+                return show_own(Note::LrclibHasNone);
+            };
+            let chosen = cached.as_ref().is_some_and(|c| c.chosen) || own.is_none();
+            match fetch(file, chosen) {
+                Ok(c) if c.has_text() && (chosen || own.is_none()) => c.state(own_source),
+                Ok(c) if own.is_none() => c.state(None),
+                Ok(c) if !c.has_text() => show_own(Note::LrclibHasNone),
+                Ok(_) => show_own(Note::None),
+                Err(e) => show_own(Note::LrclibFailed(e)),
+            }
+        }
+        How::Usual => {
+            if let Some(c) = &cached
+                && c.chosen
+                && c.has_text()
+            {
+                return c.state(own_source);
+            }
+            if own.is_some() {
+                return show_own(Note::None);
+            }
+            let Some(file) = file.filter(|_| ask.online) else {
+                return State::None(None);
+            };
+            if let Some(c) = cached
+                && (c.found || now().saturating_sub(c.at) < RETRY_NONE)
+            {
+                return c.state(None);
+            }
+            match fetch(&file, false) {
+                Ok(c) => c.state(None),
+                Err(e) => State::None(Some(e)),
+            }
         }
     }
 }
 
-fn found(text: &str, source: Source) -> State {
+fn has_words(text: &str) -> bool {
+    parse(text).0.iter().any(|l| !l.text.trim().is_empty())
+}
+
+fn found(text: &str, source: Source, own: Option<Source>, note: Note) -> State {
     let (lines, synced) = parse(text);
     if lines.iter().all(|l| l.text.trim().is_empty()) {
         return State::None(None);
@@ -270,6 +385,8 @@ fn found(text: &str, source: Source) -> State {
         lines,
         synced,
         source,
+        own,
+        note,
     }))
 }
 
@@ -557,6 +674,8 @@ struct Cached {
     instrumental: bool,
     synced: Option<String>,
     plain: Option<String>,
+    /// Shown over the file's own lyrics (chosen in the panel's menu).
+    chosen: bool,
 }
 
 impl Cached {
@@ -572,12 +691,25 @@ impl Cached {
             plain: record
                 .and_then(|r| r.plain_lyrics.clone())
                 .filter(|s| !s.trim().is_empty()),
+            chosen: false,
         }
     }
 
-    fn state(&self) -> State {
-        if let Some(text) = self.synced.as_deref().or(self.plain.as_deref()) {
-            return found(text, Source::Lrclib);
+    fn text(&self) -> Option<&str> {
+        self.synced
+            .as_deref()
+            .or(self.plain.as_deref())
+            .filter(|t| has_words(t))
+    }
+
+    fn has_text(&self) -> bool {
+        self.text().is_some()
+    }
+
+    /// As shown; `own` where the file's own lyrics are, if any.
+    fn state(&self, own: Option<Source>) -> State {
+        if let Some(text) = self.text() {
+            return found(text, Source::Lrclib, own, Note::None);
         }
         if self.instrumental {
             State::Instrumental
@@ -696,6 +828,8 @@ mod tests {
             lines,
             synced,
             source: Source::Tag,
+            own: None,
+            note: Note::None,
         };
         assert_eq!(text.current(0), None);
         assert_eq!(text.current(1000), Some(0));
@@ -761,19 +895,20 @@ mod tests {
         let back = read_cached(&file).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(back, cached);
-        match back.state() {
+        match back.state(Some(Source::Tag)) {
             State::Found(t) => {
                 assert!(t.synced);
                 assert_eq!(t.source, Source::Lrclib);
+                assert_eq!(t.own, Some(Source::Tag));
             }
             other => panic!("{other:?}"),
         }
-        assert_eq!(Cached::of(None).state(), State::None(None));
+        assert_eq!(Cached::of(None).state(None), State::None(None));
         let instrumental = Record {
             instrumental: true,
             ..Default::default()
         };
-        assert_eq!(Cached::of(Some(&instrumental)).state(), State::Instrumental);
+        assert_eq!(Cached::of(Some(&instrumental)).state(None), State::Instrumental);
     }
 
     #[test]
@@ -797,6 +932,75 @@ mod tests {
             ..ask.clone()
         };
         assert_ne!(cache_name(&ask), cache_name(&retitled));
+    }
+
+    /// The ways of looking with an `.lrc` file of its own, a cache in a
+    /// temporary folder and an LRCLIB of the test's.
+    #[test]
+    fn lrclibs_lyrics_are_shown_over_the_files_own_when_chosen() {
+        use std::cell::Cell;
+        let dir = std::env::temp_dir().join(format!("metalamp-look-{}", std::process::id()));
+        let cache = dir.join("cache");
+        std::fs::create_dir_all(&dir).unwrap();
+        let track = dir.join("song.mp3");
+        std::fs::write(dir.join("song.lrc"), "Own words\n").unwrap();
+        let ask = Ask {
+            path: track,
+            artist: "Artist".into(),
+            title: "Song".into(),
+            album: String::new(),
+            duration_ms: 200_000,
+            online: true,
+        };
+        let asked = Cell::new(0);
+        let has = Cell::new(true);
+        let lrclib = |_: &Ask| -> Result<Option<Record>, String> {
+            asked.set(asked.get() + 1);
+            Ok(has.get().then(|| Record {
+                duration: Some(200.0),
+                synced_lyrics: Some("[00:01.00]Their words".into()),
+                ..Default::default()
+            }))
+        };
+        let look = |how| look_in(&ask, how, Some(&cache), &lrclib);
+        let text = |state: State| match state {
+            State::Found(t) => t,
+            other => panic!("{other:?}"),
+        };
+
+        // The own lyrics, LRCLIB not asked.
+        let t = text(look(How::Usual));
+        assert_eq!((t.source, t.own, &t.note), (Source::File, None, &Note::None));
+        assert_eq!(asked.get(), 0);
+        // LRCLIB's chosen, and so from then on, from the cache.
+        let t = text(look(How::Lrclib));
+        assert_eq!((t.source, t.own), (Source::Lrclib, Some(Source::File)));
+        assert_eq!(t.lines[0].text, "Their words");
+        let t = text(look(How::Usual));
+        assert_eq!(t.source, Source::Lrclib);
+        assert_eq!(asked.get(), 1);
+        // Asked again: still LRCLIB's.
+        let t = text(look(How::Fresh));
+        assert_eq!(t.source, Source::Lrclib);
+        assert_eq!(asked.get(), 2);
+        // Back to the own, and so from then on.
+        assert_eq!(text(look(How::Own)).source, Source::File);
+        assert_eq!(text(look(How::Usual)).source, Source::File);
+        assert_eq!(asked.get(), 2);
+        // LRCLIB without them: the own, with a note why.
+        let _ = std::fs::remove_dir_all(&cache);
+        has.set(false);
+        let t = text(look(How::Lrclib));
+        assert_eq!((t.source, &t.note), (Source::File, &Note::LrclibHasNone));
+        assert_eq!(text(look(How::Usual)).source, Source::File);
+        // No own lyrics: LRCLIB's at once, none when it has none.
+        std::fs::remove_file(dir.join("song.lrc")).unwrap();
+        assert_eq!(look(How::Usual), State::None(None));
+        has.set(true);
+        let _ = std::fs::remove_dir_all(&cache);
+        let t = text(look(How::Usual));
+        assert_eq!((t.source, t.own), (Source::Lrclib, None));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// LRCLIB asked for real, with a well-known song (not the user's).

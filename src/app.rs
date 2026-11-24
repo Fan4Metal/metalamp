@@ -977,7 +977,7 @@ impl App {
                     self.place_changed = Some(Instant::now());
                 }
                 crate::ui::playlist::PlaylistAction::Export => self.export_playlist(ctx),
-                crate::ui::playlist::PlaylistAction::SearchLyrics => self.lyrics.search_again(),
+                crate::ui::playlist::PlaylistAction::Lyrics(how) => self.lyrics.ask_again(how),
                 crate::ui::playlist::PlaylistAction::EditTags(indices) => {
                     let paths = self.playlist_paths(&indices);
                     self.file_info.open(ctx, paths, true);

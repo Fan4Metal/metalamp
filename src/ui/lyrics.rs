@@ -8,7 +8,7 @@
 
 use egui::{Align, FontId, Rect, Sense, Ui, pos2, vec2};
 
-use crate::lyrics::{Source, State, Text};
+use crate::lyrics::{How, Note, Source, State, Text};
 use crate::palette;
 
 /// The room round the lines, the gap between them, their size.
@@ -29,7 +29,8 @@ pub enum Act {
     Seek(u64),
     ShowCover,
     Hide,
-    SearchAgain,
+    /// The lyrics looked for again this way.
+    Ask(How),
 }
 
 /// The scroll of the lines, kept in egui's memory by the panel's id.
@@ -104,6 +105,36 @@ pub fn show(
             }
         }
         State::Found(text) => {
+            // LRCLIB's lyrics asked for and not had: a line over the own.
+            let why = match &text.note {
+                Note::None => None,
+                Note::LrclibHasNone => Some(tr!(
+                    "LRCLIB has no lyrics of this track",
+                    "В LRCLIB нет текста этого трека"
+                )),
+                Note::LrclibFailed(_) => Some(tr!("LRCLIB did not answer", "LRCLIB не ответил")),
+            };
+            let mut inner = inner;
+            if let Some(why) = why {
+                let line = painter.layout(
+                    why.to_owned(),
+                    FontId::proportional(11.5),
+                    palette::text_weak(),
+                    inner.width(),
+                );
+                let h = line.size().y;
+                painter.galley(
+                    pos2(inner.center().x - line.size().x / 2.0, inner.top()),
+                    line,
+                    palette::text_weak(),
+                );
+                inner.min.y += h + GAP;
+                if let Note::LrclibFailed(e) = &text.note
+                    && resp.hovered()
+                {
+                    resp.clone().on_hover_text(e.as_str());
+                }
+            }
             if let Some(ms) = lines(ui, &resp, inner, text, position_ms) {
                 acts.push(Act::Seek(ms));
             }
@@ -136,19 +167,44 @@ pub fn show(
                 ui.ctx().copy_text(text.plain());
                 ui.close();
             }
-            let from_lrclib = match state {
-                State::Found(t) => t.source == Source::Lrclib,
-                State::None(_) | State::Instrumental => true,
-                State::Idle | State::Looking => false,
+            let (again, from_lrclib, own) = match state {
+                State::Found(t) if t.source == Source::Lrclib => (true, false, t.own),
+                // The file's own: LRCLIB's may be shown over them.
+                State::Found(_) => (false, true, None),
+                State::None(_) | State::Instrumental => (true, false, None),
+                State::Idle | State::Looking => (false, false, None),
             };
             if online
-                && from_lrclib
+                && again
                 && ui
                     .button(tr!("Look on LRCLIB again", "Искать в LRCLIB заново"))
                     .clicked()
             {
-                acts.push(Act::SearchAgain);
+                acts.push(Act::Ask(How::Fresh));
                 ui.close();
+            }
+            if online
+                && from_lrclib
+                && ui
+                    .button(tr!("Show LRCLIB's lyrics", "Показать текст из LRCLIB"))
+                    .on_hover_text(tr!(
+                        "Shown in place of the file's own from then on for this track; the file is not changed.",
+                        "Для этого трека он будет показываться и дальше вместо своего; файл не меняется."
+                    ))
+                    .clicked()
+            {
+                acts.push(Act::Ask(How::Lrclib));
+                ui.close();
+            }
+            if let Some(own) = own {
+                let label = match own {
+                    Source::File => tr!("Back to the .lrc file's lyrics", "Вернуть текст из файла .lrc"),
+                    _ => tr!("Back to the tag's lyrics", "Вернуть текст из тега"),
+                };
+                if ui.button(label).clicked() {
+                    acts.push(Act::Ask(How::Own));
+                    ui.close();
+                }
             }
             ui.separator();
             if ui.button(tr!("Hide the lyrics", "Скрыть текст")).clicked() {

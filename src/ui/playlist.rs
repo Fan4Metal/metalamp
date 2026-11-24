@@ -199,8 +199,8 @@ pub enum PlaylistAction {
     ShowHidden,
     Delete(String),
     Export,
-    /// The lyrics' menu: LRCLIB asked again.
-    SearchLyrics,
+    /// The lyrics' menu: the lyrics looked for again this way.
+    Lyrics(crate::lyrics::How),
 }
 
 /// What the panel shows under the list: the cover of the track playing,
@@ -459,7 +459,7 @@ pub fn show(
                     *show_cover = true;
                 }
                 crate::ui::lyrics::Act::Hide => *show_lyrics = false,
-                crate::ui::lyrics::Act::SearchAgain => actions.push(PlaylistAction::SearchLyrics),
+                crate::ui::lyrics::Act::Ask(how) => actions.push(PlaylistAction::Lyrics(how)),
             }
         }
     }
