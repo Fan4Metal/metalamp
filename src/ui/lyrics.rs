@@ -32,6 +32,19 @@ pub enum Act {
     Hide,
     /// The lyrics looked for again this way.
     Ask(How),
+    /// From under the playlist into a window of their own, and back.
+    ToWindow,
+    ToPanel,
+}
+
+/// Where the lyrics are shown, for their menu.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Place {
+    /// Under the playlist, in the cover's place.
+    Panel,
+    /// In a window of their own; `dock`: they may go back under the
+    /// playlist (the layout with the library).
+    Window { dock: bool },
 }
 
 /// The scroll of the lines, kept in egui's memory by the panel's id.
@@ -44,8 +57,7 @@ struct Scroll {
     hand_until: f64,
 }
 
-/// The lyrics in `rect`; `in_window`: in a window of their own, whose menu
-/// has no cover to go back to.
+/// The lyrics in `rect`, shown at `place` (for the menu's items).
 pub fn show(
     ui: &mut Ui,
     rect: Rect,
@@ -53,7 +65,7 @@ pub fn show(
     state: &State,
     position_ms: u64,
     online: bool,
-    in_window: bool,
+    place: Place,
 ) -> Vec<Act> {
     let mut acts = Vec::new();
     let painter = ui.painter_at(rect);
@@ -161,9 +173,30 @@ pub fn show(
     egui::Popup::context_menu(&resp)
         .id(id.with("menu"))
         .show(|ui| {
-            if !in_window && ui.button(tr!("Show the cover", "Показать обложку")).clicked() {
-                acts.push(Act::ShowCover);
-                ui.close();
+            match place {
+                Place::Panel => {
+                    if ui
+                        .button(tr!("Open in a window", "Открыть в отдельном окне"))
+                        .clicked()
+                    {
+                        acts.push(Act::ToWindow);
+                        ui.close();
+                    }
+                    if ui.button(tr!("Show the cover", "Показать обложку")).clicked() {
+                        acts.push(Act::ShowCover);
+                        ui.close();
+                    }
+                }
+                Place::Window { dock: true } => {
+                    if ui
+                        .button(tr!("Show under the playlist", "Показать под плейлистом"))
+                        .clicked()
+                    {
+                        acts.push(Act::ToPanel);
+                        ui.close();
+                    }
+                }
+                Place::Window { dock: false } => {}
             }
             if let State::Found(text) = state
                 && ui.button(tr!("Copy the lyrics", "Копировать текст")).clicked()
@@ -211,7 +244,7 @@ pub fn show(
                 }
             }
             ui.separator();
-            let hide = if in_window {
+            let hide = if place != Place::Panel {
                 tr!("Close", "Закрыть")
             } else {
                 tr!("Hide the lyrics", "Скрыть текст")
@@ -423,6 +456,9 @@ pub struct Shown<'a> {
     pub state: &'a State,
     pub position_ms: u64,
     pub online: bool,
+    /// The lyrics may go back under the playlist (the layout with the
+    /// library).
+    pub dock: bool,
 }
 
 impl LyricsWindow {
@@ -534,11 +570,11 @@ impl LyricsWindow {
                         shown.state,
                         shown.position_ms,
                         shown.online,
-                        true,
+                        Place::Window { dock: shown.dock },
                     );
                 });
         });
-        if acts.iter().any(|a| matches!(a, Act::Hide)) {
+        if acts.iter().any(|a| matches!(a, Act::Hide | Act::ToPanel)) {
             close = true;
         }
         if close {

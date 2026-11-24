@@ -351,20 +351,25 @@ pub fn show(
         *show_cover = !cover_shown;
         *show_lyrics = false;
     }
-    let lyrics_shown = if pv.no_library {
-        &mut *lyrics_window
-    } else {
-        &mut *show_lyrics
-    };
+    // Lit while the lyrics show here or in their window: then a click hides
+    // them; else it shows them here (in the window without the library).
+    let lyrics_shown = *lyrics_window || (*show_lyrics && !pv.no_library);
     if crate::ui::icon_button(
         &mut bar,
         Icon::Mic,
-        *lyrics_shown,
+        lyrics_shown,
         tr!("The lyrics of the track playing", "Текст играющего трека"),
     )
     .clicked()
     {
-        *lyrics_shown = !*lyrics_shown;
+        if lyrics_shown {
+            *lyrics_window = false;
+            *show_lyrics = false;
+        } else if pv.no_library {
+            *lyrics_window = true;
+        } else {
+            *show_lyrics = true;
+        }
     }
     playlists_menu(
         &mut bar,
@@ -459,7 +464,7 @@ pub fn show(
             lyrics,
             player.position_ms(),
             online,
-            false,
+            crate::ui::lyrics::Place::Panel,
         );
         for act in acts {
             match act {
@@ -468,7 +473,14 @@ pub fn show(
                     *show_lyrics = false;
                     *show_cover = true;
                 }
-                crate::ui::lyrics::Act::Hide => *show_lyrics = false,
+                crate::ui::lyrics::Act::Hide | crate::ui::lyrics::Act::ToPanel => {
+                    *show_lyrics = false;
+                }
+                // Moved into a window: the cover comes back here.
+                crate::ui::lyrics::Act::ToWindow => {
+                    *show_lyrics = false;
+                    *lyrics_window = true;
+                }
                 crate::ui::lyrics::Act::Ask(how) => actions.push(PlaylistAction::Lyrics(how)),
             }
         }

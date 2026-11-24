@@ -533,11 +533,10 @@ impl App {
     /// Looks for the lyrics of the track heard (else the playlist's current
     /// one) while the playlist shows them.
     fn follow_lyrics(&mut self, ctx: &egui::Context) {
-        let wanted = if self.settings.window_layout == WindowLayout::Playlist {
-            self.settings.lyrics_window
-        } else {
-            self.settings.playlist_lyrics && self.settings.playlist_visible
-        };
+        let wanted = self.settings.lyrics_window
+            || (self.settings.window_layout != WindowLayout::Playlist
+                && self.settings.playlist_lyrics
+                && self.settings.playlist_visible);
         if !wanted {
             return;
         }
@@ -2317,9 +2316,10 @@ impl eframe::App for App {
         } else {
             self.playlist_view.hidden();
         }
-        // The player and playlist layout: the lyrics in a window of their
-        // own (also with the playlist folded away).
-        let mut window_open = alone && !mini && self.settings.lyrics_window;
+        // The lyrics in a window of their own: the player and playlist
+        // layout's (also with the playlist folded away), or moved there from
+        // under the playlist.
+        let mut window_open = !mini && self.settings.lyrics_window;
         let was_open = window_open;
         let (title, second, _) = self.now_playing();
         let shown = crate::ui::lyrics::Shown {
@@ -2328,6 +2328,7 @@ impl eframe::App for App {
             state: self.lyrics.state(),
             position_ms: self.player.position_ms(),
             online: self.settings.lyrics_online,
+            dock: !alone,
         };
         let (acts, moved) = self.lyrics_window.show(
             &ctx,
@@ -2347,7 +2348,14 @@ impl eframe::App for App {
             match act {
                 crate::ui::lyrics::Act::Seek(ms) => self.player.seek(ms),
                 crate::ui::lyrics::Act::Ask(how) => self.lyrics.ask_again(how),
-                crate::ui::lyrics::Act::ShowCover | crate::ui::lyrics::Act::Hide => {}
+                // Back under the playlist (the window closed itself).
+                crate::ui::lyrics::Act::ToPanel => {
+                    self.settings.playlist_lyrics = true;
+                    self.settings.playlist_visible = true;
+                }
+                crate::ui::lyrics::Act::ShowCover
+                | crate::ui::lyrics::Act::Hide
+                | crate::ui::lyrics::Act::ToWindow => {}
             }
         }
         if moved
