@@ -403,9 +403,15 @@ pub enum Fetched {
 }
 
 /// LRCLIB's lyrics of a track by its tags, from the cache when it has
-/// them, else asked (blocking; the answer kept, as the panel's). The
-/// artist (else the album artist) and the title are needed.
-pub fn fetch(artist: &str, title: &str, album: &str, duration_ms: u32) -> Result<Fetched, String> {
+/// them (not when `fresh`), else asked (blocking; the answer kept, as the
+/// panel's). The artist (else the album artist) and the title are needed.
+pub fn fetch(
+    artist: &str,
+    title: &str,
+    album: &str,
+    duration_ms: u32,
+    fresh: bool,
+) -> Result<Fetched, String> {
     let ask = Ask {
         path: PathBuf::new(),
         artist: artist.to_owned(),
@@ -420,9 +426,14 @@ pub fn fetch(artist: &str, title: &str, album: &str, duration_ms: u32) -> Result
     }
     let file = crate::settings::data_dir().map(|d| d.join(FOLDER).join(cache_name(&ask)));
     let cached = match file.as_deref().and_then(read_cached) {
-        Some(c) if c.found || now().saturating_sub(c.at) < RETRY_NONE => c,
+        Some(c) if !fresh && (c.found || now().saturating_sub(c.at) < RETRY_NONE) => c,
         kept => {
-            let record = ask_lrclib(&ask)?;
+            // LRCLIB is slow at times: an ask that timed out is made once
+            // more after a moment.
+            let record = ask_lrclib(&ask).or_else(|_| {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                ask_lrclib(&ask)
+            })?;
             let mut answer = Cached::of(record.as_ref());
             // A choice made for the track in the panel stays.
             if let Some(kept) = kept {

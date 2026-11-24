@@ -217,8 +217,8 @@ enum Act {
     /// The lyrics from a text file chosen in a dialog.
     PickLyrics,
     /// LRCLIB's lyrics: of the file edited into its field, or of every
-    /// file at once.
-    Lrclib,
+    /// file at once; `again`: asked anew (`Form::fetch_lyrics`).
+    Lrclib { again: bool },
     /// The file's spectrum in a window of its own.
     Spectrum,
 }
@@ -310,8 +310,9 @@ pub(crate) fn text_of_file(bytes: &[u8]) -> String {
 }
 
 /// LRCLIB's lyrics of `path` by its tags (`typed`: the artist, title and
-/// album typed in for it), its length from its file.
-fn lrclib_of(path: &Path, typed: Option<&(String, String, String)>) -> Found {
+/// album typed in for it), its length from its file; `fresh`: LRCLIB asked
+/// again, the cache passed by.
+fn lrclib_of(path: &Path, typed: Option<&(String, String, String)>, fresh: bool) -> Found {
     use crate::lyrics::Fetched;
     let track = std::fs::metadata(path).ok().and_then(|m| {
         let mtime = m
@@ -336,7 +337,7 @@ fn lrclib_of(path: &Path, typed: Option<&(String, String, String)>) -> Found {
             (artist, track.title.clone(), track.album.clone())
         }
     };
-    match crate::lyrics::fetch(&artist, &title, &album, track.duration_ms) {
+    match crate::lyrics::fetch(&artist, &title, &album, track.duration_ms, fresh) {
         Ok(Fetched::Lyrics(text)) => Found::Lyrics(text),
         Ok(Fetched::Instrumental) => Found::Instrumental,
         Ok(Fetched::None) => Found::None,
@@ -520,12 +521,28 @@ impl Form {
     /// LRCLIB asked for the lyrics on a thread: of the one file edited, by
     /// its fields as typed (its length from its tags), into its field; of
     /// all the files at once, each by its own tags, those whose tag has
-    /// lyrics left alone.
-    fn fetch_lyrics(&mut self, ctx: &egui::Context) {
+    /// lyrics left alone. `again`: LRCLIB asked anew, the cache passed by,
+    /// and of all the files at once only for those it had none for or did
+    /// not answer, the rest kept as they came.
+    fn fetch_lyrics(&mut self, ctx: &egui::Context, again: bool) {
         if self.state != State::Ready || self.lrclib.as_ref().is_some_and(Lrclib::busy) {
             return;
         }
         let one = self.paths.len() == 1 && self.lyrics.is_some();
+        let before: Vec<Found> = match &self.lrclib {
+            Some(l) if again && !one && !l.one => l.found.clone(),
+            _ => Vec::new(),
+        };
+        let kept = |i: usize| {
+            before
+                .get(i)
+                .filter(|f| !matches!(f, Found::None | Found::Failed(_)))
+                .cloned()
+        };
+        let found: Vec<Found> = (0..self.paths.len())
+            .map(|i| kept(i).unwrap_or(Found::Waiting))
+            .collect();
+        let asked: Vec<bool> = found.iter().map(|f| *f == Found::Waiting).collect();
         let typed = one.then(|| {
             let value = |k: edit::Key| self.main.get(k as usize).map(|f| f.value.trim().to_owned());
             let artist = value(edit::Key::Artist)
@@ -545,10 +562,13 @@ impl Form {
             .name("lyrics lrclib".into())
             .spawn(move || {
                 for (i, path) in paths.iter().enumerate() {
+                    if !asked[i] {
+                        continue;
+                    }
                     let found = if !one && crate::lyrics::tag_has_lyrics(path) {
                         Found::Has
                     } else {
-                        lrclib_of(path, typed.as_ref())
+                        lrclib_of(path, typed.as_ref(), again)
                     };
                     if tx.send((i, found)).is_err() {
                         return;
@@ -560,11 +580,7 @@ impl Form {
             self.errors.push(e.to_string());
             return;
         }
-        self.lrclib = Some(Lrclib {
-            rx,
-            found: vec![Found::Waiting; self.paths.len()],
-            one,
-        });
+        self.lrclib = Some(Lrclib { rx, found, one });
     }
 
     fn poll(&mut self) -> Polled {
@@ -975,9 +991,9 @@ impl InfoView {
             Act::Cover(act) => self.cover_act(ctx, act),
             Act::Zoom => self.zoom_in(ctx),
             Act::PickLyrics => self.pick_lyrics = true,
-            Act::Lrclib => {
+            Act::Lrclib { again } => {
                 if let Some(form) = self.form.as_mut() {
-                    form.fetch_lyrics(ctx);
+                    form.fetch_lyrics(ctx, again);
                 }
             }
             Act::Spectrum => {
@@ -1914,7 +1930,7 @@ fn lyrics_tools(ui: &mut Ui, form: &mut Form, acts: &mut Vec<Act>) {
             ))
             .clicked()
         {
-            acts.push(Act::Lrclib);
+            acts.push(Act::Lrclib { again: false });
         }
     }
     if let Some(field) = form.lyrics.as_mut() {
@@ -1924,7 +1940,20 @@ fn lyrics_tools(ui: &mut Ui, form: &mut Form, acts: &mut Vec<Act>) {
             field.touched = field.value != field.shown;
         }
     }
-    match lrclib.and_then(|l| l.found.first()) {
+    let answered = lrclib.and_then(|l| l.found.first());
+    if form.lrclib_on
+        && answered.is_some_and(|f| *f != Found::Waiting)
+        && ask_again_button(
+            ui,
+            tr!(
+                "Ask LRCLIB again, not taking its answer kept",
+                "Запросить в LRCLIB заново, не беря сохранённый ответ"
+            ),
+        )
+    {
+        acts.push(Act::Lrclib { again: true });
+    }
+    match answered {
         Some(Found::Waiting) => {
             ui.spinner();
         }
@@ -1944,6 +1973,29 @@ fn lyrics_tools(ui: &mut Ui, form: &mut Form, acts: &mut Vec<Act>) {
     }
 }
 
+/// The refresh sign as a button of a small button's height, LRCLIB asked
+/// again.
+fn ask_again_button(ui: &mut Ui, tip: &str) -> bool {
+    use crate::ui::icons::{self, Icon};
+    let height = ui.spacing().interact_size.y;
+    let (rect, resp) = ui.allocate_exact_size(vec2(height + 4.0, height), egui::Sense::click());
+    let fill = if resp.hovered() {
+        ui.painter().rect_filled(rect, 4.0, palette::hover());
+        palette::hover()
+    } else {
+        palette::panel_bg()
+    };
+    let colour = if resp.hovered() {
+        palette::text_bright()
+    } else {
+        palette::text()
+    };
+    icons::paint(ui.painter(), Icon::Refresh, rect.center(), 13.0, colour, fill);
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(tip)
+        .clicked()
+}
+
 /// All the files at once, while editing: LRCLIB asked for every file's
 /// lyrics (those with lyrics left alone), what came of it, written with
 /// the fields.
@@ -1961,7 +2013,7 @@ fn lyrics_all(ui: &mut Ui, form: &Form, acts: &mut Vec<Act>) {
             ))
             .clicked()
         {
-            acts.push(Act::Lrclib);
+            acts.push(Act::Lrclib { again: false });
         }
     });
     if let Some(lrclib) = lrclib {
@@ -1970,6 +2022,22 @@ fn lyrics_all(ui: &mut Ui, form: &Form, acts: &mut Vec<Act>) {
                 ui.spinner();
             }
             ui.label(RichText::new(lrclib.summary()).color(palette::text_weak()));
+            let missing = lrclib
+                .found
+                .iter()
+                .any(|f| matches!(f, Found::None | Found::Failed(_)));
+            if !busy
+                && missing
+                && ask_again_button(
+                    ui,
+                    tr!(
+                        "Ask LRCLIB again for the files it had no lyrics for or did not answer",
+                        "Запросить заново в LRCLIB тексты файлов, для которых их не нашлось или LRCLIB не ответил"
+                    ),
+                )
+            {
+                acts.push(Act::Lrclib { again: true });
+            }
         });
     }
 }
@@ -3811,6 +3879,32 @@ mod tests {
         };
         assert_eq!(encoder_line(Some(&old), None), "LAME3.85");
         assert_eq!(encoder_line(None, Some((576, 0))), "delay 576, padding 0 samples");
+    }
+
+    /// What LRCLIB answers for a folder's files (`METALAMP_MUSIC`), with
+    /// the errors.
+    #[test]
+    #[ignore]
+    fn lrclib_of_a_folder() {
+        let Ok(dir) = std::env::var("METALAMP_MUSIC") else {
+            return;
+        };
+        let mut paths: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| crate::filetypes::is_audio(p))
+            .collect();
+        paths.sort();
+        for path in paths {
+            let t = std::time::Instant::now();
+            let found = lrclib_of(&path, None, false);
+            let what = match &found {
+                Found::Lyrics(_) => "lyrics".to_owned(),
+                Found::Failed(e) => format!("FAILED {e}"),
+                f => f.word().unwrap_or("").to_owned(),
+            };
+            println!("{:?} {} ms: {what}", path.file_name().unwrap(), t.elapsed().as_millis());
+        }
     }
 
     /// LRCLIB's lyrics of all the files at once: only those found are
