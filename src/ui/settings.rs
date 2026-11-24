@@ -18,7 +18,8 @@ use crate::keymap::{Action, Chord, Group, Keymap};
 use crate::palette;
 use crate::palette::{Accent, Palette, Theme, Tint, VisualColours};
 use crate::settings::{
-    ApeTag, BarLayout, CoverPriority, EnhancerPreset, EqPreset, Id3Version, Id3v1Tag, MediaKeys,
+    ApeTag, BarLayout, CoverPriority, EnhancerPreset, EqPreset, Id3Version, Id3v1Encoding,
+    Id3v1Tag, MediaKeys,
     Settings, TrackNotice, Visual, WindowLayout,
 };
 use crate::ui::icons::{self, Icon};
@@ -1376,8 +1377,8 @@ fn tag_rows(ui: &mut Ui, settings: &mut Settings) {
         ui,
         tr!("ID3v1 of MP3", "ID3v1 в MP3"),
         Some(tr!(
-            "The short tag at an MP3's end that old players and car stereos read (30 letters a field, in the code page of Windows: Cyrillic as Windows-1251). Left as it was, it keeps the values from before an edit.",
-            "Короткий тег в конце MP3, который читают старые плееры и магнитолы (30 букв в поле, в кодировке Windows: кириллица в Windows-1251). Если его не трогать, в нём останутся значения до правки."
+            "The short tag at an MP3's end that old players and car stereos read (30 letters a field, in the code page below). Left as it was, it keeps the values from before an edit.",
+            "Короткий тег в конце MP3, который читают старые плееры и магнитолы (30 букв в поле, в кодировке ниже). Если его не трогать, в нём останутся значения до правки."
         )),
         CONTROL,
         |ui| {
@@ -1387,6 +1388,26 @@ fn tag_rows(ui: &mut Ui, settings: &mut Settings) {
                 .show_ui(ui, |ui| {
                     for v in Id3v1Tag::ALL {
                         ui.selectable_value(&mut settings.id3v1, v, v.label());
+                    }
+                });
+        },
+    );
+    divider(ui);
+    row(
+        ui,
+        tr!("ID3v1 code page", "Кодировка ID3v1"),
+        Some(tr!(
+            "ID3v1 keeps bytes, not letters: they are read and written in this code page. Windows' own is the one Winamp, the old taggers and car stereos use; another is for files made on a Windows of another language. Changed, the library reads again the MP3s with letters past Latin ones.",
+            "ID3v1 хранит байты, а не буквы: они читаются и пишутся в этой кодировке. Кодировку Windows используют Winamp, старые редакторы тегов и магнитолы; другая нужна для файлов, сделанных на Windows другого языка. При смене библиотека перечитывает MP3, в тегах которых есть буквы помимо латинских."
+        )),
+        CONTROL,
+        |ui| {
+            egui::ComboBox::from_id_salt("settings_id3v1_encoding")
+                .selected_text(settings.id3v1_encoding.label())
+                .width(CONTROL - 10.0)
+                .show_ui(ui, |ui| {
+                    for v in Id3v1Encoding::ALL {
+                        ui.selectable_value(&mut settings.id3v1_encoding, v, v.label());
                     }
                 });
         },
@@ -3304,6 +3325,7 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
     settings.media_keys = d.media_keys;
     settings.id3v2_version = d.id3v2_version;
     settings.id3v1 = d.id3v1;
+    settings.id3v1_encoding = d.id3v1_encoding;
     settings.ape = d.ape;
     settings.keys = d.keys;
     settings.output_device = d.output_device;

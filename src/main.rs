@@ -144,6 +144,7 @@ fn main() -> eframe::Result {
     }
 
     let settings = settings::Settings::load();
+    library::id3v1::set_code_page(settings.id3v1_encoding.code_page());
     // The index is read and the folders checked while eframe makes the
     // window (~150 ms), so the first frame can show the library.
     let wake = library::scan::Wake::default();

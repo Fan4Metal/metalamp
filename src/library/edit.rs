@@ -495,7 +495,7 @@ fn with_tag<R>(
                         file.ape().cloned().map(Tag::from),
                         file.id3v1().cloned().map(|v1| {
                             let mut tag = Tag::from(v1);
-                            super::id3v1::read_in_ansi(&mut tag);
+                            super::id3v1::read_in_code_page(&mut tag);
                             tag
                         }),
                     ]

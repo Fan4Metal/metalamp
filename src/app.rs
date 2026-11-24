@@ -356,6 +356,12 @@ impl App {
     }
 
     fn start_scan(&mut self, read_all: bool) {
+        self.start_scan_from(false, read_all);
+    }
+
+    /// A scan from the index (`load_index`, which reads again the MP3s whose
+    /// ID3v1 tags it read in another code page) or from the library shown.
+    fn start_scan_from(&mut self, load_index: bool, read_all: bool) {
         self.scan_progress = None;
         // The folders as they are now, a disk plugged in since included.
         self.watcher =
@@ -363,10 +369,23 @@ impl App {
         self.scan = Some(Scan::start(
             self.settings.library_folders.clone(),
             Some(Arc::clone(&self.library)),
-            false,
+            load_index,
             read_all,
             Arc::clone(&self.wake),
         ));
+    }
+
+    /// The code page of ID3v1 as the settings have it; changed, the tracks
+    /// that may have come of it are read again (as the index's code page,
+    /// written by each scan, is not this one).
+    fn follow_id3v1_code_page(&mut self, ctx: &egui::Context) {
+        let code_page = self.settings.id3v1_encoding.code_page();
+        if crate::library::id3v1::set_code_page(code_page) {
+            log::debug!("ID3v1 code page {code_page}: the library read again");
+            self.start_scan_from(true, false);
+            self.outside.read_again(ctx);
+            self.playlist_view.loose.forget();
+        }
     }
 
     pub(crate) fn scanning(&self) -> bool {
@@ -1952,6 +1971,7 @@ impl eframe::App for App {
             self.settings.keep_for_the_end();
         }
         self.updates.poll();
+        self.follow_id3v1_code_page(ctx);
         self.poll_scan();
         self.follow_folders(ctx);
         self.follow_dropped();

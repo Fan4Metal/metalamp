@@ -67,7 +67,7 @@ fn read_tagged(path: &Path) -> Result<TaggedFile, FileParseError> {
 /// taggers read the first tag only, the one they write. A tagger that
 /// wrote a new tag in front of an old one leaves the old one's album
 /// behind it (an album that split in two). An ID3v1 tag's text is read in
-/// the ANSI code page (`id3v1::read_in_ansi`), not as lofty's Latin-1.
+/// the code page chosen (`id3v1::read_in_code_page`), not as lofty's Latin-1.
 pub fn open(path: &Path, options: ParseOptions) -> Result<TaggedFile, FileParseError> {
     let (holed, file_type) = first_tag_view(path)?;
     let probe = Probe::new(BufReader::new(holed));
@@ -77,7 +77,7 @@ pub fn open(path: &Path, options: ParseOptions) -> Result<TaggedFile, FileParseE
     };
     let mut file = probe.options(options).read()?;
     if let Some(tag) = file.tag_mut(lofty::tag::TagType::Id3v1) {
-        super::id3v1::read_in_ansi(tag);
+        super::id3v1::read_in_code_page(tag);
     }
     Ok(file)
 }

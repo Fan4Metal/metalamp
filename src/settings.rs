@@ -161,6 +161,8 @@ pub struct Settings {
     pub id3v2_version: Id3Version,
     /// What becomes of an MP3's ID3v1 tag when its tags are written.
     pub id3v1: Id3v1Tag,
+    /// The code page an MP3's ID3v1 tag is read and written in.
+    pub id3v1_encoding: Id3v1Encoding,
     /// What becomes of an MP3's APE tag when its tags are written.
     pub ape: ApeTag,
     /// The keys as changed on the settings' Keys page (`keymap.rs`; only
@@ -438,6 +440,89 @@ impl Id3v1Tag {
             Id3v1Tag::Remove => tr!("Removed", "Удалять"),
             Id3v1Tag::Keep => tr!("Left as it was", "Не трогать"),
             Id3v1Tag::Always => tr!("Always written", "Писать всегда"),
+        }
+    }
+}
+
+/// The code page of an MP3's ID3v1 tag, whose fields are bytes, not
+/// letters: Windows' own (the ANSI code page, as Winamp and the old
+/// taggers wrote them and car stereos read them), or one named, for files
+/// made on a Windows of another language.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Id3v1Encoding {
+    #[default]
+    #[serde(rename = "system")]
+    System,
+    #[serde(rename = "1251")]
+    Cyrillic,
+    #[serde(rename = "1252")]
+    Western,
+    #[serde(rename = "1250")]
+    CentralEuropean,
+    #[serde(rename = "866")]
+    Dos,
+    #[serde(rename = "koi8-r")]
+    Koi8R,
+}
+
+impl Id3v1Encoding {
+    pub const ALL: [Id3v1Encoding; 6] = [
+        Id3v1Encoding::System,
+        Id3v1Encoding::Cyrillic,
+        Id3v1Encoding::Western,
+        Id3v1Encoding::CentralEuropean,
+        Id3v1Encoding::Dos,
+        Id3v1Encoding::Koi8R,
+    ];
+
+    /// Its Windows code page; 0 for Windows' own (`CP_ACP`).
+    pub fn code_page(self) -> u32 {
+        match self {
+            Id3v1Encoding::System => 0,
+            Id3v1Encoding::Cyrillic => 1251,
+            Id3v1Encoding::Western => 1252,
+            Id3v1Encoding::CentralEuropean => 1250,
+            Id3v1Encoding::Dos => 866,
+            Id3v1Encoding::Koi8R => 20866,
+        }
+    }
+
+    pub fn label(self) -> String {
+        match self {
+            Id3v1Encoding::System => {
+                // SAFETY: no arguments.
+                let ansi = unsafe { windows_sys::Win32::Globalization::GetACP() };
+                let own = Self::ALL[1..]
+                    .iter()
+                    .find(|e| e.code_page() == ansi)
+                    .map_or_else(|| ansi.to_string(), |e| e.name().to_owned());
+                format!("{} ({own})", tr!("As in Windows", "Как в Windows"))
+            }
+            other => format!("{} — {}", other.name(), other.script()),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Id3v1Encoding::System => "",
+            Id3v1Encoding::Cyrillic => "Windows-1251",
+            Id3v1Encoding::Western => "Windows-1252",
+            Id3v1Encoding::CentralEuropean => "Windows-1250",
+            Id3v1Encoding::Dos => "DOS 866",
+            Id3v1Encoding::Koi8R => "KOI8-R",
+        }
+    }
+
+    fn script(self) -> &'static str {
+        match self {
+            Id3v1Encoding::System => "",
+            Id3v1Encoding::Cyrillic | Id3v1Encoding::Dos | Id3v1Encoding::Koi8R => {
+                tr!("Cyrillic", "кириллица")
+            }
+            Id3v1Encoding::Western => tr!("Western European", "западноевропейская"),
+            Id3v1Encoding::CentralEuropean => {
+                tr!("Central European", "центральноевропейская")
+            }
         }
     }
 }
@@ -795,6 +880,7 @@ impl Default for Settings {
             tag_cover_side: CoverSide::default(),
             id3v2_version: Id3Version::default(),
             id3v1: Id3v1Tag::default(),
+            id3v1_encoding: Id3v1Encoding::default(),
             ape: ApeTag::default(),
             keys: crate::keymap::Keymap::default(),
             tray: false,
@@ -1076,6 +1162,23 @@ impl Settings {
 
 #[cfg(test)]
 mod tests {
+    /// The ID3v1 code page is kept by its name; a file without it, or with
+    /// one this version does not know, reads Windows' own.
+    #[test]
+    fn the_id3v1_code_page_is_kept() {
+        let s = Settings::from_json(br#"{"id3v1_encoding":"koi8-r"}"#).unwrap();
+        assert_eq!(s.id3v1_encoding, Id3v1Encoding::Koi8R);
+        assert_eq!(s.id3v1_encoding.code_page(), 20866);
+        let s = Settings::from_json(br#"{"id3v1_encoding":"1253"}"#).unwrap();
+        assert_eq!(s.id3v1_encoding, Id3v1Encoding::System);
+        assert_eq!(Settings::from_json(b"{}").unwrap().id3v1_encoding.code_page(), 0);
+        for e in Id3v1Encoding::ALL {
+            let json = serde_json::to_string(&e).unwrap();
+            assert_eq!(serde_json::from_str::<Id3v1Encoding>(&json).unwrap(), e);
+            assert!(!e.label().is_empty());
+        }
+    }
+
     #[test]
     fn the_enhancers_settings_are_kept() {
         let mut new = Settings::default();

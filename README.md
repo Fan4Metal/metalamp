@@ -170,7 +170,7 @@ Their text can be selected and copied.
 Chosen in the settings window (General, **Tags**):
 
 - **The ID3v2 version**: by default the file's own, and 2.3, which every program and device reads, for a file without a tag; or the file's own and 2.4 for a new tag; or always 2.3 or 2.4.
-- **ID3v1**, the short tag old players and car stereos read, written in the code page of Windows (Cyrillic as Windows-1251), and **APE**, left by foobar2000 and MP3Gain: by default they get the same fields when the file has them, so they do not keep the old values; they can also be removed or left as they were, and ID3v1 can be written into every file.
+- **ID3v1**, the short tag old players and car stereos read, read and written in the code page of Windows (Cyrillic as Windows-1251) or in one chosen in the settings (Windows-1251, 1252, 1250, DOS 866, KOI8-R), for files made on a Windows of another language; when it is changed, the library reads again the MP3s whose tags hold letters other than Latin ones; and **APE**, left by foobar2000 and MP3Gain: by default they get the same fields when the file has them, so they do not keep the old values; they can also be removed or left as they were, and ID3v1 can be written into every file.
 - A file without an ID3v2 tag gets one holding what its APE and ID3v1 tags say.
 
 </details>

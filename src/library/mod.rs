@@ -10,7 +10,7 @@ pub mod details;
 pub mod edit;
 pub mod filter;
 pub mod genres;
-mod id3v1;
+pub mod id3v1;
 pub mod index;
 pub mod outside;
 pub mod scan;

@@ -74,6 +74,7 @@ impl Scan {
             previous,
             load_index,
             read_all,
+            code_page: super::id3v1::code_page(),
             number: index::ask(),
         };
         let spawned = std::thread::Builder::new()
@@ -106,6 +107,9 @@ struct Asked {
     previous: Option<Arc<Library>>,
     load_index: bool,
     read_all: bool,
+    /// The code page ID3v1 is read in as the scan starts (a change of it
+    /// starts another scan).
+    code_page: u32,
     number: u64,
 }
 
@@ -115,6 +119,7 @@ fn run(asked: Asked, cancel: &AtomicBool, tx: &Sender<ScanMsg>, wake: &Wake) {
         previous,
         load_index,
         read_all: read_again,
+        code_page,
         number,
     } = asked;
     let send = |msg| {
@@ -141,7 +146,7 @@ fn run(asked: Asked, cancel: &AtomicBool, tx: &Sender<ScanMsg>, wake: &Wake) {
     };
     if folders.is_empty() && !load_index {
         // The last folder removed: an empty library.
-        index::save(&[], &[], number);
+        index::save(&[], &[], code_page, number);
         send(ScanMsg::Done(Scanned {
             library: Arc::new(Library::default()),
             read: 0,
@@ -217,7 +222,7 @@ fn run(asked: Asked, cancel: &AtomicBool, tx: &Sender<ScanMsg>, wake: &Wake) {
             // program goes on from there next time.
             let mut saved = so_far.to_vec();
             saved.extend(kept.iter().cloned());
-            index::save(&saved, &playlists, number);
+            index::save(&saved, &playlists, code_page, number);
             send(ScanMsg::Loaded(Arc::new(
                 Library::new(saved).with_playlists(playlists.clone()),
             )));
@@ -231,7 +236,7 @@ fn run(asked: Asked, cancel: &AtomicBool, tx: &Sender<ScanMsg>, wake: &Wake) {
     let removed = tracks.len() - read < known.len();
     let library = Arc::new(Library::new(tracks).with_playlists(playlists));
     if read > 0 || removed || playlists_changed {
-        index::save(&library.tracks, &library.playlists, number);
+        index::save(&library.tracks, &library.playlists, code_page, number);
     }
     log::debug!(
         "scan: {} files, {read} read, in {} ms",
