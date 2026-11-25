@@ -11,7 +11,10 @@
 //! mixed in, zoomed and mirrored (MilkDrop's video echo), which makes it
 //! symmetric. The scenes (`SCENES`) follow one another: the first is the
 //! vortex as it was; after `SCENE_LEAST` of sound another comes on a beat,
-//! after `SCENE_MOST` anyway, never the same one twice running, blended
+//! after `SCENE_MOST` anyway, in a random order of its own each time (a
+//! shuffled round of the others: each shown before any comes again, never
+//! the same one twice running; the clock's seed, so not the same order at
+//! every start, which looked like the scenes going in turn), blended
 //! over `BLEND_S` (every number of the two mixed, both shapes drawn, both
 //! echoes shown). On each beat (the bass rising over its recent mean) the
 //! picture is thrown outwards faster and the wave flares, drawn towards
@@ -389,6 +392,8 @@ pub struct Vortex {
     blend: f32,
     played: f32,
     rng: Rng,
+    /// The scenes still to come in this round, the next last.
+    round: Vec<usize>,
     /// The echoes shown, of the two scenes.
     echoes: [Echo; 2],
     texture: Option<TextureHandle>,
@@ -431,7 +436,8 @@ impl Vortex {
             from: 0,
             blend: 1.0,
             played: 0.0,
-            rng: Rng::default(),
+            rng: Rng::from_clock(),
+            round: Vec::new(),
             echoes: [none; 2],
             texture: None,
             changed: false,
@@ -531,12 +537,19 @@ impl Vortex {
         self.played = f32::MIN;
     }
 
-    /// Another scene than the one playing, blended into from it.
+    /// Another scene than the one playing, blended into from it: the next
+    /// of a round of the others in a random order, a new round once it is
+    /// done (picked at random each time, two scenes came back in turn).
     fn next_scene(&mut self) {
-        let n = SCENES.len();
-        let other = 1 + (self.rng.next() % (n as u64 - 1)) as usize;
+        if self.round.is_empty() {
+            self.round = (0..SCENES.len()).filter(|&i| i != self.scene).collect();
+            self.rng.shuffle(&mut self.round);
+        }
+        let Some(next) = self.round.pop() else {
+            return;
+        };
         self.from = self.scene;
-        self.scene = (self.scene + other) % n;
+        self.scene = next;
         self.blend = 0.0;
         self.played = 0.0;
     }
@@ -1144,6 +1157,28 @@ mod tests {
         let played = v.played;
         v.feed(sound(&wave, &quiet), false, 0.02, size);
         assert_eq!(v.played, played);
+    }
+
+    /// The scenes come in rounds of the others in a random order: each
+    /// once in a round, never the same twice running.
+    #[test]
+    fn the_scenes_come_in_rounds() {
+        let mut v = Vortex::new();
+        let others = SCENES.len() - 1;
+        let mut order = Vec::new();
+        for _ in 0..3 * others {
+            let before = v.scene;
+            v.next_scene();
+            assert_ne!(v.scene, before);
+            assert_eq!(v.from, before);
+            order.push(v.scene);
+        }
+        for round in order.chunks(others) {
+            let mut seen = round.to_vec();
+            seen.sort_unstable();
+            seen.dedup();
+            assert_eq!(seen.len(), others, "{order:?}");
+        }
     }
 
     #[test]

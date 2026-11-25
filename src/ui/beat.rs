@@ -116,6 +116,26 @@ impl Default for Rng {
 }
 
 impl Rng {
+    /// Seeded from the clock: another sequence each time (the default's
+    /// is always the same).
+    pub fn from_clock() -> Self {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u64);
+        // Xorshift stays at 0 from 0.
+        let mut rng = Rng((nanos ^ 0x9e37_79b9_7f4a_7c15) | 1);
+        rng.next();
+        rng
+    }
+
+    /// `items` in a random order (Fisher-Yates).
+    pub fn shuffle<T>(&mut self, items: &mut [T]) {
+        for i in (1..items.len()).rev() {
+            let j = (self.next() % (i as u64 + 1)) as usize;
+            items.swap(i, j);
+        }
+    }
+
     pub fn next(&mut self) -> u64 {
         let mut x = self.0;
         x ^= x << 13;
