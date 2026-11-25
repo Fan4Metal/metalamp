@@ -33,8 +33,9 @@
 //! (`library::details`).
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
+use std::sync::{Arc, Mutex};
 
 use egui::{Key, RichText, TextureHandle, Ui, vec2};
 use lofty::picture::PictureType;
@@ -316,6 +317,14 @@ pub(crate) fn text_of_file(bytes: &[u8]) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
+/// Why a file's lyrics were not asked for: its tags cannot be read
+/// (LRCLIB's own failures are other words).
+const UNREADABLE: &str = "the file cannot be read";
+
+/// How many files' lyrics LRCLIB is asked for at once (all the files at
+/// once): one after another, a dozen files took ten seconds and more.
+const LRCLIB_AT_ONCE: usize = 4;
+
 /// LRCLIB's lyrics of `path` by its tags (`typed`: the artist, title and
 /// album typed in for it), its length from its file; `fresh`: LRCLIB asked
 /// again, the cache passed by.
@@ -331,7 +340,7 @@ fn lrclib_of(path: &Path, typed: Option<&(String, String, String)>, fresh: bool)
         crate::guard::catch(path, || crate::library::tags::read(path, m.len(), mtime)).flatten()
     });
     let Some(track) = track else {
-        return Found::Failed("the file cannot be read".into());
+        return Found::Failed(UNREADABLE.into());
     };
     let (artist, title, album) = match typed {
         Some(typed) => typed.clone(),
@@ -390,7 +399,8 @@ struct Form {
     prefill: Option<String>,
 }
 
-/// LRCLIB asked for the files' lyrics on a thread, one file after another.
+/// LRCLIB asked for the files' lyrics on a thread, `LRCLIB_AT_ONCE` files
+/// at a time.
 struct Lrclib {
     rx: Receiver<(usize, Found)>,
     /// Each file's, by its place in the form's files.
@@ -605,20 +615,45 @@ impl Form {
         let spawned = std::thread::Builder::new()
             .name("lyrics lrclib".into())
             .spawn(move || {
-                for (i, path) in paths.iter().enumerate() {
-                    if !asked[i] {
-                        continue;
+                let queue: Vec<usize> = (0..paths.len()).filter(|&i| asked[i]).collect();
+                let next = AtomicUsize::new(0);
+                // LRCLIB not answering (no network, a stalled connection):
+                // the files left are not asked, each would wait out its
+                // time, but fail with its error; the refresh sign asks again.
+                let down: Mutex<Option<String>> = Mutex::new(None);
+                let work = || {
+                    while let Some(&i) = queue.get(next.fetch_add(1, Ordering::Relaxed)) {
+                        let path = &paths[i];
+                        let failed = down.lock().ok().and_then(|d| d.clone());
+                        let found = if let Some(e) = failed {
+                            Found::Failed(e)
+                        } else if !one && crate::lyrics::tag_has_lyrics(path) {
+                            Found::Has
+                        } else {
+                            let found = lrclib_of(path, typed.as_ref(), again);
+                            if let Found::Failed(e) = &found
+                                && e != UNREADABLE
+                                && let Ok(mut d) = down.lock()
+                            {
+                                d.get_or_insert_with(|| e.clone());
+                            }
+                            found
+                        };
+                        if tx.send((i, found)).is_err() {
+                            return;
+                        }
+                        ctx.request_repaint();
                     }
-                    let found = if !one && crate::lyrics::tag_has_lyrics(path) {
-                        Found::Has
-                    } else {
-                        lrclib_of(path, typed.as_ref(), again)
-                    };
-                    if tx.send((i, found)).is_err() {
-                        return;
+                };
+                // Several at once, this thread one of them.
+                std::thread::scope(|s| {
+                    for _ in 1..queue.len().min(LRCLIB_AT_ONCE) {
+                        let _ = std::thread::Builder::new()
+                            .name("lyrics lrclib".into())
+                            .spawn_scoped(s, work);
                     }
-                    ctx.request_repaint();
-                }
+                    work();
+                });
             });
         if let Err(e) = spawned {
             self.errors.push(e.to_string());

@@ -156,6 +156,9 @@ pub enum State {
     Instrumental,
     /// None found; with LRCLIB's failure when it could not be asked.
     None(Option<String>),
+    /// None in the file, and LRCLIB not asked: the track has no artist or
+    /// no title to look for (so asking again would change nothing).
+    Unnamed,
 }
 
 /// What is looked for: the file, and its tags for LRCLIB (`online`).
@@ -428,12 +431,7 @@ pub fn fetch(
     let cached = match file.as_deref().and_then(read_cached) {
         Some(c) if !fresh && (c.found || now().saturating_sub(c.at) < RETRY_NONE) => c,
         kept => {
-            // LRCLIB is slow at times: an ask that timed out is made once
-            // more after a moment.
-            let record = ask_lrclib(&ask).or_else(|_| {
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                ask_lrclib(&ask)
-            })?;
+            let record = ask_lrclib(&ask)?;
             let mut answer = Cached::of(record.as_ref());
             // A choice made for the track in the panel stays.
             if let Some(kept) = kept {
@@ -474,8 +472,10 @@ fn look_in(ask: &Ask, how: How, cache: Option<&Path>, ask_lrclib: &Asker<'_>) ->
         })
         .filter(|(t, _)| has_words(t));
     let own_source = own.as_ref().map(|(_, s)| *s);
+    let unnamed = ask.online && (ask.artist.trim().is_empty() || ask.title.trim().is_empty());
     let show_own = |note: Note| match &own {
         Some((text, source)) => found(text, *source, None, note),
+        None if unnamed => State::Unnamed,
         None => match note {
             Note::LrclibFailed(e) => State::None(Some(e)),
             _ => State::None(None),
@@ -750,9 +750,18 @@ impl Record {
     }
 }
 
+/// `ask_lrclib_once`, made once more after a moment when it failed:
+/// LRCLIB is slow at times (the panel's and the file info's asks alike).
+fn ask_lrclib(ask: &Ask) -> Result<Option<Record>, String> {
+    ask_lrclib_once(ask).or_else(|_| {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        ask_lrclib_once(ask)
+    })
+}
+
 /// LRCLIB's record of the track: `get` by all it knows, else the best of
 /// a search by the artist and the title; `None` when it has none.
-fn ask_lrclib(ask: &Ask) -> Result<Option<Record>, String> {
+fn ask_lrclib_once(ask: &Ask) -> Result<Option<Record>, String> {
     let seconds = (ask.duration_ms as f64 / 1000.0).round() as u64;
     let mut query = vec![
         ("artist_name", ask.artist.trim()),
@@ -1233,6 +1242,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&cache);
         let t = text(look(How::Usual));
         assert_eq!((t.source, t.own), (Source::Lrclib, None));
+        // No title: LRCLIB not asked, and nothing to ask again.
+        let before = asked.get();
+        let unnamed = Ask {
+            title: String::new(),
+            ..ask.clone()
+        };
+        for how in [How::Usual, How::Fresh, How::Lrclib] {
+            assert_eq!(look_in(&unnamed, how, Some(&cache), &lrclib), State::Unnamed);
+        }
+        assert_eq!(asked.get(), before);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

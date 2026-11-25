@@ -107,6 +107,17 @@ pub fn show(
                 tr!("An instrumental", "Инструментальная композиция"),
             );
         }
+        State::Unnamed => {
+            note(
+                ui,
+                inner,
+                rect.center().y,
+                tr!(
+                    "No lyrics in the file. The track has no artist or title to look for on LRCLIB.",
+                    "В файле нет текста. У трека нет исполнителя или названия для поиска в LRCLIB."
+                ),
+            );
+        }
         State::None(failed) => {
             let why = match failed {
                 Some(_) => tr!(
@@ -234,7 +245,7 @@ pub fn show(
                 // The file's own: LRCLIB's may be shown over them.
                 State::Found(_) => (false, true, None),
                 State::None(_) | State::Instrumental => (true, false, None),
-                State::Idle | State::Looking => (false, false, None),
+                State::Idle | State::Looking | State::Unnamed => (false, false, None),
             };
             if online
                 && again
