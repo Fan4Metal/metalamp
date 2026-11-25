@@ -63,6 +63,24 @@ use crate::ui::waveform::{self, Waveform};
 /// The frames asked of the tap each frame: the analyzer's window, and
 /// what is heard between two frames at 50 frames a second up to 192 kHz.
 pub const FETCH: usize = 8192;
+/// The most time owed to a scene standing without new sound: a few of the
+/// device clock's steps, so a pause owes it no jump when it plays on.
+const UNSPENT_MOST: f32 = 0.05;
+
+/// The time a scene that stands while nothing new is heard (paused) moves
+/// by in a frame of `dt`: a frame that hears nothing new (`waiting`) keeps
+/// its time in `unspent`, and the next one that hears something takes it.
+/// The device's clock moves every 10 ms or so, and the frames the pointer
+/// asks for between its steps were time lost, the scene slowing while the
+/// pointer moved.
+fn spend(unspent: &mut f32, waiting: bool, dt: f32) -> f32 {
+    if waiting {
+        *unspent = (*unspent + dt).min(UNSPENT_MOST);
+        dt
+    } else {
+        (dt + std::mem::take(unspent)).min(0.1)
+    }
+}
 /// The time of a column of the spectrogram, and its width in points.
 const COLUMN_S: f32 = 0.02;
 const GRAM_PITCH: f32 = 2.0;
@@ -158,6 +176,9 @@ pub struct Visualizer {
     end: Option<u64>,
     /// Silence owed while nothing is heard, in seconds.
     idle: f32,
+    /// The time of frames that heard nothing new while playing, owed to
+    /// the scenes that stand without it (`UNSPENT_MOST` at most).
+    unspent: f32,
     last: Instant,
     shown: Visual,
     /// The app icon shown while off.
@@ -204,6 +225,7 @@ impl Visualizer {
             scope: Scope::default(),
             end: None,
             idle: 0.0,
+            unspent: 0.0,
             last: Instant::now(),
             shown: Visual::default(),
             icon: None,
@@ -241,6 +263,7 @@ impl Visualizer {
             _ => 0,
         };
         self.end = heard.map(|(_, h)| h.end);
+        let dt_heard = spend(&mut self.unspent, heard.is_some() && new == 0, dt);
         let Some(size) = size else {
             return;
         };
@@ -260,7 +283,7 @@ impl Visualizer {
                     self.analyzer
                         .levels(&s[s.len() - spectrum::N..], h.rate, lightning::BANDS)
                 });
-                self.lightning.feed(levels.as_deref(), new > 0, dt, size);
+                self.lightning.feed(levels.as_deref(), new > 0, dt_heard, size);
             }
             Visual::Synthwave => {
                 let row = heard.map(|(s, h)| {
@@ -287,7 +310,7 @@ impl Visualizer {
                     side: *side,
                     levels,
                 });
-                self.vortex.feed(heard, new > 0, dt, size);
+                self.vortex.feed(heard, new > 0, dt_heard, size);
             }
             Visual::Chroma | Visual::Piano | Visual::Strings => {
                 let window = heard
@@ -296,7 +319,7 @@ impl Visualizer {
                 self.notes.feed(window, rate);
                 if visual == Visual::Strings {
                     self.strings
-                        .feed(&self.notes.keys, heard.is_none() || new > 0, dt, size.x);
+                        .feed(&self.notes.keys, heard.is_none() || new > 0, dt_heard, size.x);
                 }
             }
             Visual::Fire | Visual::Fireworks | Visual::Hyperspace | Visual::Aurora => {
@@ -313,10 +336,10 @@ impl Visualizer {
                 let levels = levels.as_deref();
                 let moved = new > 0;
                 match visual {
-                    Visual::Fire => self.fire.feed(levels, moved, dt, size),
-                    Visual::Fireworks => self.fireworks.feed(levels, moved, dt, size),
-                    Visual::Hyperspace => self.hyperspace.feed(levels, moved, dt, size),
-                    _ => self.aurora.feed(levels.map(smoothed).as_deref(), moved, dt),
+                    Visual::Fire => self.fire.feed(levels, moved, dt_heard, size),
+                    Visual::Fireworks => self.fireworks.feed(levels, moved, dt_heard, size),
+                    Visual::Hyperspace => self.hyperspace.feed(levels, moved, dt_heard, size),
+                    _ => self.aurora.feed(levels.map(smoothed).as_deref(), moved, dt_heard),
                 }
             }
             Visual::Goniometer => {
@@ -327,7 +350,7 @@ impl Visualizer {
                     let n = new.min(s.len());
                     (&s[s.len() - n..], &side[side.len() - n..])
                 });
-                self.goniometer.feed(fresh, new > 0, dt, size);
+                self.goniometer.feed(fresh, new > 0, dt_heard, size);
             }
             Visual::Ridges => {
                 let cap = ridge_lines(size.y);
@@ -482,7 +505,7 @@ impl Visualizer {
             Visual::Off => {}
             Visual::Scope => {
                 let heard = heard.map(|(s, h)| (s, h.rate));
-                self.scope.feed(heard, new > 0, dt, size.x);
+                self.scope.feed(heard, new > 0, dt_heard, size.x);
             }
         }
     }
@@ -1062,6 +1085,33 @@ fn gram_colour(level: f32, colours: &[Color32; 4]) -> Color32 {
 pub(crate) mod tests {
     use super::*;
     use std::f32::consts::PI;
+
+    /// Frames at 144 a second, a third of them between the device clock's
+    /// steps: the scenes standing without new sound still move by the
+    /// time passed; a pause owes them at most `UNSPENT_MOST`.
+    #[test]
+    fn frames_without_new_sound_keep_their_time() {
+        let dt = 1.0 / 144.0;
+        let mut unspent = 0.0;
+        let mut moved = 0.0;
+        for i in 0..144 {
+            let waiting = i % 3 == 1;
+            let d = spend(&mut unspent, waiting, dt);
+            if !waiting {
+                moved += d;
+            }
+        }
+        moved += unspent;
+        assert!((moved - 1.0).abs() < 1e-4, "{moved}");
+        // Paused for a second, then playing on.
+        let mut unspent = 0.0;
+        for _ in 0..50 {
+            spend(&mut unspent, true, 0.02);
+        }
+        let d = spend(&mut unspent, false, 0.02);
+        assert!((d - (0.02 + UNSPENT_MOST)).abs() < 1e-6, "{d}");
+        assert_eq!(unspent, 0.0);
+    }
 
     /// The analyzer's `bands` levels of 20 s of a real file
     /// (`METALAMP_SAMPLE`, from `METALAMP_FROM` s, 60 by default), 50 a
