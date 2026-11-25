@@ -632,13 +632,19 @@ fn tag_lyrics(path: &Path) -> Option<String> {
         .filter(|t| !t.trim().is_empty())
 }
 
+/// LRC's ID tags, the only `[key:value]` taken for one: a section's name
+/// in plain lyrics (`[Chorus: Eminem]`) is a line of them.
+const ID_TAGS: &[&str] = &[
+    "ar", "al", "ti", "au", "lr", "by", "re", "ve", "tool", "length", "offset", "la", "id", "#",
+];
+
 /// The lines of `text` and whether they are synced: LRC's time tags
 /// (`[mm:ss]`, `[mm:ss.xx]`, `[mm:ss.xxx]`, `[mm:ss:xx]`, several on a line
 /// for a line sung more than once) give the lines their times, in order,
 /// moved by an `[offset:±ms]` tag (positive: the lyrics come sooner); the
-/// other tags (`[ar:…]`) and the word times of enhanced LRC (`<mm:ss.xx>`)
-/// are left out. Text with no time tag is plain, its blank lines at either
-/// end left out.
+/// other ID tags (`ID_TAGS`: `[ar:…]`) and the word times of enhanced LRC
+/// (`<mm:ss.xx>`) are left out. Text with no time tag is plain, its blank
+/// lines at either end left out.
 pub fn parse(text: &str) -> (Vec<Line>, bool) {
     let mut offset: i64 = 0;
     let mut timed: Vec<Line> = Vec::new();
@@ -655,8 +661,7 @@ pub fn parse(text: &str) -> (Vec<Line>, bool) {
             if let Some(ms) = time_of(tag) {
                 times.push(ms);
             } else if let Some((key, value)) = tag.split_once(':')
-                && !key.is_empty()
-                && key.chars().all(|c| c.is_ascii_alphabetic())
+                && ID_TAGS.iter().any(|t| key.trim().eq_ignore_ascii_case(t))
             {
                 meta = true;
                 if key.eq_ignore_ascii_case("offset") {
@@ -1049,6 +1054,10 @@ mod tests {
         // A bracket that is no tag starts a line as it is.
         let (lines, _) = parse("[Chorus]\nla la");
         assert_eq!(lines[0].text, "[Chorus]");
+        // Nor is a section's name with a colon; an ID tag is.
+        let (lines, _) = parse("[ar:Somebody]\n[Chorus: Eminem]\nla la\n[Intro:]");
+        let texts: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(texts, ["[Chorus: Eminem]", "la la", "[Intro:]"]);
     }
 
     #[test]
