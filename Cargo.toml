@@ -67,11 +67,19 @@ windows = { version = "0.62", features = [
     "Win32_Media_MediaFoundation",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
+    "Win32_System_Ole",                # IDropTarget (Explorer's selections, drop_target.rs)
+    "Win32_System_SystemServices",     # IDropTarget's key state
+    "Win32_Graphics_Gdi",              # IDataObject::GetData
+    "Win32_UI_Shell",                  # DragQueryFileW
     "Win32_System_Threading",          # AvSetMmThreadCharacteristicsW (MMCSS)
     "Win32_System_Variant",
     "Win32_Devices_FunctionDiscovery",  # PKEY_Device_FriendlyName (the device list)
     "Win32_UI_Shell_PropertiesSystem",  # IPropertyStore (the device list)
 ] }
+
+# `#[implement]` of COM objects (drop_target.rs) names it: already the
+# windows crate's own, so nothing more is built.
+windows-core = "0.62"
 
 [target.'cfg(windows)'.build-dependencies]
 # Embeds the icon and the version information into the exe.

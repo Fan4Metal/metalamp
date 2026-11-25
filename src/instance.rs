@@ -6,8 +6,10 @@
 //! message-only window of a class with the same name, which receives the
 //! paths in one `WM_COPYDATA` (separated by NULs). Both names are derived from the path of the exe,
 //! so an installed copy and a development build do not take each other's
-//! files. Explorer starts one process per file of a multiple selection:
-//! paths that arrive close together make one playlist (`App`).
+//! files. Explorer hands a multiple selection over through the open verb's
+//! drop target (`drop_target`), all at once; started once per file (another
+//! program, an older registration), paths that arrive close together make
+//! one playlist (`App`).
 
 use std::ffi::OsString;
 use std::hash::{Hash, Hasher};
@@ -233,6 +235,23 @@ pub fn listen(ctx: &egui::Context, main: isize) {
     }
 }
 
+/// Paths handed over, by a later start or by Explorer (`drop_target`):
+/// queued for `App`, the main window restored if minimized, the UI woken.
+/// The main window, or none while closing or before `listen`.
+pub fn hand_over(paths: Vec<PathBuf>) -> Option<isize> {
+    let (ctx, main) = TARGET.get().filter(|_| !CLOSING.load(Ordering::Relaxed))?;
+    let now = Instant::now();
+    RECEIVED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .extend(paths.into_iter().map(|p| (p, now)));
+    if unsafe { IsIconic(*main as HWND) } != 0 {
+        unsafe { ShowWindow(*main as HWND, SW_RESTORE) };
+    }
+    ctx.request_repaint();
+    Some(*main)
+}
+
 /// The paths handed over since the previous call, with their arrival times.
 pub fn take() -> Vec<(PathBuf, Instant)> {
     std::mem::take(&mut *RECEIVED.lock().unwrap_or_else(|e| e.into_inner()))
@@ -250,12 +269,10 @@ unsafe extern "system" fn window_proc(
         return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
     }
     let data = unsafe { &*(lparam as *const COPYDATASTRUCT) };
-    let Some((ctx, main)) = TARGET
-        .get()
-        .filter(|_| data.dwData == MAGIC && !CLOSING.load(Ordering::Relaxed))
-    else {
+    if data.dwData != MAGIC {
         return 0;
-    };
+    }
+    let mut paths = Vec::new();
     if data.cbData > 0 && !data.lpData.is_null() {
         // Read as bytes: the copy the system makes need not be aligned.
         let bytes =
@@ -266,17 +283,9 @@ unsafe extern "system" fn window_proc(
             .iter()
             .map(|b| u16::from_le_bytes(*b))
             .collect();
-        let now = Instant::now();
-        RECEIVED
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .extend(split(&units).into_iter().map(|p| (p, now)));
+        paths = split(&units);
     }
-    if unsafe { IsIconic(*main as HWND) } != 0 {
-        unsafe { ShowWindow(*main as HWND, SW_RESTORE) };
-    }
-    ctx.request_repaint();
-    *main as LRESULT
+    hand_over(paths).map_or(0, |main| main as LRESULT)
 }
 
 #[cfg(test)]

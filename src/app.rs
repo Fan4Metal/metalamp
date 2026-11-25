@@ -205,6 +205,12 @@ impl App {
             let wake = ctx.clone();
             win::hook_window(hwnd, move || wake.request_repaint());
             crate::instance::listen(ctx, hwnd);
+            // Explorer's selections, when the file types are this copy's.
+            if std::env::current_exe()
+                .is_ok_and(|exe| crate::assoc::status(&exe) == crate::assoc::Status::Registered)
+            {
+                crate::drop_target::serve();
+            }
         }
 
         let player = crate::player::Player::new(
@@ -1519,6 +1525,7 @@ impl App {
     fn close_now(&mut self) {
         log::info!("closed while minimized: saved, and the process ends");
         crate::instance::closing();
+        crate::drop_target::revoke();
         self.save_now();
         self.tray = None;
         std::process::exit(0);
@@ -2613,6 +2620,7 @@ impl eframe::App for App {
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         crate::instance::closing();
+        crate::drop_target::revoke();
         self.save_now();
     }
 }

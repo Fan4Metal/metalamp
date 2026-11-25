@@ -8,7 +8,11 @@
 //!   should be used from now on;
 //! - `Applications\metalamp.exe` and `Capabilities` listed in
 //!   `RegisteredApplications`, so that MetalAMP appears in Settings →
-//!   Default apps.
+//!   Default apps;
+//! - the open verb's drop target (`drop_target`, the class a local server
+//!   of the exe), so that a selection of many files comes in one call,
+//!   not as a process per file and, past 15 files, not at all (Explorer
+//!   then played them in Windows Media Player).
 //!
 //! Windows does not let a program make itself the default: the choice
 //! (`UserChoice`) is protected and belongs to the user. So `register` only
@@ -57,6 +61,27 @@ const EXE_NAME: &str = "metalamp.exe";
 
 fn prog_id(id: &str) -> String {
     format!("metalamp.{id}")
+}
+
+/// The drop target's class.
+const CLSID: &str = crate::drop_target::CLSID_TEXT;
+
+/// The open verb of `key` takes any number of files through the drop
+/// target (`MultiSelectModel` too: Explorer then offers it whatever the
+/// count).
+fn set_drop_target(key: &str) -> Result<(), String> {
+    reg::set(&format!(r"{key}\shell\open"), Some("MultiSelectModel"), "Player")?;
+    reg::set(&format!(r"{key}\shell\open\DropTarget"), Some("CLSID"), CLSID)
+}
+
+/// What `set_drop_target` wrote, when it is MetalAMP's.
+fn remove_drop_target(key: &str) -> Result<(), String> {
+    let target = format!(r"{key}\shell\open\DropTarget");
+    if reg::get(&target, Some("CLSID")).is_some_and(|c| c.eq_ignore_ascii_case(CLSID)) {
+        reg::delete_tree(&target)?;
+        reg::delete_value(&format!(r"{key}\shell\open"), "MultiSelectModel")?;
+    }
+    Ok(())
 }
 
 /// The command Explorer runs to open a file with `exe`.
@@ -157,6 +182,7 @@ fn register_in(r: &Roots, exe: &Path) -> Result<(), String> {
         reg::set(&key, None, name)?;
         reg::set(&format!(r"{key}\DefaultIcon"), None, &icon)?;
         reg::set(&format!(r"{key}\shell\open\command"), None, &command)?;
+        set_drop_target(&key)?;
         for ext in t.extensions {
             if unclaimed(r, ext, &id) {
                 reg::set(&format!(r"{}\.{ext}", r.classes), None, &id)?;
@@ -174,6 +200,7 @@ fn register_in(r: &Roots, exe: &Path) -> Result<(), String> {
                 if command.is_some_and(|c| c.to_lowercase().contains(&exe_lower)) {
                     reg::set(&other, None, name)?;
                     reg::set(&format!(r"{other}\DefaultIcon"), None, &icon)?;
+                    set_drop_target(&other)?;
                 }
             }
             reg::set(
@@ -191,6 +218,16 @@ fn register_in(r: &Roots, exe: &Path) -> Result<(), String> {
     let app = format!(r"{}\{APP_KEY}", r.classes);
     reg::set(&app, Some("FriendlyAppName"), APP_NAME)?;
     reg::set(&format!(r"{app}\shell\open\command"), None, &command)?;
+    set_drop_target(&app)?;
+    // The drop target's class, served by the exe (`-Embedding` when COM
+    // starts it).
+    let class = format!(r"{}\CLSID\{CLSID}", r.classes);
+    reg::set(&class, None, APP_NAME)?;
+    reg::set(
+        &format!(r"{class}\LocalServer32"),
+        None,
+        &format!("\"{exe_text}\""),
+    )?;
     reg::set(&capabilities, Some("ApplicationName"), APP_NAME)?;
     // The sentence of About and the README.
     reg::set(
@@ -220,6 +257,7 @@ fn unregister_in(r: &Roots) -> Result<(), String> {
             // stays.
             for p in other_prog_ids(r, ext) {
                 let other = format!(r"{}\{p}", r.classes);
+                remove_drop_target(&other)?;
                 let ours = |icon: String| {
                     icon.to_lowercase().contains(EXE_NAME)
                         && icon.ends_with(&format!(",-{}", icon_id(i)))
@@ -240,6 +278,7 @@ fn unregister_in(r: &Roots) -> Result<(), String> {
         }
     }
     reg::delete_tree(&format!(r"{}\{APP_KEY}", r.classes))?;
+    reg::delete_tree(&format!(r"{}\CLSID\{CLSID}", r.classes))?;
     reg::delete_tree(&r.software)?;
     reg::delete_value(&r.registered_apps, APP_NAME)?;
     Ok(())
@@ -452,6 +491,22 @@ mod tests {
             get(r"metalamp.mp3\DefaultIcon", None).unwrap(),
             r#""C:\Program Files\MetalAMP\metalamp.exe",-101"#
         );
+        // A selection of many files through the drop target, the class the
+        // exe serves.
+        for key in ["metalamp.mp3", APP_KEY] {
+            assert_eq!(
+                get(&format!(r"{key}\shell\open\DropTarget"), Some("CLSID")).unwrap(),
+                CLSID
+            );
+            assert_eq!(
+                get(&format!(r"{key}\shell\open"), Some("MultiSelectModel")).unwrap(),
+                "Player"
+            );
+        }
+        assert_eq!(
+            get(&format!(r"CLSID\{CLSID}\LocalServer32"), None).unwrap(),
+            r#""C:\Program Files\MetalAMP\metalamp.exe""#
+        );
         assert_eq!(
             get(r".aac\OpenWithProgids", Some("metalamp.m4a")).unwrap(),
             ""
@@ -505,6 +560,11 @@ mod tests {
             get(r"FLAC_auto_file\DefaultIcon", None).unwrap(),
             r#""C:\Program Files\MetalAMP\metalamp.exe",-102"#
         );
+        assert_eq!(
+            get(r"FLAC_auto_file\shell\open\DropTarget", Some("CLSID")).unwrap(),
+            CLSID
+        );
+        assert_eq!(get(r"Other.m4a\shell\open\DropTarget", Some("CLSID")), None);
         assert!(get("FLAC_auto_file", None).is_some());
         assert_eq!(get(r"Other.m4a\DefaultIcon", None), None);
         assert_eq!(get(".flac", None).unwrap(), "FLAC_auto_file");
@@ -526,6 +586,9 @@ mod tests {
         assert_eq!(get(".wav", None).unwrap(), "Other.wav");
         assert_eq!(get(r"FLAC_auto_file\DefaultIcon", None), None);
         assert_eq!(get("FLAC_auto_file", None), None);
+        assert_eq!(get(r"FLAC_auto_file\shell\open\DropTarget", Some("CLSID")), None);
+        assert_eq!(get(r"FLAC_auto_file\shell\open", Some("MultiSelectModel")), None);
+        assert_eq!(get(&format!(r"CLSID\{CLSID}"), None), None);
         assert_eq!(
             get(r"FLAC_auto_file\shell\open\command", None).unwrap(),
             open_command(exe)

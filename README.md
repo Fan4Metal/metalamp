@@ -33,7 +33,7 @@ MetalAMP is an audio player for Windows built around a media library: the music 
 - **Library statistics**: the numbers of tracks, albums, artists and genres, the length and size, the plays, and charts of the bit rates, formats, years, genres, artists and the tracks played most (see [Statistics](#statistics)).
 - **File info and tags**: every field of a track's tag, its cover and its audio properties, in a window opened by a click on the player's cover or `I`, where the tags of one file or of several are also edited (see [File info](#file-info)).
 - **Mini player**: the cover, or a turning vinyl record, in a small window over the others (see [Mini player](#mini-player)).
-- **One window**: files opened from Explorer go to the window already open.
+- **One window**: files opened from Explorer go to the window already open; several selected and opened at once (`Enter`) replace the playlist, sorted by name, and play from the first, however many there are.
 - **File associations** with an icon for each type, offered by the installer.
 - **English or Russian interface**: it follows the language of Windows and can be changed in the settings window (`F5`).
 - **Portable**: the [portable archive](#installation) keeps its settings, the library index and the covers next to the program.

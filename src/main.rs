@@ -15,6 +15,7 @@ mod bench;
 mod caption;
 mod covers;
 mod dialog;
+mod drop_target;
 mod filetypes;
 mod format;
 mod frameless;
@@ -111,6 +112,9 @@ fn main() -> eframe::Result {
                 }
                 return Ok(());
             }
+            // COM starts the player so for Explorer's files, which come
+            // through the drop target (`drop_target`) once it is up.
+            Some("-Embedding" | "/Embedding") => {}
             Some("--bench") => {
                 win::attach_parent_console();
                 let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
