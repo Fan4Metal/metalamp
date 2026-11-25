@@ -448,7 +448,9 @@ pub fn fetch(
         kept => {
             let record = ask_lrclib(&ask)?;
             let mut answer = Cached::of(record.as_ref());
-            // A choice made for the track in the panel stays.
+            // A choice made for the track in the panel stays: as it is
+            // now, the panel may have made one while LRCLIB was asked.
+            let kept = file.as_deref().and_then(read_cached).or(kept);
             if let Some(kept) = kept {
                 answer.chosen = kept.chosen && answer.has_text();
                 answer.own_chosen = kept.own_chosen;
@@ -1048,16 +1050,22 @@ fn read_cached(file: &Path) -> Option<Cached> {
         .filter(|c| c.version == VERSION)
 }
 
-/// Written aside and renamed (only this thread writes them).
+/// Written aside and renamed. The panel's thread and the tag editor's
+/// (several at once) may write a track's at the same time: each write has
+/// a file aside of its own, so none is written over half-done.
 fn write_cached(file: &Path, cached: &Cached) {
+    static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let written = (|| -> std::io::Result<()> {
         if let Some(dir) = file.parent() {
             std::fs::create_dir_all(dir)?;
         }
         let bytes = serde_json::to_vec(cached).map_err(std::io::Error::other)?;
-        let tmp = file.with_extension("tmp");
+        let n = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = file.with_extension(format!("{}.{n}.tmp", std::process::id()));
         std::fs::write(&tmp, bytes)?;
-        std::fs::rename(&tmp, file)
+        std::fs::rename(&tmp, file).inspect_err(|_| {
+            let _ = std::fs::remove_file(&tmp);
+        })
     })();
     if let Err(e) = written {
         log::warn!("cannot write {}: {e}", file.display());
@@ -1467,6 +1475,33 @@ mod tests {
         let back = back.expect("lyrics in the tag");
         println!("{back}");
         assert_eq!(parse(&back), (text.lines, true));
+    }
+
+    /// A track's cache written by several threads at once (the panel's,
+    /// the tag editor's): each write whole, none left aside.
+    #[test]
+    fn the_cache_is_written_by_several_at_once() {
+        let dir = std::env::temp_dir().join(format!("metalamp-lyrics-{}", std::process::id()));
+        let file = dir.join("0123456789abcdef.json");
+        std::thread::scope(|s| {
+            for t in 0..8 {
+                let file = &file;
+                s.spawn(move || {
+                    for i in 0..40 {
+                        let mut c = Cached::of(None);
+                        c.chosen = (t + i) % 2 == 0;
+                        write_cached(file, &c);
+                    }
+                });
+            }
+        });
+        assert!(read_cached(&file).is_some());
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(names, ["0123456789abcdef.json"]);
     }
 
     /// LRCLIB's answers: a `get` failing other than by "none" still
