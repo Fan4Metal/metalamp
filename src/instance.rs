@@ -256,6 +256,14 @@ pub fn hand_over(paths: Vec<PathBuf>) -> Option<isize> {
     Some(*main)
 }
 
+/// The main window, while this copy takes paths (listening, not closing).
+pub fn main_window() -> Option<isize> {
+    TARGET
+        .get()
+        .filter(|_| !CLOSING.load(Ordering::Relaxed))
+        .map(|(_, main)| *main)
+}
+
 /// The paths handed over since the previous call, with their arrival times.
 pub fn take() -> Vec<(PathBuf, Instant)> {
     std::mem::take(&mut *RECEIVED.lock().unwrap_or_else(|e| e.into_inner()))

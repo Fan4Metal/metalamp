@@ -140,22 +140,106 @@ impl IDropTarget_Impl for Target_Impl {
         _at: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
-        let mut paths = data.as_ref().map(paths_of).unwrap_or_default();
+        let paths = data.as_ref().map(paths_of).unwrap_or_default();
         log::debug!("Explorer handed over {} files", paths.len());
-        // As the folder shows them, sorted by name: Explorer lists the
-        // focused file first (the last clicked of a Shift range), and the
-        // playlist starts with the first file.
-        paths.sort_by(|a, b| {
-            crate::format::natural_cmp(&a.to_string_lossy(), &b.to_string_lossy())
-        });
-        let taken = !paths.is_empty()
-            && crate::instance::hand_over(paths).is_some_and(|main| {
-                crate::win::bring_back(main);
-                true
+        let main = crate::instance::main_window().filter(|_| !paths.is_empty());
+        set(effect, if main.is_some() { DROPEFFECT_COPY } else { DROPEFFECT_NONE });
+        let Some(main) = main else {
+            return Ok(());
+        };
+        // In front now, while Explorer lets this process take the
+        // foreground.
+        crate::win::bring_back(main);
+        // Explorer lists the focused file first (the last clicked of a
+        // Shift range), and the playlist starts with the first file: the
+        // files as the folder's window shows them, asked of it once this
+        // call has returned (Explorer waits for it meanwhile), else by
+        // name.
+        let ordered = std::thread::Builder::new()
+            .name("explorer order".into())
+            .spawn({
+                let paths = paths.clone();
+                move || {
+                    crate::instance::hand_over(in_view_order(paths));
+                }
             });
-        set(effect, if taken { DROPEFFECT_COPY } else { DROPEFFECT_NONE });
+        if let Err(e) = ordered {
+            log::warn!("cannot ask Explorer for its order: {e}");
+            crate::instance::hand_over(by_name(paths));
+        }
         Ok(())
     }
+}
+
+fn by_name(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    paths.sort_by(|a, b| crate::format::natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
+    paths
+}
+
+/// `paths` in the order an Explorer window whose selection they are shows
+/// them (sorted by a column, a search's results), else by name (the
+/// desktop, a window closed meanwhile).
+fn in_view_order(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
+    let up = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
+    let shown = crate::guard::catch(std::path::Path::new("Explorer"), || selection_shown(&paths))
+        .flatten();
+    if up {
+        unsafe { CoUninitialize() };
+    }
+    match shown {
+        Some(shown) => {
+            log::debug!("Explorer's order taken");
+            shown
+        }
+        None => by_name(paths),
+    }
+}
+
+/// The selection, in its view's order, of the Explorer window that has
+/// `paths` selected (the same files, whatever their case).
+fn selection_shown(paths: &[PathBuf]) -> Option<Vec<PathBuf>> {
+    use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, CoTaskMemFree, IServiceProvider};
+    use windows::Win32::System::Variant::VARIANT;
+    use windows::Win32::UI::Shell::{
+        IFolderView, IShellBrowser, IShellItemArray, IShellWindows, SID_STopLevelBrowser,
+        SIGDN_FILESYSPATH, SVGIO_FLAG_VIEWORDER, SVGIO_SELECTION, ShellWindows, _SVGIO,
+    };
+    let folded = |p: &PathBuf| p.to_string_lossy().to_lowercase();
+    let mut wanted: Vec<String> = paths.iter().map(folded).collect();
+    wanted.sort_unstable();
+    let windows: IShellWindows = unsafe { CoCreateInstance(&ShellWindows, None, CLSCTX_ALL) }.ok()?;
+    let count = unsafe { windows.Count() }.ok()?;
+    for i in 0..count {
+        let selection = (|| -> windows::core::Result<Vec<PathBuf>> {
+            let window = unsafe { windows.Item(&VARIANT::from(i)) }?;
+            let provider: IServiceProvider = window.cast()?;
+            let browser: IShellBrowser = unsafe { provider.QueryService(&SID_STopLevelBrowser) }?;
+            let view: IFolderView = unsafe { browser.QueryActiveShellView() }?.cast()?;
+            let flags = _SVGIO(SVGIO_SELECTION.0 | SVGIO_FLAG_VIEWORDER.0);
+            let items: IShellItemArray = unsafe { view.Items(flags) }?;
+            let n = unsafe { items.GetCount() }?;
+            if n as usize != paths.len() {
+                return Ok(Vec::new());
+            }
+            let mut shown = Vec::with_capacity(n as usize);
+            for k in 0..n {
+                let item = unsafe { items.GetItemAt(k) }?;
+                let name = unsafe { item.GetDisplayName(SIGDN_FILESYSPATH) }?;
+                let path = unsafe { name.to_string() };
+                unsafe { CoTaskMemFree(Some(name.0 as _)) };
+                shown.push(PathBuf::from(path.map_err(|_| windows::core::Error::empty())?));
+            }
+            Ok(shown)
+        })();
+        let Ok(shown) = selection else { continue };
+        let mut found: Vec<String> = shown.iter().map(folded).collect();
+        found.sort_unstable();
+        if !shown.is_empty() && found == wanted {
+            return Some(shown);
+        }
+    }
+    None
 }
 
 fn set(effect: *mut DROPEFFECT, value: DROPEFFECT) {
@@ -277,6 +361,19 @@ mod tests {
         let data = data_of(&paths);
         let got = paths_of(&data);
         assert_eq!(got, paths.map(PathBuf::from));
+    }
+
+    /// `cargo test explorer_windows_are_asked -- --ignored --nocapture`:
+    /// the Explorer windows open are asked for their selections (nothing
+    /// changes in them); a selection no window has falls back to the names.
+    #[test]
+    #[ignore = "asks the Explorer windows open for their selections"]
+    fn explorer_windows_are_asked() {
+        let paths = vec![PathBuf::from(r"C:\nowhere\b 10.mp3"), PathBuf::from(r"C:\nowhere\b 9.mp3")];
+        let started = std::time::Instant::now();
+        let ordered = in_view_order(paths);
+        println!("asked in {} ms", started.elapsed().as_millis());
+        assert_eq!(ordered, [PathBuf::from(r"C:\nowhere\b 9.mp3"), PathBuf::from(r"C:\nowhere\b 10.mp3")]);
     }
 
     /// `cargo test explorer_reaches_the_drop_target -- --ignored`: the
