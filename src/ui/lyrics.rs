@@ -4,13 +4,15 @@
 //! easing to it (the wheel scrolls by hand, and the following waits
 //! [`HAND_S`]), a click on a line seeking to it; plain ones scrolled by the
 //! wheel. While looking, a spinner; without lyrics, a word why. The right
-//! button: the cover, copy, LRCLIB asked again, hide. `LyricsWindow`
+//! button: what the panel shows (under the playlist), copy, LRCLIB asked
+//! again, hide. `LyricsWindow`
 //! shows them in a window of their own (the player and playlist layout).
 
 use egui::{Align, FontId, Rect, Sense, Ui, pos2, vec2};
 
 use crate::lyrics::{How, Note, Source, State, Text};
 use crate::palette;
+use crate::settings::UnderShows;
 
 /// The room round the lines, the gap between them, their size.
 const PAD: f32 = 10.0;
@@ -30,7 +32,9 @@ const AGAIN: f32 = 28.0;
 /// What the panel asks for.
 pub enum Act {
     Seek(u64),
-    ShowCover,
+    /// Under the playlist: what the panel shows, chosen in the menu.
+    Shows(UnderShows),
+    /// Under the playlist the panel hidden; in the window, closed.
     Hide,
     /// The lyrics looked for again this way.
     Ask(How),
@@ -44,8 +48,9 @@ pub enum Act {
 /// Where the lyrics are shown, for their menu.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Place {
-    /// Under the playlist, in the cover's place.
-    Panel,
+    /// Under the playlist, in the cover's place; what the panel is set
+    /// to show.
+    Panel(UnderShows),
     /// In a window of their own; `dock`: they may go back under the
     /// playlist (the layout with the library).
     Window { dock: bool },
@@ -210,16 +215,16 @@ pub fn show(
         .id(id.with("menu"))
         .show(|ui| {
             match place {
-                Place::Panel => {
+                Place::Panel(current) => {
+                    if let Some(s) = crate::ui::playlist::shows_items(ui, current) {
+                        acts.push(Act::Shows(s));
+                        ui.close();
+                    }
                     if ui
                         .button(tr!("Open in a window", "Открыть в отдельном окне"))
                         .clicked()
                     {
                         acts.push(Act::ToWindow);
-                        ui.close();
-                    }
-                    if ui.button(tr!("Show the cover", "Показать обложку")).clicked() {
-                        acts.push(Act::ShowCover);
                         ui.close();
                     }
                 }
@@ -294,10 +299,10 @@ pub fn show(
                 }
             }
             ui.separator();
-            let hide = if place != Place::Panel {
-                tr!("Close", "Закрыть")
+            let hide = if matches!(place, Place::Panel(_)) {
+                tr!("Hide the panel", "Скрыть панель")
             } else {
-                tr!("Hide the lyrics", "Скрыть текст")
+                tr!("Close", "Закрыть")
             };
             if ui.button(hide).clicked() {
                 acts.push(Act::Hide);

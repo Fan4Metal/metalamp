@@ -545,11 +545,13 @@ impl App {
     }
 
     /// Looks for the lyrics of the track heard (else the playlist's current
-    /// one) while the playlist shows them.
+    /// one) while the playlist may show them (the panel under it set to the
+    /// lyrics, or to them when there are any) or their window is open.
     fn follow_lyrics(&mut self, ctx: &egui::Context) {
         let wanted = self.settings.lyrics_window
             || (self.settings.window_layout != WindowLayout::Playlist
-                && self.settings.playlist_lyrics
+                && self.settings.playlist_under_shown
+                && self.settings.playlist_under != crate::settings::UnderShows::Cover
                 && self.settings.playlist_visible);
         if !wanted {
             return;
@@ -595,8 +597,8 @@ impl App {
     ) -> crate::ui::playlist::Under<'a> {
         crate::ui::playlist::Under {
             cover,
-            show_cover: &mut settings.playlist_cover,
-            show_lyrics: &mut settings.playlist_lyrics,
+            shown: &mut settings.playlist_under_shown,
+            shows: &mut settings.playlist_under,
             lyrics_window: &mut settings.lyrics_window,
             lyrics: lyrics.state(),
             online: settings.lyrics_online,
@@ -2289,8 +2291,8 @@ impl eframe::App for App {
             self.playlist_view.loose.forget();
         }
         let lyrics_shown = (
-            self.settings.playlist_cover,
-            self.settings.playlist_lyrics,
+            self.settings.playlist_under_shown,
+            self.settings.playlist_under,
             self.settings.lyrics_window,
         );
         if alone && self.settings.player_only {
@@ -2386,13 +2388,17 @@ impl eframe::App for App {
             match act {
                 crate::ui::lyrics::Act::Seek(ms) => self.player.seek(ms),
                 crate::ui::lyrics::Act::Ask(how) => self.lyrics.ask_again(how),
-                // Back under the playlist (the window closed itself).
+                // Back under the playlist (the window closed itself): the
+                // panel shown, showing the lyrics unless set to the cover.
                 crate::ui::lyrics::Act::ToPanel => {
-                    self.settings.playlist_lyrics = true;
+                    self.settings.playlist_under_shown = true;
+                    if self.settings.playlist_under == crate::settings::UnderShows::Cover {
+                        self.settings.playlist_under = crate::settings::UnderShows::Lyrics;
+                    }
                     self.settings.playlist_visible = true;
                 }
                 crate::ui::lyrics::Act::SaveToTag => self.save_lyrics(&ctx),
-                crate::ui::lyrics::Act::ShowCover
+                crate::ui::lyrics::Act::Shows(_)
                 | crate::ui::lyrics::Act::Hide
                 | crate::ui::lyrics::Act::ToWindow => {}
             }
@@ -2400,8 +2406,8 @@ impl eframe::App for App {
         if moved
             || lyrics_shown
                 != (
-                    self.settings.playlist_cover,
-                    self.settings.playlist_lyrics,
+                    self.settings.playlist_under_shown,
+                    self.settings.playlist_under,
                     self.settings.lyrics_window,
                 )
         {

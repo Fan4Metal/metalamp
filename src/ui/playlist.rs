@@ -18,6 +18,7 @@ use crate::keymap::{Cmd, with_key};
 use crate::library::Library;
 use crate::library::outside::Loose;
 use crate::player::Player;
+use crate::settings::UnderShows;
 use crate::ui::icons::{self, Icon};
 use crate::ui::table::{self, ROW_HEIGHT};
 use crate::{format, palette};
@@ -78,6 +79,10 @@ pub struct PlaylistView {
     saved: Vec<Listed>,
     counts: std::collections::HashMap<std::path::PathBuf, (Option<std::time::SystemTime>, usize)>,
     saved_at: Option<std::time::Instant>,
+    /// The panel under the list set to `UnderShows::Auto` shows the
+    /// lyrics: the track has some (while they are looked for, what it
+    /// showed stays, so a track's start does not blink).
+    auto_lyrics: bool,
 }
 
 /// A playlist of the section: its name, its file, and whether it is saved
@@ -205,18 +210,115 @@ pub enum PlaylistAction {
     SaveLyrics,
 }
 
-/// What the panel shows under the list: the cover of the track playing,
-/// or its lyrics in the cover's place (the settings' switches).
+/// The panel under the list (the layout with the library): shown, and
+/// what it shows, the cover of the track playing or its lyrics in the
+/// cover's place (the settings' `playlist_under_shown`, `playlist_under`).
 pub struct Under<'a> {
     pub cover: Option<&'a TextureHandle>,
-    pub show_cover: &'a mut bool,
-    pub show_lyrics: &'a mut bool,
+    pub shown: &'a mut bool,
+    pub shows: &'a mut UnderShows,
     /// Without the library (the player and playlist layout) the lyrics
     /// are in a window of their own: the microphone's button opens it.
     pub lyrics_window: &'a mut bool,
     pub lyrics: &'a crate::lyrics::State,
     /// LRCLIB may be asked (the setting).
     pub online: bool,
+}
+
+/// What the panel under the playlist shows, as radio items at the top of
+/// its menus (the cover's and the lyrics'), then a line: the one chosen.
+pub fn shows_items(ui: &mut Ui, current: UnderShows) -> Option<UnderShows> {
+    let mut chosen = None;
+    for s in UnderShows::ALL {
+        if ui.radio(current == s, s.label()).clicked() {
+            chosen = Some(s);
+        }
+    }
+    ui.separator();
+    chosen
+}
+
+/// The switch's height, an icon segment's width, its room from the corner.
+const SWITCH_H: f32 = 22.0;
+const SWITCH_ICON: f32 = 26.0;
+const SWITCH_MARGIN: f32 = 6.0;
+
+/// While the pointer is over the panel under the playlist, in its top
+/// right corner: what it shows as three segments, "Auto", the cover and
+/// the lyrics, the one in use lit. The one clicked.
+fn corner_switch(ui: &mut Ui, panel: Rect, current: UnderShows) -> Option<UnderShows> {
+    if !ui.rect_contains_pointer(panel) {
+        return None;
+    }
+    let font = FontId::proportional(12.0);
+    let auto = ui.painter().layout_no_wrap(
+        tr!("Auto", "Авто").to_owned(),
+        font,
+        palette::text(),
+    );
+    let auto_w = auto.size().x + 16.0;
+    let width = auto_w + 2.0 * SWITCH_ICON;
+    let rect = Rect::from_min_size(
+        pos2(
+            panel.right() - SWITCH_MARGIN - width,
+            panel.top() + SWITCH_MARGIN,
+        ),
+        vec2(width, SWITCH_H),
+    );
+    let painter = ui.painter().clone();
+    let radius = SWITCH_H / 2.0;
+    painter.rect_filled(rect, radius, palette::card_bg().gamma_multiply(0.94));
+    painter.rect_stroke(
+        rect,
+        radius,
+        egui::Stroke::new(1.0, palette::line()),
+        egui::StrokeKind::Inside,
+    );
+    let mut chosen = None;
+    let mut left = rect.left();
+    for s in UnderShows::ALL {
+        let w = if s == UnderShows::Auto { auto_w } else { SWITCH_ICON };
+        let seg = Rect::from_min_size(pos2(left, rect.top()), vec2(w, SWITCH_H));
+        left += w;
+        let resp = ui
+            .interact(seg, egui::Id::new(("under_switch", s as u8)), Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        let on = s == current;
+        if on || resp.hovered() {
+            let fill = if on {
+                palette::selected_bg()
+            } else {
+                palette::hover()
+            };
+            painter.rect_filled(seg.shrink(2.0), radius - 2.0, fill);
+        }
+        let colour = if on || resp.hovered() {
+            palette::text_bright()
+        } else {
+            palette::text_weak()
+        };
+        match s {
+            UnderShows::Auto => {
+                painter.galley(
+                    seg.center() - auto.size() / 2.0,
+                    std::sync::Arc::clone(&auto),
+                    colour,
+                );
+            }
+            UnderShows::Cover | UnderShows::Lyrics => {
+                let icon = if s == UnderShows::Cover {
+                    Icon::Image
+                } else {
+                    Icon::Mic
+                };
+                icons::paint(&painter, icon, seg.center(), 13.0, colour, palette::card_bg());
+            }
+        }
+        if resp.on_hover_text(s.label()).clicked() {
+            chosen = Some(s);
+        }
+    }
+    chosen
 }
 
 /// The line of an entry by `template` from the library or the file's tags
@@ -261,8 +363,8 @@ pub fn show(
 ) -> Vec<PlaylistAction> {
     let Under {
         cover,
-        show_cover,
-        show_lyrics,
+        shown: panel_shown,
+        shows,
         lyrics_window,
         lyrics,
         online,
@@ -337,41 +439,33 @@ pub fn show(
         player.stop();
         player.queue.clear();
     }
-    // Without the library the list is the window, with no cover (the
-    // lyrics may be under it). The cover and the lyrics take the same
-    // place: lit, a button hides its own, else shows it.
-    let cover_shown = *show_cover && !*show_lyrics;
-    if !pv.no_library
-        && crate::ui::icon_button(
+    // Without the library the list is the window, with nothing under it:
+    // the microphone opens the lyrics' window. With it, one button shows
+    // or hides the panel under the list; what it shows is chosen in the
+    // panel's corner and its menu.
+    if pv.no_library {
+        if crate::ui::icon_button(
             &mut bar,
-            Icon::Image,
-            cover_shown,
-            tr!("The cover of the track playing", "Обложка играющего трека"),
+            Icon::Mic,
+            *lyrics_window,
+            tr!("The lyrics of the track playing", "Текст играющего трека"),
         )
         .clicked()
-    {
-        *show_cover = !cover_shown;
-        *show_lyrics = false;
-    }
-    // Lit while the lyrics show here or in their window: then a click hides
-    // them; else it shows them here (in the window without the library).
-    let lyrics_shown = *lyrics_window || (*show_lyrics && !pv.no_library);
-    if crate::ui::icon_button(
+        {
+            *lyrics_window = !*lyrics_window;
+        }
+    } else if crate::ui::icon_button(
         &mut bar,
-        Icon::Mic,
-        lyrics_shown,
-        tr!("The lyrics of the track playing", "Текст играющего трека"),
+        Icon::Image,
+        *panel_shown,
+        tr!(
+            "The cover or the lyrics of the track playing under the playlist",
+            "Обложка или текст играющего трека под плейлистом"
+        ),
     )
     .clicked()
     {
-        if lyrics_shown {
-            *lyrics_window = false;
-            *show_lyrics = false;
-        } else if pv.no_library {
-            *lyrics_window = true;
-        } else {
-            *show_lyrics = true;
-        }
+        *panel_shown = !*panel_shown;
     }
     playlists_menu(
         &mut bar,
@@ -436,9 +530,21 @@ pub fn show(
     let side = (full.width() - 2.0 * COVER_PAD).min(COVER_MAX);
     let cover_h = side + COVER_PAD;
     let list_h = full.height() - HEADER - FOOTER;
-    let wanted = (*show_lyrics || *show_cover) && !pv.no_library;
+    let wanted = *panel_shown && !pv.no_library;
+    match lyrics {
+        crate::lyrics::State::Found(_) => pv.auto_lyrics = true,
+        crate::lyrics::State::Looking => {}
+        _ => pv.auto_lyrics = false,
+    }
+    // Not while they are in their window: the cover here then.
+    let lyrics_here = !*lyrics_window
+        && match *shows {
+            UnderShows::Auto => pv.auto_lyrics,
+            UnderShows::Cover => false,
+            UnderShows::Lyrics => true,
+        };
     let under_rect = (wanted && side > 40.0 && list_h - cover_h >= COVER_MIN_LIST).then(|| {
-        let width = if *show_lyrics {
+        let width = if lyrics_here {
             full.width() - 2.0 * COVER_PAD
         } else {
             side
@@ -456,8 +562,9 @@ pub fn show(
         ),
     );
     painter.rect_filled(body, 0.0, palette::list_bg());
-    let lyrics_rect = under_rect.filter(|_| *show_lyrics);
-    let cover_rect = under_rect.filter(|_| !*show_lyrics);
+    let lyrics_rect = under_rect.filter(|_| lyrics_here);
+    let cover_rect = under_rect.filter(|_| !lyrics_here);
+    let mut chosen = None;
     if let Some(r) = lyrics_rect {
         let acts = crate::ui::lyrics::show(
             ui,
@@ -466,23 +573,16 @@ pub fn show(
             lyrics,
             player.position_ms(),
             online,
-            crate::ui::lyrics::Place::Panel,
+            crate::ui::lyrics::Place::Panel(*shows),
         );
         for act in acts {
             match act {
                 crate::ui::lyrics::Act::Seek(ms) => player.seek(ms),
-                crate::ui::lyrics::Act::ShowCover => {
-                    *show_lyrics = false;
-                    *show_cover = true;
-                }
-                crate::ui::lyrics::Act::Hide | crate::ui::lyrics::Act::ToPanel => {
-                    *show_lyrics = false;
-                }
+                crate::ui::lyrics::Act::Shows(s) => chosen = Some(s),
+                crate::ui::lyrics::Act::Hide => *panel_shown = false,
+                crate::ui::lyrics::Act::ToPanel => {}
                 // Moved into a window: the cover comes back here.
-                crate::ui::lyrics::Act::ToWindow => {
-                    *show_lyrics = false;
-                    *lyrics_window = true;
-                }
+                crate::ui::lyrics::Act::ToWindow => *lyrics_window = true,
                 crate::ui::lyrics::Act::Ask(how) => actions.push(PlaylistAction::Lyrics(how)),
                 crate::ui::lyrics::Act::SaveToTag => actions.push(PlaylistAction::SaveLyrics),
             }
@@ -514,15 +614,36 @@ pub fn show(
         egui::Popup::context_menu(&resp)
             .id(egui::Id::new("playlist_cover_menu"))
             .show(|ui| {
-                if ui.button(tr!("Show the lyrics", "Показать текст")).clicked() {
-                    *show_lyrics = true;
+                if let Some(s) = shows_items(ui, *shows) {
+                    chosen = Some(s);
                     ui.close();
                 }
-                if ui.button(tr!("Hide the cover", "Скрыть обложку")).clicked() {
-                    *show_cover = false;
+                if !*lyrics_window
+                    && ui
+                        .button(tr!("Open the lyrics in a window", "Открыть текст в отдельном окне"))
+                        .clicked()
+                {
+                    *lyrics_window = true;
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button(tr!("Hide the panel", "Скрыть панель")).clicked() {
+                    *panel_shown = false;
                     ui.close();
                 }
             });
+    }
+    if let Some(r) = under_rect
+        && let Some(s) = corner_switch(ui, r, *shows)
+    {
+        chosen = Some(s);
+    }
+    if let Some(s) = chosen {
+        *shows = s;
+        // The lyrics chosen here leave their window for the panel.
+        if s == UnderShows::Lyrics {
+            *lyrics_window = false;
+        }
     }
     // Off the window's right edge, which resizes it: the rows (they drag)
     // and the scroll bar would take its presses.

@@ -104,11 +104,13 @@ pub struct Settings {
     /// The playlist on the right, and its width in points.
     pub playlist_visible: bool,
     pub playlist_width: f32,
-    /// The cover of the track playing under the playlist.
-    pub playlist_cover: bool,
-    /// The lyrics of the track playing under the playlist, in the cover's
-    /// place (`ui/lyrics.rs`).
-    pub playlist_lyrics: bool,
+    /// The panel under the playlist (the layout with the library): shown,
+    /// and what it shows (`UnderShows`: the lyrics of the track playing
+    /// when it has any, else its cover; its cover; its lyrics,
+    /// `ui/lyrics.rs`). Read from the older `playlist_cover` and
+    /// `playlist_lyrics` (`from_json`).
+    pub playlist_under_shown: bool,
+    pub playlist_under: UnderShows,
     /// The player and playlist layout: the lyrics in a window of their own
     /// (`ui::lyrics::LyricsWindow`), and its place (points: left, top, and
     /// the inner width and height).
@@ -331,6 +333,32 @@ impl CoverPriority {
         match self {
             Self::Tags => tr!("Tags first", "Сначала из тегов"),
             Self::Folder => tr!("Folder first", "Сначала из папки"),
+        }
+    }
+}
+
+/// What the panel under the playlist shows: the lyrics of the track
+/// playing when it has any, else its cover (the default: the panel never
+/// shows "No lyrics found"); its cover; its lyrics. Chosen in the panel's
+/// corner and its menu; one button shows or hides the panel (two, the
+/// cover's and the microphone's, kept a choice not seen).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UnderShows {
+    #[default]
+    Auto,
+    Cover,
+    Lyrics,
+}
+
+impl UnderShows {
+    pub const ALL: [Self; 3] = [Self::Auto, Self::Cover, Self::Lyrics];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => tr!("Lyrics if there are any, else the cover", "Текст, если он есть, иначе обложка"),
+            Self::Cover => tr!("The cover", "Обложка"),
+            Self::Lyrics => tr!("The lyrics", "Текст"),
         }
     }
 }
@@ -894,8 +922,8 @@ impl Default for Settings {
             shuffle: false,
             playlist_visible: true,
             playlist_width: 340.0,
-            playlist_cover: true,
-            playlist_lyrics: false,
+            playlist_under_shown: true,
+            playlist_under: UnderShows::Auto,
             lyrics_window: false,
             lyrics_window_place: None,
             lyrics_online: true,
@@ -1135,9 +1163,18 @@ impl Settings {
 
     pub fn from_json(bytes: &[u8]) -> Option<Settings> {
         use serde_json::Value;
-        let Ok(Value::Object(file)) = serde_json::from_slice::<Value>(bytes) else {
+        let Ok(Value::Object(mut file)) = serde_json::from_slice::<Value>(bytes) else {
             return None;
         };
+        // Before the panel under the playlist had one switch: shown when
+        // the cover or the lyrics were, showing either as there are lyrics.
+        if !file.contains_key("playlist_under_shown") {
+            let was = |key: &str, default: bool| file.get(key).and_then(Value::as_bool).unwrap_or(default);
+            if file.contains_key("playlist_cover") || file.contains_key("playlist_lyrics") {
+                let shown = was("playlist_cover", true) || was("playlist_lyrics", false);
+                file.insert("playlist_under_shown".into(), Value::Bool(shown));
+            }
+        }
         let Ok(Value::Object(mut merged)) = serde_json::to_value(Settings::default()) else {
             return None;
         };
@@ -1206,6 +1243,27 @@ impl Settings {
 
 #[cfg(test)]
 mod tests {
+    /// The panel under the playlist: shown as the older switches had the
+    /// cover or the lyrics shown, then showing either as there are lyrics.
+    #[test]
+    fn the_panel_under_the_playlist_reads_the_older_switches() {
+        let read = |json: &str| {
+            let s = Settings::from_json(json.as_bytes()).unwrap();
+            (s.playlist_under_shown, s.playlist_under)
+        };
+        assert_eq!(read("{}"), (true, UnderShows::Auto));
+        assert_eq!(read(r#"{"playlist_cover":false}"#), (false, UnderShows::Auto));
+        assert_eq!(
+            read(r#"{"playlist_cover":false,"playlist_lyrics":true}"#),
+            (true, UnderShows::Auto)
+        );
+        assert_eq!(read(r#"{"playlist_lyrics":false}"#), (true, UnderShows::Auto));
+        assert_eq!(
+            read(r#"{"playlist_cover":true,"playlist_under_shown":false,"playlist_under":"lyrics"}"#),
+            (false, UnderShows::Lyrics)
+        );
+    }
+
     /// The ID3v1 code page is kept by its name; a file without it, or with
     /// one this version does not know, reads Windows' own.
     #[test]
