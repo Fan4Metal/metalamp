@@ -238,87 +238,64 @@ pub fn shows_items(ui: &mut Ui, current: UnderShows) -> Option<UnderShows> {
     chosen
 }
 
-/// The switch's height, an icon segment's width, its room from the corner.
-const SWITCH_H: f32 = 22.0;
-const SWITCH_ICON: f32 = 26.0;
+/// The corner button's side and its room from the corner.
+const SWITCH: f32 = 26.0;
 const SWITCH_MARGIN: f32 = 6.0;
 
 /// While the pointer is over the panel under the playlist, in its top
-/// right corner: what it shows as three segments, "Auto", the cover and
-/// the lyrics, the one in use lit. The one clicked.
-fn corner_switch(ui: &mut Ui, panel: Rect, current: UnderShows) -> Option<UnderShows> {
+/// right corner: one round button for the other of the two, the lyrics'
+/// microphone over the cover, the cover's picture over the lyrics
+/// (`lyrics_here`); three segments with "Auto" the user found bulky, and
+/// "Auto" is in the menu. What it chose.
+fn corner_switch(ui: &mut Ui, panel: Rect, lyrics_here: bool) -> Option<UnderShows> {
     if !ui.rect_contains_pointer(panel) {
         return None;
     }
-    let font = FontId::proportional(12.0);
-    let auto = ui.painter().layout_no_wrap(
-        tr!("Auto", "Авто").to_owned(),
-        font,
-        palette::text(),
-    );
-    let auto_w = auto.size().x + 16.0;
-    let width = auto_w + 2.0 * SWITCH_ICON;
     let rect = Rect::from_min_size(
         pos2(
-            panel.right() - SWITCH_MARGIN - width,
+            panel.right() - SWITCH_MARGIN - SWITCH,
             panel.top() + SWITCH_MARGIN,
         ),
-        vec2(width, SWITCH_H),
+        vec2(SWITCH, SWITCH),
     );
-    let painter = ui.painter().clone();
-    let radius = SWITCH_H / 2.0;
-    painter.rect_filled(rect, radius, palette::card_bg().gamma_multiply(0.94));
-    painter.rect_stroke(
-        rect,
-        radius,
+    let (other, icon, tip) = if lyrics_here {
+        (
+            UnderShows::Cover,
+            Icon::Image,
+            tr!("Show the cover", "Показать обложку"),
+        )
+    } else {
+        (
+            UnderShows::Lyrics,
+            Icon::Mic,
+            tr!("Show the lyrics", "Показать текст"),
+        )
+    };
+    let resp = ui
+        .interact(rect, egui::Id::new("under_switch"), Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    let fill = if resp.is_pointer_button_down_on() {
+        palette::pressed()
+    } else if resp.hovered() {
+        palette::hover()
+    } else {
+        palette::card_bg()
+    };
+    let painter = ui.painter();
+    let centre = rect.center();
+    painter.circle_filled(centre, SWITCH / 2.0, fill.gamma_multiply(0.94));
+    painter.circle_stroke(
+        centre,
+        SWITCH / 2.0 - 0.5,
         egui::Stroke::new(1.0, palette::line()),
-        egui::StrokeKind::Inside,
     );
-    let mut chosen = None;
-    let mut left = rect.left();
-    for s in UnderShows::ALL {
-        let w = if s == UnderShows::Auto { auto_w } else { SWITCH_ICON };
-        let seg = Rect::from_min_size(pos2(left, rect.top()), vec2(w, SWITCH_H));
-        left += w;
-        let resp = ui
-            .interact(seg, egui::Id::new(("under_switch", s as u8)), Sense::click())
-            .on_hover_cursor(egui::CursorIcon::PointingHand);
-        let on = s == current;
-        if on || resp.hovered() {
-            let fill = if on {
-                palette::selected_bg()
-            } else {
-                palette::hover()
-            };
-            painter.rect_filled(seg.shrink(2.0), radius - 2.0, fill);
-        }
-        let colour = if on || resp.hovered() {
-            palette::text_bright()
-        } else {
-            palette::text_weak()
-        };
-        match s {
-            UnderShows::Auto => {
-                painter.galley(
-                    seg.center() - auto.size() / 2.0,
-                    std::sync::Arc::clone(&auto),
-                    colour,
-                );
-            }
-            UnderShows::Cover | UnderShows::Lyrics => {
-                let icon = if s == UnderShows::Cover {
-                    Icon::Image
-                } else {
-                    Icon::Mic
-                };
-                icons::paint(&painter, icon, seg.center(), 13.0, colour, palette::card_bg());
-            }
-        }
-        if resp.on_hover_text(s.label()).clicked() {
-            chosen = Some(s);
-        }
-    }
-    chosen
+    let colour = if resp.hovered() {
+        palette::text_bright()
+    } else {
+        palette::text()
+    };
+    icons::paint(painter, icon, centre, 13.0, colour, fill);
+    resp.on_hover_text(tip).clicked().then_some(other)
 }
 
 /// The line of an entry by `template` from the library or the file's tags
@@ -634,7 +611,7 @@ pub fn show(
             });
     }
     if let Some(r) = under_rect
-        && let Some(s) = corner_switch(ui, r, *shows)
+        && let Some(s) = corner_switch(ui, r, lyrics_here)
     {
         chosen = Some(s);
     }
