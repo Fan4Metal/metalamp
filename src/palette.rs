@@ -4,8 +4,10 @@
 //! then `apply`). Every colour of the interface comes from here as a
 //! function of the palette in use, not as literals scattered about.
 //!
-//! The default is the graphite dark theme with the amber of the icon's
-//! bolt; the other accents are metalmpv's (blue, teal, green, orange,
+//! The default accent is the theme's own (`Accent::Theme`, `Theme::accent`:
+//! the graphite dark theme, the default, has the amber of the icon's bolt,
+//! every other theme a colour of its own that suits it, the user's wish);
+//! the ready ones are amber and metalmpv's (blue, teal, green, orange,
 //! red, pink, purple, graphite). Every accent's shades (the hover, the
 //! selection's ground, the track playing, the spectrum) are mixed from its
 //! colour alike, so the look is of one hue (the slate selection and light
@@ -631,8 +633,15 @@ fn along(stops: &[(f32, u32)], t: f32) -> Color32 {
 pub fn icon_colour(own: Option<Accent>) -> Color32 {
     match own {
         None => accent(),
-        Some(a) if current().dark => a.base(),
-        Some(a) => mix(a.base(), Color32::BLACK, 0.12),
+        Some(a) => {
+            let p = current();
+            let base = a.base(p.theme);
+            if p.dark {
+                base
+            } else {
+                mix(base, Color32::BLACK, 0.12)
+            }
+        }
     }
 }
 
@@ -908,15 +917,47 @@ impl Theme {
     pub fn is_dark(self) -> bool {
         !matches!(self, Theme::Sepia | Theme::Light)
     }
+
+    /// The theme's own accent (`Accent::Theme`), `0xRRGGBB`: the colour
+    /// that suits it best, each theme's another; the graphite dark
+    /// theme's the amber of the icon's bolt, as before.
+    pub const fn accent(self) -> u32 {
+        match self {
+            // Electric cyan on black.
+            Theme::Black => 0x22b8de,
+            // Moonlit azure on the blue cast.
+            Theme::Midnight => 0x58a6ff,
+            // Orchid on the violet greys.
+            Theme::Plum => 0xc084fc,
+            // Emerald mint on the green greys.
+            Theme::Forest => 0x34d399,
+            // Caramel on the browns.
+            Theme::Espresso => 0xd99a5b,
+            // A rose pink on the rose greys.
+            Theme::Rose => 0xec7f9f,
+            Theme::Dark => 0xf5a623,
+            // A brighter steel blue than the lists' text.
+            Theme::Steel => 0x6fa3c0,
+            // Periwinkle on the soft cool greys.
+            Theme::Dimmed => 0x7aa2f7,
+            // Burnt sienna on paper.
+            Theme::Sepia => 0xc0622f,
+            // Windows' blue on white.
+            Theme::Light => 0x0067c0,
+        }
+    }
 }
 
-/// The colour of the controls; kept in the settings by name (`amber`,
-/// `#12AB9F`), an unknown one read as the default.
+/// The colour of the controls; kept in the settings by name (`theme`,
+/// `amber`, `#12AB9F`), an unknown one read as the default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub enum Accent {
-    /// The amber of the icon's bolt.
+    /// The theme's own (`Theme::accent`), following the theme: the first
+    /// swatch.
     #[default]
+    Theme,
+    /// The amber of the icon's bolt.
     Amber,
     Blue,
     Teal,
@@ -943,7 +984,7 @@ impl From<Accent> for String {
 }
 
 impl Accent {
-    /// The ready ones (not the user's own).
+    /// The ready ones (not the theme's nor the user's own).
     pub const ALL: [Accent; 9] = [
         Accent::Amber,
         Accent::Blue,
@@ -959,6 +1000,7 @@ impl Accent {
     /// The name in the settings: a ready one's, or `#RRGGBB`.
     pub fn name(self) -> String {
         let name = match self {
+            Accent::Theme => "theme",
             Accent::Amber => "amber",
             Accent::Blue => "blue",
             Accent::Teal => "teal",
@@ -977,6 +1019,9 @@ impl Accent {
         if let Some([r, g, b]) = parse_hex(name) {
             return Some(Accent::Custom(u32::from_be_bytes([0, r, g, b])));
         }
+        if name == "theme" {
+            return Some(Accent::Theme);
+        }
         Self::ALL.into_iter().find(|a| a.name() == name)
     }
 
@@ -994,6 +1039,7 @@ impl Accent {
     pub fn label(self) -> &'static str {
         match self {
             Accent::Custom(_) => tr!("Your own colour", "Свой цвет"),
+            Accent::Theme => tr!("The theme's colour", "Цвет темы"),
             Accent::Amber => tr!("Amber", "Янтарный"),
             Accent::Blue => tr!("Blue", "Синий"),
             Accent::Teal => tr!("Teal", "Бирюзовый"),
@@ -1006,9 +1052,10 @@ impl Accent {
         }
     }
 
-    /// The colour itself, as its swatch shows it.
-    pub fn base(self) -> Color32 {
+    /// The colour itself in `theme`, as its swatch shows it.
+    pub fn base(self, theme: Theme) -> Color32 {
         hex(match self {
+            Accent::Theme => theme.accent(),
             Accent::Amber => 0xf5a623,
             Accent::Blue => 0x2f7cf0,
             Accent::Teal => 0x0d9488,
@@ -1276,6 +1323,8 @@ fn rgb_of_hsl(h: f32, s: f32, l: f32) -> [u8; 3] {
 /// Every colour of the interface.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
+    /// The theme it was made of.
+    pub theme: Theme,
     pub dark: bool,
     /// The title row.
     pub title_bg: Color32,
@@ -1611,7 +1660,8 @@ impl Palette {
         if p.header_text == Color32::TRANSPARENT {
             p.header_text = p.text_weak;
         }
-        let base = accent.base();
+        p.theme = theme;
+        let base = accent.base(theme);
         let (white, black) = (Color32::WHITE, Color32::BLACK);
         // The visualization's shades: the accent's, or the user's own.
         let (mut low, mut high, mut peak) = (black, black, black);
@@ -1703,6 +1753,7 @@ impl Palette {
     }
 
     const BLANK: Palette = Palette {
+        theme: Theme::Dark,
         dark: true,
         title_bg: Color32::BLACK,
         sidebar_bg: Color32::TRANSPARENT,
@@ -2219,14 +2270,16 @@ mod tests {
         assert_eq!(serde_json::from_str::<Accent>("\"#12ab9f\"").unwrap(), own);
         assert_eq!(
             serde_json::from_str::<Accent>("\"cyan\"").unwrap(),
-            Accent::Amber
+            Accent::Theme
         );
+        assert_eq!(Accent::from_name("theme"), Some(Accent::Theme));
+        assert_eq!(Accent::Theme.name(), "theme");
     }
 
     #[test]
     fn every_palette_can_be_read() {
         for theme in Theme::ALL {
-            for accent in Accent::ALL {
+            for accent in std::iter::once(Accent::Theme).chain(Accent::ALL) {
                 let p = Palette::of(Look {
                     theme,
                     accent,

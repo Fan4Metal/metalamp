@@ -1038,7 +1038,7 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
                 "Кнопок управления, выделения и играющего трека."
             )),
             ACCENTS_WIDTH,
-            |ui| accents(ui, &mut settings.accent),
+            |ui| accents(ui, &mut settings.accent, settings.theme),
         );
         divider(ui);
         row(
@@ -2708,23 +2708,32 @@ fn eq_response_curve(
         .collect()
 }
 
-/// The width of the accents' row: ten swatches.
-const ACCENTS_WIDTH: f32 = 275.0;
+/// The width of the accents' row: eleven swatches.
+const ACCENTS_WIDTH: f32 = 302.0;
 /// The size of an accent's swatch.
 const SWATCH: f32 = 22.0;
 
-/// The accents as round swatches, the chosen one ringed, and last the
+/// The accents as round swatches, the chosen one ringed: first `theme`'s
+/// own (`Accent::Theme`), then the ready ones but the one of its colour
+/// (amber in the dark theme, which then counts as the theme's), last the
 /// user's own colour, picked in a popup (metalmpv's).
-fn accents(ui: &mut Ui, accent: &mut Accent) {
+fn accents(ui: &mut Ui, accent: &mut Accent, theme: Theme) {
     ui.spacing_mut().item_spacing.x = 5.0;
-    // Right to left: the own colour first, then the ready ones from the last.
+    let own = Accent::Theme.base(theme);
+    let ready = Accent::ALL.into_iter().filter(|a| a.base(theme) != own);
+    // Right to left: the own colour first, then the ready ones from the
+    // last, then the theme's.
     own_accent(ui, accent);
-    for a in Accent::ALL.into_iter().rev() {
+    for a in ready.rev().chain(std::iter::once(Accent::Theme)) {
         let (rect, response) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
         let response = response.on_hover_text(a.label());
-        let selected = *accent == a;
+        let selected = *accent == a
+            || (a == Accent::Theme
+                && *accent != Accent::Theme
+                && !matches!(accent, Accent::Custom(_))
+                && accent.base(theme) == own);
         swatch(ui, rect, selected, response.hovered(), |p, centre, r| {
-            p.circle_filled(centre, r, a.base());
+            p.circle_filled(centre, r, a.base(theme));
         });
         if response.clicked() {
             *accent = a;
@@ -2762,7 +2771,7 @@ pub(crate) fn view_colours(ui: &mut Ui, colour: &mut Option<Accent>) {
             *colour == Some(a),
             response.hovered(),
             |p, centre, r| {
-                p.circle_filled(centre, r, a.base());
+                p.circle_filled(centre, r, a.base(palette::current().theme));
             },
         );
         if response.clicked() {
@@ -2846,7 +2855,7 @@ fn tints(
             let edge = palette::text_weak().gamma_multiply(0.7);
             p.circle(centre, r, fill, Stroke::new(1.0, edge));
             if s == Tint::Accent {
-                p.circle_filled(centre, r * 0.35, accent.base());
+                p.circle_filled(centre, r * 0.35, accent.base(palette::current().theme));
             }
         });
         if response.clicked() {
@@ -2948,7 +2957,7 @@ fn visual_colours(ui: &mut Ui, colours: &mut VisualColours, look: palette::Look,
     let mut own = match *colours {
         VisualColours::Custom(c) => Accent::Custom(c),
         _ => {
-            let c = look.accent.base();
+            let c = look.accent.base(look.theme);
             custom([c.r(), c.g(), c.b()])
         }
     };
@@ -3057,7 +3066,7 @@ fn own_colour(ui: &mut Ui, accent: &mut Accent, chosen: bool) -> bool {
     let (rect, response) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
     let response = response.on_hover_text(tr!("Your own colour…", "Свой цвет…"));
     let own = chosen;
-    let current = accent.base();
+    let current = accent.base(palette::current().theme);
     swatch(ui, rect, own, response.hovered(), |p, centre, r| {
         if own {
             p.circle_filled(centre, r, current);
@@ -3068,7 +3077,7 @@ fn own_colour(ui: &mut Ui, accent: &mut Accent, chosen: bool) -> bool {
     egui::Popup::menu(&response)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
-            let mut colour = accent.base();
+            let mut colour = accent.base(palette::current().theme);
             if colour_picker(ui, &mut colour) {
                 *accent = custom([colour.r(), colour.g(), colour.b()]);
             }
@@ -3091,7 +3100,7 @@ fn own_colour(ui: &mut Ui, accent: &mut Accent, chosen: bool) -> bool {
                 }
                 // Kept as typed while the field has the focus.
                 let id = ui.id().with("accent_hex");
-                let base = accent.base();
+                let base = accent.base(palette::current().theme);
                 let mut text = ui
                     .data_mut(|d| d.get_temp::<String>(id))
                     .unwrap_or_else(|| mode.show([base.r(), base.g(), base.b()]));
@@ -3115,7 +3124,7 @@ fn own_colour(ui: &mut Ui, accent: &mut Accent, chosen: bool) -> bool {
             ui.horizontal(|ui| {
                 let spacing = ui.spacing().item_spacing.x;
                 let size = vec2((PICKER - 2.0 * spacing) / 3.0, ui.spacing().interact_size.y);
-                let base = accent.base();
+                let base = accent.base(palette::current().theme);
                 let mut rgb = [base.r(), base.g(), base.b()];
                 let mut edited = false;
                 for (value, name) in rgb.iter_mut().zip(["R ", "G ", "B "]) {
