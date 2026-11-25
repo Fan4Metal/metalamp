@@ -80,6 +80,9 @@ pub struct App {
     pub(crate) library: Arc<Library>,
     /// The scan under way, if any.
     scan: Option<Scan>,
+    /// What it was started for: from the index (`load_index`) and every
+    /// file read (`read_all`); a scan started over it does both too.
+    scan_asked: (bool, bool),
     /// The library's folders watched, and when they last changed (a scan
     /// follows once they have rested for `watch::QUIET`).
     watcher: crate::library::watch::Watcher,
@@ -261,6 +264,8 @@ impl App {
             title_icon: None,
             library: Arc::new(Library::default()),
             scan: Some(scan),
+            // As `main` starts it.
+            scan_asked: (true, false),
             watcher,
             watch_at: None,
             wake,
@@ -351,7 +356,8 @@ impl App {
     }
 
     /// Scan the library's folders again (the bar's button, a folder added or removed),
-    /// keeping the tags of unchanged files. A scan under way is dropped.
+    /// keeping the tags of unchanged files. A scan under way is dropped,
+    /// what it was started for kept (`start_scan_from`).
     pub(crate) fn rescan(&mut self) {
         self.start_scan(false);
     }
@@ -368,7 +374,15 @@ impl App {
 
     /// A scan from the index (`load_index`, which reads again the MP3s whose
     /// ID3v1 tags it read in another code page) or from the library shown.
+    /// A scan under way is dropped, and what it was started for is done
+    /// by this one too: a rescan (the bar's button, tags written) during
+    /// "Read all the tags again" gave up reading them all.
     fn start_scan_from(&mut self, load_index: bool, read_all: bool) {
+        let (load_index, read_all) = match (&self.scan, self.scan_asked) {
+            (Some(_), (index, all)) => (load_index || index, read_all || all),
+            (None, _) => (load_index, read_all),
+        };
+        self.scan_asked = (load_index, read_all);
         self.scan_progress = None;
         // The folders as they are now, a disk plugged in since included.
         self.watcher =
