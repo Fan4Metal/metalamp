@@ -1688,6 +1688,9 @@ struct Control {
     hint: &'static str,
     range: (f32, f32),
     step: f32,
+    /// The marks under the slider: one every so much, longer at the ends
+    /// and at the values listed (`slider_ticks`).
+    ticks: (f32, &'static [f32]),
     get: fn(&Enhancement) -> f32,
     set: fn(&mut Enhancement, f32),
     text: fn(f32) -> String,
@@ -1714,6 +1717,7 @@ fn enhancer_controls() -> [Vec<Control>; 3] {
                 ),
                 range: (0.0, f32::from(Enhancement::MOST_DRIVE)),
                 step: 1.0,
+                ticks: (10.0, &[50.0, 100.0]),
                 get: |e| f32::from(e.drive),
                 set: |e, v| e.drive = v.round() as u8,
                 text: |v| format!("{v:.0} %"),
@@ -1726,6 +1730,7 @@ fn enhancer_controls() -> [Vec<Control>; 3] {
                 ),
                 range: (0.0, 10.0),
                 step: 0.1,
+                ticks: (1.0, &[5.0]),
                 get: |e| e.fidelity,
                 set: |e, v| e.fidelity = v,
                 text: amount_text,
@@ -1738,6 +1743,7 @@ fn enhancer_controls() -> [Vec<Control>; 3] {
                 ),
                 range: (0.0, 10.0),
                 step: 0.1,
+                ticks: (1.0, &[5.0]),
                 get: |e| e.ambience,
                 set: |e, v| e.ambience = v,
                 text: amount_text,
@@ -1752,6 +1758,7 @@ fn enhancer_controls() -> [Vec<Control>; 3] {
                 ),
                 range: (-100.0, 100.0),
                 step: 1.0,
+                ticks: (20.0, &[0.0]),
                 get: |e| f32::from(e.bass_type),
                 set: |e, v| e.bass_type = v.round() as i8,
                 text: |v| match v.round() as i32 {
@@ -1768,6 +1775,7 @@ fn enhancer_controls() -> [Vec<Control>; 3] {
                 ),
                 range: (-100.0, 100.0),
                 step: 1.0,
+                ticks: (20.0, &[0.0]),
                 get: |e| f32::from(e.treble_type),
                 set: |e, v| e.treble_type = v.round() as i8,
                 text: |v| match v.round() as i32 {
@@ -1786,6 +1794,7 @@ fn enhancer_controls() -> [Vec<Control>; 3] {
                 ),
                 range: (-Enhancement::LEVEL_DB, Enhancement::LEVEL_DB),
                 step: 0.1,
+                ticks: (1.0, &[0.0]),
                 get: |e| e.bass,
                 set: |e, v| e.bass = v,
                 text: level_text,
@@ -1798,6 +1807,7 @@ fn enhancer_controls() -> [Vec<Control>; 3] {
                 ),
                 range: (-Enhancement::LEVEL_DB, Enhancement::LEVEL_DB),
                 step: 0.1,
+                ticks: (1.0, &[0.0]),
                 get: |e| e.mid,
                 set: |e, v| e.mid = v,
                 text: level_text,
@@ -1810,6 +1820,7 @@ fn enhancer_controls() -> [Vec<Control>; 3] {
                 ),
                 range: (-Enhancement::LEVEL_DB, Enhancement::LEVEL_DB),
                 step: 0.1,
+                ticks: (1.0, &[0.0]),
                 get: |e| e.treble,
                 set: |e, v| e.treble = v,
                 text: level_text,
@@ -2087,6 +2098,8 @@ fn enhancer_cell(ui: &mut Ui, c: &Control, e: &mut Enhancement, base: Enhancemen
     });
     ui.add_space(4.0);
     ui.spacing_mut().slider_width = width;
+    // The marks' place, under the handle drawn after it.
+    let marks = ui.painter().add(egui::Shape::Noop);
     let response = ui
         .add(
             egui::Slider::new(&mut value, c.range.0..=c.range.1)
@@ -2094,6 +2107,7 @@ fn enhancer_cell(ui: &mut Ui, c: &Control, e: &mut Enhancement, base: Enhancemen
                 .show_value(false),
         )
         .on_hover_text(&tip);
+    slider_ticks(ui, marks, response.rect, c);
     // Only what the user did: the slider's stepping alone moves a value by
     // a rounding error (0.0 read as 8.9e-8 on a 0.1 step from -6, 1.8 as
     // 1.8000001), and says it changed it.
@@ -2103,6 +2117,75 @@ fn enhancer_cell(ui: &mut Ui, c: &Control, e: &mut Enhancement, base: Enhancemen
         let per_unit = (1.0 / c.step).round();
         (c.set)(e, (value * per_unit).round() / per_unit);
     }
+}
+
+/// The marks under an enhancer's slider (its rect `slider`), right under
+/// its rail, into `slot` (added before the slider, so the handle covers
+/// them where it stands): one every `c.ticks.0`, longer at the ends and at
+/// `c.ticks.1`, each where the handle's middle stands at that value
+/// (`slider_tick_x`; `ticks_stand_under_the_handle` checks it against the
+/// handle egui draws). What they reach past the slider's rect is made room
+/// for under it.
+fn slider_ticks(ui: &mut Ui, slot: egui::layers::ShapeIdx, slider: Rect, c: &Control) {
+    /// From the rail's lower edge.
+    const GAP: f32 = 1.0;
+    const SHORT: f32 = 3.0;
+    const LONG: f32 = 5.0;
+    let (every, major) = c.ticks;
+    let (lo, hi) = c.range;
+    let top = slider.center().y + ui.spacing().slider_rail_height / 2.0 + GAP;
+    let below = top + LONG - slider.bottom();
+    if below > 0.0 {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        ui.allocate_exact_size(vec2(slider.width(), below), Sense::hover());
+    }
+    if hi <= lo || every <= 0.0 {
+        return;
+    }
+    let count = ((hi - lo) / every).round() as i32;
+    let shape = ui.style().visuals.handle_shape;
+    let painter = ui.painter();
+    let marks = (0..=count)
+        .map(|i| {
+            let v = lo + i as f32 * every;
+            let long = i == 0
+                || i == count
+                || major.iter().any(|m| (m - v).abs() < every * 0.01);
+            let (length, colour) = if long {
+                (LONG, palette::text_weak().gamma_multiply(0.85))
+            } else {
+                (SHORT, palette::text_weak().gamma_multiply(0.5))
+            };
+            egui::Shape::vline(
+                painter.round_to_pixel_center(slider_tick_x(slider, shape, c.range, v)),
+                top..=top + length,
+                Stroke::new(1.0, colour),
+            )
+        })
+        .collect();
+    painter.set(slot, egui::Shape::Vec(marks));
+}
+
+/// Where the middle of egui's handle (of `shape`) stands at `value` on a
+/// horizontal slider of the rect `slider` and `range`, as egui works it
+/// out: the handle's "radius" is the slider's height over 2.5, its half
+/// width that, or that times the aspect ratio for a rectangle (egui's
+/// default, 0.75), and its middle travels the width less the half width
+/// at either end, in a straight line.
+fn slider_tick_x(
+    slider: Rect,
+    shape: egui::style::HandleShape,
+    range: (f32, f32),
+    value: f32,
+) -> f32 {
+    let radius = slider.height() / 2.5;
+    let half = match shape {
+        egui::style::HandleShape::Circle => radius,
+        egui::style::HandleShape::Rect { aspect_ratio } => radius * aspect_ratio,
+    };
+    let span = (slider.width() - 2.0 * half).max(0.0);
+    let t = ((value - range.0) / (range.1 - range.0)).clamp(0.0, 1.0);
+    slider.left() + half + t * span
 }
 
 /// What the limiter does: the loudness card's hint, and the tip of its
@@ -3392,6 +3475,83 @@ fn reset(settings: &mut Settings, updates: &mut Updates) {
 #[cfg(test)]
 mod eq_tests {
     use super::*;
+
+    /// Every mark under every enhancer slider stands under the middle of
+    /// the handle egui draws at the mark's value, in cells of a whole and
+    /// a fractional width.
+    #[test]
+    fn ticks_stand_under_the_handle() {
+        fn flat(shape: &egui::Shape, out: &mut Vec<egui::Shape>) {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| flat(s, out)),
+                s => out.push(s.clone()),
+            }
+        }
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0))),
+            ..Default::default()
+        };
+        for width in [200.0, 333.7] {
+            for control in enhancer_controls().iter().flatten() {
+                let (every, _) = control.ticks;
+                let count = ((control.range.1 - control.range.0) / every).round() as i32;
+                for i in 0..=count {
+                    let v = control.range.0 + i as f32 * every;
+                    let mut e = Enhancement::default();
+                    (control.set)(&mut e, v);
+                    let base = e;
+                    let out = ctx.run_ui(input.clone(), |ui| {
+                        ui.allocate_ui_with_layout(
+                            vec2(width, 0.0),
+                            Layout::top_down(Align::Min),
+                            |ui| {
+                                ui.set_width(width);
+                                enhancer_cell(ui, control, &mut e, base, true);
+                            },
+                        );
+                    });
+                    let mut out = out;
+                    out.textures_delta.clear();
+                    let mut shapes = Vec::new();
+                    for clipped in &out.shapes {
+                        flat(&clipped.shape, &mut shapes);
+                    }
+                    // The handle, round or a rectangle taller than the
+                    // rail.
+                    let rail = ctx.global_style().spacing.slider_rail_height;
+                    let handle = shapes
+                        .iter()
+                        .find_map(|s| match s {
+                            egui::Shape::Circle(c) => Some(c.center),
+                            egui::Shape::Rect(r) if r.rect.height() > rail + 1.0 => {
+                                Some(r.rect.center())
+                            }
+                            _ => None,
+                        })
+                        .expect("the handle");
+                    let ticks: Vec<f32> = shapes
+                        .iter()
+                        .filter_map(|s| match s {
+                            egui::Shape::LineSegment { points: [a, b], .. }
+                                if a.x == b.x && a.y.min(b.y) > handle.y =>
+                            {
+                                Some(a.x)
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(ticks.len() as i32, count + 1, "{}", control.title);
+                    let off = (ticks[i as usize] - handle.x).abs();
+                    assert!(
+                        off <= 0.5,
+                        "{} at {v}, {width} wide: the mark {off} off the handle",
+                        control.title
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn built_in_presets_include_their_preamp() {
