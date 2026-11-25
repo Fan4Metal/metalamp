@@ -11,6 +11,7 @@
 
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::Win32::Foundation::{CLASS_E_NOAGGREGATION, E_POINTER, POINTL};
 use windows::Win32::System::Com::{
@@ -32,12 +33,30 @@ pub const CLSID_TEXT: &str = "{AB084876-B527-4E83-9C34-7B30EB91A1FF}";
 
 /// The class's registration with COM while this copy takes the files.
 static COOKIE: Mutex<Option<u32>> = Mutex::new(None);
+/// COM started this copy (`-Embedding`) for Explorer's files.
+static BY_COM: AtomicBool = AtomicBool::new(false);
 
-/// This copy takes Explorer's files from now on: called on the UI thread
-/// (COM is up there, winit's `OleInitialize`), only by the copy the file
-/// types are registered for (a development build running beside the
-/// installed one would take its files).
+/// COM started this copy for the class (`main`, on `-Embedding`): it is
+/// the exe the class is registered for, so it serves it whatever the file
+/// types say.
+pub fn started_by_com() {
+    BY_COM.store(true, Ordering::Relaxed);
+}
+
+pub fn by_com() -> bool {
+    BY_COM.load(Ordering::Relaxed)
+}
+
+/// This copy takes Explorer's files from now on (once; again does
+/// nothing): called on the UI thread (COM is up there, winit's
+/// `OleInitialize`), only by the copy the class is registered for: the
+/// file types this copy's, or COM asking for it (`by_com`, or a start by
+/// COM handing over to the copy running, `instance`), since a development
+/// build running beside the installed one would take its files.
 pub fn serve() {
+    if COOKIE.lock().is_ok_and(|c| c.is_some()) {
+        return;
+    }
     let factory: IClassFactory = Factory.into();
     match unsafe { CoRegisterClassObject(&CLSID, &factory, CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE) }
     {

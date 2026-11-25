@@ -35,6 +35,8 @@ use crate::win::wide;
 
 /// Marks a `WM_COPYDATA` as the player's (`COPYDATASTRUCT::dwData`).
 const MAGIC: usize = 0x6d61_6d70;
+/// The `wParam` of a start by COM: the copy running serves the drop target.
+const SERVE: usize = 1;
 /// How long a second start waits for the window of the first one, which
 /// appears soon after its start, or for a closing one to exit.
 const WAIT: Duration = Duration::from_secs(5);
@@ -64,10 +66,11 @@ fn name() -> String {
 }
 
 /// Called at start-up. If the player is already running from this exe,
-/// hand it `paths` (none: only bring its window forward) and return true:
-/// this process has nothing more to do. Otherwise this process is the first
-/// one and stays so until it exits.
-pub fn forward(paths: &[PathBuf]) -> bool {
+/// hand it `paths` (none: only bring its window forward) and, with
+/// `serve` (COM started this one for Explorer's files), have it serve the
+/// drop target, then return true: this process has nothing more to do.
+/// Otherwise this process is the first one and stays so until it exits.
+pub fn forward(paths: &[PathBuf], serve: bool) -> bool {
     let name = name();
     let mutex_name = wide(format!("Local\\{name}"));
     let class = wide(&name);
@@ -92,7 +95,7 @@ pub fn forward(paths: &[PathBuf]) -> bool {
             )
         };
         if !window.is_null() {
-            match send(window, paths) {
+            match send(window, paths, serve) {
                 Sent::Taken => return true,
                 // A first start that does not answer (hung) is left alone
                 // and this one runs on its own.
@@ -121,9 +124,10 @@ enum Sent {
 }
 
 /// Send `paths` to the message window `to` in one message (all taken or
-/// none), then bring the main window it answers with to the foreground:
-/// this process was started by the user, so it may.
-fn send(to: HWND, paths: &[PathBuf]) -> Sent {
+/// none; `serve` as its `wParam`: `SERVE`), then bring the main window it
+/// answers with to the foreground: this process was started by the user,
+/// so it may.
+fn send(to: HWND, paths: &[PathBuf], serve: bool) -> Sent {
     let text = joined(paths);
     let bytes = text.len() * 2;
     let data = COPYDATASTRUCT {
@@ -136,7 +140,7 @@ fn send(to: HWND, paths: &[PathBuf]) -> Sent {
         SendMessageTimeoutW(
             to,
             WM_COPYDATA,
-            0,
+            if serve { SERVE } else { 0 },
             &raw const data as LPARAM,
             SMTO_ABORTIFHUNG | SMTO_BLOCK,
             ANSWER_MS,
@@ -285,7 +289,14 @@ unsafe extern "system" fn window_proc(
             .collect();
         paths = split(&units);
     }
-    hand_over(paths).map_or(0, |main| main as LRESULT)
+    let main = hand_over(paths);
+    // COM started a copy for Explorer's files: this one, the same exe,
+    // takes them (on this, the UI thread), unless closing (then that copy
+    // goes on as the first and serves them itself).
+    if main.is_some() && wparam == SERVE {
+        crate::drop_target::serve();
+    }
+    main.map_or(0, |main| main as LRESULT)
 }
 
 #[cfg(test)]

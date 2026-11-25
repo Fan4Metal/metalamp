@@ -205,9 +205,11 @@ impl App {
             let wake = ctx.clone();
             win::hook_window(hwnd, move || wake.request_repaint());
             crate::instance::listen(ctx, hwnd);
-            // Explorer's selections, when the file types are this copy's.
-            if std::env::current_exe()
-                .is_ok_and(|exe| crate::assoc::status(&exe) == crate::assoc::Status::Registered)
+            // Explorer's selections, when the file types are this copy's or
+            // COM started it for them.
+            if crate::drop_target::by_com()
+                || std::env::current_exe()
+                    .is_ok_and(|exe| crate::assoc::status(&exe) == crate::assoc::Status::Registered)
             {
                 crate::drop_target::serve();
             }

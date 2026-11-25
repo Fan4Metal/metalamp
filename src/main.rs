@@ -114,7 +114,7 @@ fn main() -> eframe::Result {
             }
             // COM starts the player so for Explorer's files, which come
             // through the drop target (`drop_target`) once it is up.
-            Some("-Embedding" | "/Embedding") => {}
+            Some("-Embedding" | "/Embedding") => drop_target::started_by_com(),
             Some("--bench") => {
                 win::attach_parent_console();
                 let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
@@ -143,8 +143,10 @@ fn main() -> eframe::Result {
     }
 
     // A copy already running from this exe takes the files and comes
-    // forward; this one ends.
-    if instance::forward(&files) {
+    // forward; this one ends. Started by COM, the copy running is asked to
+    // serve the drop target too: it may not (the file types were not its
+    // when it started), and Explorer would wait for the class in vain.
+    if instance::forward(&files, drop_target::by_com()) {
         return Ok(());
     }
 
