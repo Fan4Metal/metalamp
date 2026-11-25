@@ -161,27 +161,6 @@ struct Scheme {
     by_level: bool,
 }
 
-/// Winamp's spectrum in its first skin's colours (`viscolor.txt`: the
-/// analyzer's sixteen lines from the bottom up), at levels evenly apart.
-const WINAMP_CLASSIC: &[(f32, &[u32])] = &[
-    (0.0 / 15.0, &[0x188408]),
-    (1.0 / 15.0, &[0x299400]),
-    (2.0 / 15.0, &[0x319c08]),
-    (3.0 / 15.0, &[0x39b510]),
-    (4.0 / 15.0, &[0x32be10]),
-    (5.0 / 15.0, &[0x29ce10]),
-    (6.0 / 15.0, &[0x94de21]),
-    (7.0 / 15.0, &[0xbdde29]),
-    (8.0 / 15.0, &[0xd6b521]),
-    (9.0 / 15.0, &[0xdea518]),
-    (10.0 / 15.0, &[0xc67b08]),
-    (11.0 / 15.0, &[0xd67300]),
-    (12.0 / 15.0, &[0xd66600]),
-    (13.0 / 15.0, &[0xd65a00]),
-    (14.0 / 15.0, &[0xce2910]),
-    (1.0, &[0xef3110]),
-];
-
 /// The most rows and colours across a scheme may have.
 const MOST_ROWS: usize = 16;
 const MOST_ACROSS: usize = 7;
@@ -190,14 +169,37 @@ const MOST_ACROSS: usize = 7;
 /// dark ground.
 fn scheme(visual: Visual) -> Scheme {
     match visual {
-        // Winamp's own, its first skin's: green at the floor, yellow,
-        // orange, red at the top, by the height whatever the band, grey
-        // peaks (the user liked it better than the hot neon of pink,
-        // orange and gold, and a sunset of amber, rose and violet for the
-        // mirrored one).
-        Visual::Spectrum | Visual::Mirror | Visual::Off => Scheme {
-            rows: WINAMP_CLASSIC,
-            peak: &[0x969696],
+        // A deck's VFD: emerald at the bass, turquoise, cyan at the treble,
+        // lighter up the bar, and a warm top lit only by the loudest bars,
+        // as a coloured filter's amber and orange, the peaks orange
+        // (Winamp's own, its first skin's, which the user found too like
+        // the Winamp swatch, was here; the hot neon of pink, orange and
+        // gold and a magenta-violet-cyan neon before it).
+        Visual::Spectrum | Visual::Off => Scheme {
+            rows: &[
+                (0.0, &[0x08402a, 0x0a3a36, 0x0a2e44]),
+                (0.35, &[0x10b070, 0x12b8a0, 0x1a98c8]),
+                (0.62, &[0x40f5a0, 0x3df5d0, 0x5ad8ff]),
+                (0.8, &[0xc8f5a8, 0xc8f0b0, 0xd0e8c8]),
+                (0.9, &[0xffc24a]),
+                (1.0, &[0xff7a2a]),
+            ],
+            peak: &[0xff9a40],
+            by_level: true,
+        },
+        // Viridis from the middle line out (violet, blue, teal, green,
+        // yellow at the tips), a light periwinkle at the line itself so it
+        // glows as a seam (Viridis's dark violet there the user found too
+        // dark; Winamp's, then a sunset of amber, rose and violet before).
+        Visual::Mirror => Scheme {
+            rows: &[
+                (0.0, &[0x9aaeff]),
+                (0.12, &[0x4a5ab0]),
+                (0.35, &[0x21918c]),
+                (0.7, &[0x5ec962]),
+                (1.0, &[0xfde725]),
+            ],
+            peak: &[0xffffff],
             by_level: true,
         },
         // A hi-fi's meter: green, then yellow, orange and red at the top.
@@ -1974,8 +1976,8 @@ mod tests {
             let own = with_own(dark, v);
             let top = own.at(1.0, 0.0);
             assert_eq!(top, hex(s.rows[s.rows.len() - 1].1[0]), "{v:?}");
-            // The mirrored spectrum shares the spectrum's (Winamp's).
-            if v != Visual::Off && v != Visual::Mirror {
+            // "No visualization" shares the spectrum's.
+            if v != Visual::Off {
                 let shades: Vec<_> = (0..=4).map(|i| own.at(i as f32 / 4.0, 0.3)).collect();
                 assert!(!seen.contains(&shades), "{v:?} is like another");
                 seen.push(shades);
@@ -1990,13 +1992,16 @@ mod tests {
         assert!(with_own(dark, Visual::Fire).by_level());
         assert!(with_own(dark, Visual::Spectrogram).by_level());
         assert!(!with_own(dark, Visual::Curve).by_level());
-        // Winamp's spectrum: green at the floor, yellow in the middle, red
-        // at the top, the same across.
-        let winamp = with_own(dark, Visual::Spectrum);
-        assert_eq!(winamp, with_own(dark, Visual::Mirror));
-        assert_eq!(winamp.at(0.0, 0.0), hex(0x188408));
-        assert_eq!(winamp.at(8.0 / 15.0, 0.9), hex(0xd6b521));
-        assert_eq!(winamp.at(1.0, 0.5), hex(0xef3110));
+        // The spectrum's VFD: emerald at the bass, cyan at the treble, the
+        // same warm top across; the mirrored one's seam lighter than what
+        // follows it.
+        let vfd = with_own(dark, Visual::Spectrum);
+        assert_ne!(vfd, with_own(dark, Visual::Mirror));
+        assert_eq!(vfd.at(0.35, 0.0), hex(0x10b070));
+        assert_eq!(vfd.at(0.35, 1.0), hex(0x1a98c8));
+        assert_eq!(vfd.at(1.0, 0.0), vfd.at(1.0, 1.0));
+        let mirror = with_own(dark, Visual::Mirror);
+        assert!(luminance(mirror.at(0.0, 0.5)) > luminance(mirror.at(0.12, 0.5)));
         // Between rows and across: the LED's yellow in its middle, the
         // notes' wheel red at C and violet towards B.
         let led = with_own(dark, Visual::Led);
