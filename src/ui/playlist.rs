@@ -241,6 +241,10 @@ pub fn shows_items(ui: &mut Ui, current: UnderShows) -> Option<UnderShows> {
 /// The corner button's side and its room from the corner.
 const SWITCH: f32 = 26.0;
 const SWITCH_MARGIN: f32 = 6.0;
+/// How much the corner button's ground and its icon cover, until the
+/// pointer is on it.
+const SWITCH_GROUND: f32 = 0.45;
+const SWITCH_INK: f32 = 0.7;
 
 /// While the pointer is over the panel under the playlist, in its top
 /// right corner: one round button for the other of the two, the lyrics'
@@ -281,18 +285,26 @@ fn corner_switch(ui: &mut Ui, panel: Rect, lyrics_here: bool) -> Option<UnderSho
     } else {
         palette::card_bg()
     };
+    // See-through until the pointer is on it: it lay over the lyrics'
+    // first lines.
+    let (ground, ink) = if resp.hovered() {
+        (0.94, 1.0)
+    } else {
+        (SWITCH_GROUND, SWITCH_INK)
+    };
+    let fill = fill.gamma_multiply(ground);
     let painter = ui.painter();
     let centre = rect.center();
-    painter.circle_filled(centre, SWITCH / 2.0, fill.gamma_multiply(0.94));
+    painter.circle_filled(centre, SWITCH / 2.0, fill);
     painter.circle_stroke(
         centre,
         SWITCH / 2.0 - 0.5,
-        egui::Stroke::new(1.0, palette::line()),
+        egui::Stroke::new(1.0, palette::line().gamma_multiply(ground)),
     );
     let colour = if resp.hovered() {
         palette::text_bright()
     } else {
-        palette::text()
+        palette::text().gamma_multiply(ink)
     };
     icons::paint(painter, icon, centre, 13.0, colour, fill);
     resp.on_hover_text(tip).clicked().then_some(other)
