@@ -406,7 +406,7 @@ fn lyrics_thread(asks: &Receiver<Job>, answers: &Sender<(u64, State)>, ctx: &egu
 /// cache, LRCLIB; LRCLIB's first for a track they were chosen for.
 fn look(ask: &Ask, how: How) -> State {
     let cache = crate::settings::data_dir().map(|d| d.join(FOLDER));
-    look_in(ask, how, cache.as_deref(), &ask_lrclib)
+    look_in(ask, how, cache.as_deref(), &|a| ask_lrclib(a).map_err(|f| f.text))
 }
 
 /// What LRCLIB has for a track, for the file info's tag editor.
@@ -416,6 +416,8 @@ pub enum Fetched {
     Lyrics(String),
     Instrumental,
     None,
+    /// No artist or no title to ask by: LRCLIB was not asked.
+    Unnamed,
 }
 
 /// LRCLIB's lyrics of a track by its tags, from the cache when it has
@@ -427,7 +429,7 @@ pub fn fetch(
     album: &str,
     duration_ms: u32,
     fresh: bool,
-) -> Result<Fetched, String> {
+) -> Result<Fetched, Failure> {
     let ask = Ask {
         path: PathBuf::new(),
         artist: artist.to_owned(),
@@ -438,7 +440,7 @@ pub fn fetch(
         lrclib_first: false,
     };
     if ask.artist.trim().is_empty() || ask.title.trim().is_empty() {
-        return Ok(Fetched::None);
+        return Ok(Fetched::Unnamed);
     }
     let file = crate::settings::data_dir().map(|d| d.join(FOLDER).join(cache_name(&ask)));
     let cached = match file.as_deref().and_then(read_cached) {
@@ -768,10 +770,61 @@ impl Record {
     }
 }
 
-/// `ask_lrclib_once`, made once more after a moment when it failed:
-/// LRCLIB is slow at times (the panel's and the file info's asks alike).
-fn ask_lrclib(ask: &Ask) -> Result<Option<Record>, String> {
-    ask_lrclib_once(ask).or_else(|_| {
+/// Why LRCLIB gave no record: its words (technical, English) and what
+/// kind of failure it was.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Failure {
+    pub text: String,
+    pub kind: Failed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Failed {
+    /// No answer (no network, a timeout): other tracks asked now fail
+    /// alike.
+    Unreachable,
+    /// LRCLIB busy or down for a moment (HTTP 5xx, 429): asked again.
+    Busy,
+    /// An answer that asking again would not change (another status, an
+    /// answer not read).
+    Refused,
+}
+
+impl Failure {
+    fn unreachable(text: String) -> Failure {
+        Failure {
+            text,
+            kind: Failed::Unreachable,
+        }
+    }
+
+    fn status(status: u32) -> Failure {
+        Failure {
+            text: format!("LRCLIB answered with HTTP {status}"),
+            kind: if status >= 500 || status == 429 {
+                Failed::Busy
+            } else {
+                Failed::Refused
+            },
+        }
+    }
+
+    fn unread(e: &serde_json::Error) -> Failure {
+        Failure {
+            text: e.to_string(),
+            kind: Failed::Refused,
+        }
+    }
+}
+
+/// `ask_lrclib_once`, made once more after a moment when LRCLIB did not
+/// answer or was busy: it is slow at times (the panel's and the file
+/// info's asks alike).
+fn ask_lrclib(ask: &Ask) -> Result<Option<Record>, Failure> {
+    ask_lrclib_once(ask).or_else(|e| {
+        if e.kind == Failed::Refused {
+            return Err(e);
+        }
         std::thread::sleep(std::time::Duration::from_secs(1));
         ask_lrclib_once(ask)
     })
@@ -779,7 +832,17 @@ fn ask_lrclib(ask: &Ask) -> Result<Option<Record>, String> {
 
 /// LRCLIB's record of the track: `get` by all it knows, else the best of
 /// a search by the artist and the title; `None` when it has none.
-fn ask_lrclib_once(ask: &Ask) -> Result<Option<Record>, String> {
+fn ask_lrclib_once(ask: &Ask) -> Result<Option<Record>, Failure> {
+    ask_lrclib_by(ask, &get)
+}
+
+/// What LRCLIB answers to a path (status and body, or no answer).
+type Getter<'a> = dyn Fn(&str) -> Result<(u32, Vec<u8>), String> + 'a;
+
+/// `ask_lrclib_once` with the way to LRCLIB given (the tests' own). A
+/// `get` that fails other than by "none" (404) still leaves the search;
+/// its failure is told only when the search finds nothing either.
+fn ask_lrclib_by(ask: &Ask, get: &Getter<'_>) -> Result<Option<Record>, Failure> {
     let seconds = (ask.duration_ms as f64 / 1000.0).round() as u64;
     let mut query = vec![
         ("artist_name", ask.artist.trim()),
@@ -792,25 +855,31 @@ fn ask_lrclib_once(ask: &Ask) -> Result<Option<Record>, String> {
     if seconds > 0 {
         query.push(("duration", &length));
     }
-    let (status, body) = get(&format!("/api/get?{}", query_string(&query)))?;
+    let (status, body) =
+        get(&format!("/api/get?{}", query_string(&query))).map_err(Failure::unreachable)?;
+    let mut failed = None;
     match status {
-        200 => {
-            let record: Record = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
-            if record.has_lyrics() || record.instrumental {
-                return Ok(Some(record));
-            }
-        }
+        200 => match serde_json::from_slice::<Record>(&body) {
+            Ok(record) if record.has_lyrics() || record.instrumental => return Ok(Some(record)),
+            Ok(_) => {}
+            Err(e) => failed = Some(Failure::unread(&e)),
+        },
         404 => {}
-        s => return Err(format!("LRCLIB answered with HTTP {s}")),
+        s => failed = Some(Failure::status(s)),
     }
     let title = without_tail(ask.title.trim());
     let query = [("artist_name", ask.artist.trim()), ("track_name", title)];
-    let (status, body) = get(&format!("/api/search?{}", query_string(&query)))?;
+    let (status, body) =
+        get(&format!("/api/search?{}", query_string(&query))).map_err(Failure::unreachable)?;
     if status != 200 {
-        return Err(format!("LRCLIB answered with HTTP {status}"));
+        return Err(Failure::status(status));
     }
-    let records: Vec<Record> = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
-    Ok(best(records, ask.duration_ms))
+    let records: Vec<Record> = serde_json::from_slice(&body).map_err(|e| Failure::unread(&e))?;
+    match (best(records, ask.duration_ms), failed) {
+        (Some(record), _) => Ok(Some(record)),
+        (None, Some(failed)) => Err(failed),
+        (None, None) => Ok(None),
+    }
 }
 
 /// The search's record to take: of the track's length (when known), the
@@ -1398,6 +1467,46 @@ mod tests {
         let back = back.expect("lyrics in the tag");
         println!("{back}");
         assert_eq!(parse(&back), (text.lines, true));
+    }
+
+    /// LRCLIB's answers: a `get` failing other than by "none" still
+    /// leaves the search, its failure told when the search finds nothing;
+    /// a status says whether asking again may help, no answer that LRCLIB
+    /// cannot be reached.
+    #[test]
+    fn lrclib_failures_are_told_apart() {
+        let ask = Ask {
+            path: PathBuf::new(),
+            artist: "A".into(),
+            title: "T".into(),
+            album: String::new(),
+            duration_ms: 200_000,
+            online: true,
+            lrclib_first: false,
+        };
+        let found = br#"[{"duration":200.0,"plainLyrics":"la la"}]"#.to_vec();
+        let answer = |get: u32, search: (u32, Vec<u8>)| {
+            move |path: &str| -> Result<(u32, Vec<u8>), String> {
+                Ok(if path.starts_with("/api/get") {
+                    (get, b"{}".to_vec())
+                } else {
+                    search.clone()
+                })
+            }
+        };
+        for status in [400, 500, 429] {
+            let got = ask_lrclib_by(&ask, &answer(status, (200, found.clone()))).unwrap();
+            assert_eq!(got.unwrap().plain_lyrics.as_deref(), Some("la la"), "{status}");
+        }
+        let kind = |get, search| ask_lrclib_by(&ask, &answer(get, search)).unwrap_err().kind;
+        assert_eq!(kind(500, (200, b"[]".to_vec())), Failed::Busy);
+        assert_eq!(kind(429, (200, b"[]".to_vec())), Failed::Busy);
+        assert_eq!(kind(400, (200, b"[]".to_vec())), Failed::Refused);
+        assert_eq!(kind(404, (503, Vec::new())), Failed::Busy);
+        assert_eq!(kind(404, (200, b"not json".to_vec())), Failed::Refused);
+        assert!(ask_lrclib_by(&ask, &answer(404, (200, b"[]".to_vec()))).unwrap().is_none());
+        let none = |_: &str| -> Result<(u32, Vec<u8>), String> { Err("timed out".into()) };
+        assert_eq!(ask_lrclib_by(&ask, &none).unwrap_err().kind, Failed::Unreachable);
     }
 
     /// LRCLIB asked for real, with a well-known song (not the user's).

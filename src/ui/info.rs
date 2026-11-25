@@ -327,8 +327,21 @@ const LRCLIB_AT_ONCE: usize = 4;
 
 /// LRCLIB's lyrics of `path` by its tags (`typed`: the artist, title and
 /// album typed in for it), its length from its file; `fresh`: LRCLIB asked
-/// again, the cache passed by.
-fn lrclib_of(path: &Path, typed: Option<&(String, String, String)>, fresh: bool) -> Found {
+/// again, the cache passed by. With whether LRCLIB did not answer at all
+/// (the files left are then not asked; a status or an answer of this one
+/// track's is not that).
+fn lrclib_of(path: &Path, typed: Option<&(String, String, String)>, fresh: bool) -> (Found, bool) {
+    match lrclib_found(path, typed, fresh) {
+        Ok(found) => (found, false),
+        Err(e) => (Found::Failed(e.text), e.kind == crate::lyrics::Failed::Unreachable),
+    }
+}
+
+fn lrclib_found(
+    path: &Path,
+    typed: Option<&(String, String, String)>,
+    fresh: bool,
+) -> Result<Found, crate::lyrics::Failure> {
     use crate::lyrics::Fetched;
     let track = std::fs::metadata(path).ok().and_then(|m| {
         let mtime = m
@@ -340,7 +353,7 @@ fn lrclib_of(path: &Path, typed: Option<&(String, String, String)>, fresh: bool)
         crate::guard::catch(path, || crate::library::tags::read(path, m.len(), mtime)).flatten()
     });
     let Some(track) = track else {
-        return Found::Failed(UNREADABLE.into());
+        return Ok(Found::Failed(UNREADABLE.into()));
     };
     let (artist, title, album) = match typed {
         Some(typed) => typed.clone(),
@@ -353,12 +366,14 @@ fn lrclib_of(path: &Path, typed: Option<&(String, String, String)>, fresh: bool)
             (artist, track.title.clone(), track.album.clone())
         }
     };
-    match crate::lyrics::fetch(&artist, &title, &album, track.duration_ms, fresh) {
-        Ok(Fetched::Lyrics(text)) => Found::Lyrics(text),
-        Ok(Fetched::Instrumental) => Found::Instrumental,
-        Ok(Fetched::None) => Found::None,
-        Err(e) => Found::Failed(e),
-    }
+    Ok(
+        match crate::lyrics::fetch(&artist, &title, &album, track.duration_ms, fresh)? {
+            Fetched::Lyrics(text) => Found::Lyrics(text),
+            Fetched::Instrumental => Found::Instrumental,
+            Fetched::None => Found::None,
+            Fetched::Unnamed => Found::Unnamed,
+        },
+    )
 }
 
 /// The largest lyrics file read, in bytes.
@@ -419,6 +434,8 @@ enum Found {
     Has,
     Instrumental,
     None,
+    /// No artist or no title to ask LRCLIB by: not asked.
+    Unnamed,
     /// LRCLIB could not be asked, or the file read (technical, English).
     Failed(String),
     /// Its lyrics were written, looked at on their own (`InfoView::go`).
@@ -504,6 +521,7 @@ impl Found {
             Found::Has => tr!("has lyrics", "уже есть текст"),
             Found::Instrumental => tr!("an instrumental", "инструментальная"),
             Found::None => tr!("not in LRCLIB", "нет в LRCLIB"),
+            Found::Unnamed => tr!("no artist or title", "нет исполнителя или названия"),
             Found::Failed(_) => tr!("not asked", "не удалось"),
             Found::Written => tr!("lyrics written", "текст записан"),
             Found::Declined => tr!("given up", "отменён"),
@@ -630,9 +648,9 @@ impl Form {
                         } else if !one && crate::lyrics::tag_has_lyrics(path) {
                             Found::Has
                         } else {
-                            let found = lrclib_of(path, typed.as_ref(), again);
+                            let (found, unreachable) = lrclib_of(path, typed.as_ref(), again);
                             if let Found::Failed(e) = &found
-                                && e != UNREADABLE
+                                && unreachable
                                 && let Ok(mut d) = down.lock()
                             {
                                 d.get_or_insert_with(|| e.clone());
@@ -2169,7 +2187,7 @@ fn lyrics_tools(ui: &mut Ui, form: &mut Form, acts: &mut Vec<Act>) {
     }
     let answered = lrclib.and_then(|l| l.found.first());
     if form.lrclib_on
-        && answered.is_some_and(|f| *f != Found::Waiting)
+        && answered.is_some_and(|f| !matches!(f, Found::Waiting | Found::Unnamed))
         && ask_again_button(
             ui,
             tr!(
@@ -2192,6 +2210,10 @@ fn lyrics_tools(ui: &mut Ui, form: &mut Form, acts: &mut Vec<Act>) {
             let word = match other {
                 Found::Lyrics(_) => tr!("from LRCLIB", "из LRCLIB"),
                 Found::Instrumental => tr!("LRCLIB: an instrumental", "LRCLIB: инструментальная"),
+                Found::Unnamed => tr!(
+                    "No artist or title to look by",
+                    "Нет исполнителя или названия для поиска"
+                ),
                 _ => tr!("not in LRCLIB", "нет в LRCLIB"),
             };
             ui.label(RichText::new(word).color(palette::text_weak()));
@@ -4201,7 +4223,7 @@ mod tests {
         paths.sort();
         for path in paths {
             let t = std::time::Instant::now();
-            let found = lrclib_of(&path, None, false);
+            let (found, _) = lrclib_of(&path, None, false);
             let what = match &found {
                 Found::Lyrics(_) => "lyrics".to_owned(),
                 Found::Failed(e) => format!("FAILED {e}"),
