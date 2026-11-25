@@ -185,8 +185,11 @@ pub struct Lyrics {
     answers: Option<Receiver<(u64, State)>>,
     asked: Option<Ask>,
     number: u64,
-    /// How the next ask looks (then back to the usual way).
-    how: How,
+    /// How the next ask of that file looks (then back to the usual way);
+    /// an ask of another file goes the usual way and drops it, so a choice
+    /// left over (a save finished after the window closed) is not another
+    /// track's.
+    how: Option<(PathBuf, How)>,
     state: State,
     /// LRCLIB's lyrics being written into a file's tag: the file, and
     /// what came of it.
@@ -200,7 +203,7 @@ impl Default for Lyrics {
             answers: None,
             asked: None,
             number: 0,
-            how: How::Usual,
+            how: None,
             state: State::Idle,
             saving: None,
         }
@@ -248,7 +251,7 @@ impl Lyrics {
         let job = Job {
             number: self.number,
             ask: ask.clone(),
-            how: std::mem::take(&mut self.how),
+            how: self.take_how(&ask.path),
         };
         if let Some(asks) = &self.asks {
             let _ = asks.send(job);
@@ -259,6 +262,7 @@ impl Lyrics {
 
     /// Nothing to show: no track. An answer still coming is not taken.
     pub fn clear(&mut self) {
+        self.how = None;
         if self.asked.take().is_some() || self.state != State::Idle {
             self.number += 1;
             self.state = State::Idle;
@@ -271,10 +275,19 @@ impl Lyrics {
         self.asked = None;
     }
 
-    /// The track's lyrics looked for again `how` at the next `follow`.
+    /// The track's lyrics looked for again `how` at the next `follow`, if
+    /// it asks for the same file.
     pub fn ask_again(&mut self, how: How) {
-        self.asked = None;
-        self.how = how;
+        self.how = self.asked.take().map(|a| (a.path, how));
+    }
+
+    /// How an ask of `path` looks: as asked for that file, else the usual
+    /// way; either way the choice is used up.
+    fn take_how(&mut self, path: &Path) -> How {
+        match self.how.take() {
+            Some((p, how)) if p == path => how,
+            _ => How::Usual,
+        }
     }
 
     /// Writes LRCLIB's lyrics shown into the file's tag (as LRC when
@@ -1257,6 +1270,40 @@ mod tests {
 
     /// LRCLIB first by the priority: its lyrics over the file's own, the
     /// own when it has none or they are chosen for the track.
+    /// A choice of how to ask is its own file's: an ask of another file
+    /// goes the usual way and the choice is gone; so is it once cleared.
+    #[test]
+    fn a_choice_of_how_is_its_own_files() {
+        let ask = |path: &str| Ask {
+            path: PathBuf::from(path),
+            artist: "A".into(),
+            title: "T".into(),
+            album: String::new(),
+            duration_ms: 0,
+            online: false,
+            lrclib_first: false,
+        };
+        let mut lyrics = Lyrics {
+            asked: Some(ask("a.mp3")),
+            ..Lyrics::default()
+        };
+        lyrics.ask_again(How::Own);
+        assert_eq!(lyrics.take_how(Path::new("a.mp3")), How::Own);
+        assert_eq!(lyrics.take_how(Path::new("a.mp3")), How::Usual);
+        // The save finished after the window closed: another track later.
+        lyrics.asked = Some(ask("a.mp3"));
+        lyrics.ask_again(How::Own);
+        assert_eq!(lyrics.take_how(Path::new("c.mp3")), How::Usual);
+        assert_eq!(lyrics.take_how(Path::new("a.mp3")), How::Usual);
+        lyrics.asked = Some(ask("a.mp3"));
+        lyrics.ask_again(How::Lrclib);
+        lyrics.clear();
+        assert_eq!(lyrics.take_how(Path::new("a.mp3")), How::Usual);
+        // Nothing asked: nothing to choose for.
+        lyrics.ask_again(How::Fresh);
+        assert_eq!(lyrics.how, None);
+    }
+
     #[test]
     fn the_priority_puts_lrclib_first() {
         use std::cell::Cell;
