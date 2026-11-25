@@ -301,29 +301,41 @@ pub fn paint(painter: &Painter, icon: Icon, c: Pos2, size: f32, color: Color32, 
             }
         }
         Icon::Refresh => {
-            // As the common sync sign: two arcs of 122° round the centre,
-            // clockwise, each ending in a solid triangle whose flat base
-            // straddles the ring, at three and nine o'clock, pointing down
-            // on the right and up on the left; the arcs start well clear of
-            // the other head.
-            let r = 4.3 * k;
+            // As the common sync sign (Lucide's refresh-cw, VS Code's): two
+            // arcs round the centre, clockwise, each from nine (three)
+            // o'clock past the top (bottom), going on straight along its
+            // last tangent into the corner of an arrowhead drawn as a right
+            // angle of lines, one arm up the side, the other back across:
+            // pointing down and right at the top right, up and left at the
+            // bottom left. Solid triangles straddling the ring looked heavy.
+            let r = 6.3;
             for t in [1.0f32, -1.0] {
-                let half = if t > 0.0 { 0.0 } else { PI };
-                let (from, to) = (222f32.to_radians() + half, 344f32.to_radians() + half);
-                let arc: Vec<Pos2> = (0..=16)
+                let q = |x: f32, y: f32| p(x * t, y * t);
+                let mut path: Vec<Pos2> = (0..=18)
                     .map(|i| {
-                        let a = from + (to - from) * i as f32 / 16.0;
-                        c + r * vec2(a.cos(), a.sin())
+                        let a = PI + 0.75 * PI * i as f32 / 18.0;
+                        q(r * a.cos(), r * a.sin())
                     })
                     .collect();
-                painter.circle_filled(arc[0], 0.725 * k, color);
-                painter.add(Shape::line(arc, pen(1.45)));
-                let q = |x: f32, y: f32| p(x * t, y * t);
-                painter.add(Shape::convex_polygon(
-                    vec![q(2.0, -1.3), q(6.8, -1.3), q(4.4, 2.2)],
-                    color,
-                    Stroke::NONE,
-                ));
+                // The corner under the arc's right end, along its tangent
+                // (1, 1) from where it ends at half past one.
+                let e = r * std::f32::consts::FRAC_1_SQRT_2;
+                let corner = (r, -e + (r - e));
+                path.push(q(corner.0, corner.1));
+                round_line(painter, path, line);
+                let arm = 3.6;
+                round_line(
+                    painter,
+                    rounded(
+                        &[
+                            q(corner.0, corner.1 - arm),
+                            q(corner.0, corner.1),
+                            q(corner.0 - arm, corner.1),
+                        ],
+                        &[0.0, 0.5 * k, 0.0],
+                    ),
+                    line,
+                );
             }
         }
         Icon::Image => {
