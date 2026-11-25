@@ -384,6 +384,9 @@ impl App {
     /// by this one too: a rescan (the bar's button, tags written) during
     /// "Read all the tags again" gave up reading them all.
     fn start_scan_from(&mut self, load_index: bool, read_all: bool) {
+        // A scan that has sent its end, not yet taken, is over: what it was
+        // started for is done (else a rescan then read every file again).
+        self.poll_scan();
         let (load_index, read_all) = match (&self.scan, self.scan_asked) {
             (Some(_), (index, all)) => (load_index || index, read_all || all),
             (None, _) => (load_index, read_all),
