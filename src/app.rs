@@ -2265,11 +2265,11 @@ impl eframe::App for App {
             title_rect.union(bar_rect)
         };
         // The wheel anywhere over the title row and the player bar (the
-        // mini player) steps the volume by the volume step.
+        // mini player) steps the volume by the volume step; not over a
+        // menu or a window lying over them (the visualizations' list,
+        // scrolled, set the volume too).
         if !modal
-            && ctx
-                .pointer_hover_pos()
-                .is_some_and(|p| self.player_area.contains(p))
+            && ctx.rect_contains_pointer(root_ui.layer_id(), self.player_area)
         {
             let notches = crate::ui::wheel_notches(root_ui);
             if notches != 0 {
