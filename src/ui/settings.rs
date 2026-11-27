@@ -3225,8 +3225,8 @@ const SLOT: f32 = 30.0;
 /// picker; the light worked out, `auto`, unless one is chosen), the scheme
 /// as `visual` lays it out (`palette::layout_of`) and how, a note for a
 /// colour too dark for a dark ground, and the tools: the low and the high
-/// swapped, the colours taken from the visualization's own or the
-/// accent's, the default back, the cover's colours. True when it changed.
+/// swapped, the colours taken from the visualization's own, the cover's or
+/// the accent's, the default back. True when it changed.
 pub(crate) fn scheme_editor(
     ui: &mut Ui,
     scheme: &mut palette::VisualScheme,
@@ -3356,7 +3356,25 @@ pub(crate) fn scheme_editor(
                     *scheme = VisualScheme::of_own(visual);
                     ui.close();
                 }
-
+                let cover = palette::cover_heard();
+                let item = ui
+                    .add_enabled(
+                        cover.is_some(),
+                        egui::Button::new(tr!(
+                            "The cover of the track playing",
+                            "Обложки играющего трека"
+                        )),
+                    )
+                    .on_disabled_hover_text(tr!(
+                        "Nothing with a coloured cover plays now",
+                        "Сейчас не играет трек с цветной обложкой"
+                    ));
+                if item.clicked()
+                    && let Some(colours) = cover
+                {
+                    *scheme = VisualScheme::of_colours(colours);
+                    ui.close();
+                }
                 if ui.button(tr!("The accent", "Цвета акцента")).clicked() {
                     *scheme = VisualScheme::of_accent(look.accent.base(look.theme));
                     ui.close();
@@ -3372,23 +3390,6 @@ pub(crate) fn scheme_editor(
                 .clicked()
                 {
                     *scheme = VisualScheme::default();
-                }
-                let cover = palette::cover_heard();
-                let tip = if cover.is_some() {
-                    tr!(
-                        "The colours of the cover of the track playing",
-                        "Цвета из обложки играющего трека"
-                    )
-                } else {
-                    tr!(
-                        "The colours of the cover of the track playing (nothing with colours plays now)",
-                        "Цвета из обложки играющего трека (сейчас не играет трек с цветной обложкой)"
-                    )
-                };
-                if tool(ui, tip, cover.is_some(), Icon::Image).clicked()
-                    && let Some(colours) = cover
-                {
-                    *scheme = VisualScheme::of_colours(colours);
                 }
             });
         });
