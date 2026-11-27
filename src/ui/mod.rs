@@ -25,6 +25,7 @@ pub mod playlist;
 pub mod raster;
 pub mod ribbons;
 pub mod ripples;
+pub mod scheme_window;
 pub mod scope;
 pub mod settings;
 pub mod fireworks;

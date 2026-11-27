@@ -45,7 +45,18 @@ impl Renderer {
         ground: Color32,
         paint: impl FnOnce(&egui::Painter),
     ) -> Picture {
-        let mut paint = Some(paint);
+        self.frame_ui(rect, ground, |ui| paint(ui.painter()))
+    }
+
+    /// Widgets laid out by `show` in `rect` (from the screen's top left)
+    /// on `ground`, as a window would show them.
+    pub fn frame_ui(
+        &mut self,
+        rect: Rect,
+        ground: Color32,
+        show: impl FnOnce(&mut egui::Ui),
+    ) -> Picture {
+        let mut paint = Some(show);
         let mut input = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, rect.max.to_vec2())),
             ..Default::default()
@@ -57,8 +68,9 @@ impl Renderer {
             .or_default()
             .native_pixels_per_point = Some(self.scale);
         let out = self.ctx.run_ui(input, |ui| {
-            if let Some(paint) = paint.take() {
-                paint(ui.painter());
+            if let Some(show) = paint.take() {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                show(&mut child);
             }
         });
         let mut textures = out.textures_delta;

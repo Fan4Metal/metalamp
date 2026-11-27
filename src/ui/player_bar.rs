@@ -61,6 +61,9 @@ pub enum BarCmd {
     Visual(Visual),
     /// The visualization's colours chosen in the display's menu.
     VisualColours(crate::palette::VisualColours),
+    /// The own scheme's swatch clicked in the display's menu: its panel
+    /// opens under the display (its rect).
+    EditScheme(Rect),
     /// The equalizer's button clicked (its rect: the window opens under
     /// it).
     Equalizer(Rect),
@@ -373,14 +376,21 @@ fn visual_display(
                 }
             });
         // The colours, as the settings' swatches; the menu stays open, so
-        // they are tried one after another.
+        // they are tried one after another. The own scheme's last opens
+        // its panel under the display, which shows it as it is edited.
         ui.separator();
         let mut colours = now.look.visual;
-        ui.horizontal(|ui| {
-            crate::ui::settings::visual_colours_row(ui, &mut colours, now.look, now.visual)
-        });
+        let edit = ui
+            .horizontal(|ui| {
+                crate::ui::settings::visual_colours_row(ui, &mut colours, now.look, now.visual)
+            })
+            .inner;
         if colours != now.look.visual {
             cmds.push(BarCmd::VisualColours(colours));
+        }
+        if edit {
+            cmds.push(BarCmd::EditScheme(display));
+            ui.close();
         }
     });
 }

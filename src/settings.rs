@@ -67,6 +67,9 @@ pub struct Settings {
     /// `visual_colours_mut`, `look`).
     pub visual_colours: crate::palette::VisualColours,
     pub playlist_visual_colours: crate::palette::VisualColours,
+    /// The user's own colours for the visualizations, shown where either
+    /// layout chooses them (`VisualColours::Scheme`).
+    pub visual_scheme: crate::palette::VisualScheme,
     /// The playlist's line of a track (`title_format`), and whether its
     /// rows show their numbers and lengths.
     pub playlist_format: String,
@@ -251,6 +254,7 @@ impl Settings {
                 WindowLayout::Library => self.visual_colours,
                 WindowLayout::Playlist => self.playlist_visual_colours,
             },
+            scheme: self.visual_scheme,
         }
     }
 }
@@ -902,6 +906,7 @@ impl Default for Settings {
             visual_click: true,
             visual_colours: Default::default(),
             playlist_visual_colours: Default::default(),
+            visual_scheme: Default::default(),
             playlist_format: crate::title_format::DEFAULT.to_owned(),
             playlist_numbers: true,
             playlist_lengths: true,
@@ -1175,6 +1180,20 @@ impl Settings {
                 file.insert("playlist_under_shown".into(), Value::Bool(shown));
             }
         }
+        // Before the own scheme, the visualization's own colour: the
+        // scheme's three colours now (the library's layout's first).
+        if !file.contains_key("visual_scheme") {
+            let own = ["visual_colours", "playlist_visual_colours"]
+                .iter()
+                .filter_map(|key| file.get(*key).and_then(Value::as_str))
+                .find_map(crate::palette::parse_hex);
+            if let Some([r, g, b]) = own {
+                let scheme = crate::palette::VisualScheme::of_one(u32::from_be_bytes([0, r, g, b]));
+                if let Ok(value) = serde_json::to_value(scheme) {
+                    file.insert("visual_scheme".into(), value);
+                }
+            }
+        }
         let Ok(Value::Object(mut merged)) = serde_json::to_value(Settings::default()) else {
             return None;
         };
@@ -1262,6 +1281,33 @@ mod tests {
             read(r#"{"playlist_cover":true,"playlist_under_shown":false,"playlist_under":"lyrics"}"#),
             (false, UnderShows::Lyrics)
         );
+    }
+
+    /// An older version's own colour of the visualization is the scheme,
+    /// its three colours that colour; a scheme kept is not overwritten.
+    #[test]
+    fn the_own_colour_becomes_the_scheme() {
+        use crate::palette::{VisualColours, VisualScheme};
+        let s = Settings::from_json(br##"{"visual_colours":"#2F7CF0"}"##).unwrap();
+        assert_eq!(s.visual_colours, VisualColours::Scheme);
+        assert_eq!(s.visual_scheme, VisualScheme::of_one(0x2f7cf0));
+        let s = Settings::from_json(br##"{"playlist_visual_colours":"#102030"}"##).unwrap();
+        assert_eq!(s.visual_colours, VisualColours::Own);
+        assert_eq!(s.playlist_visual_colours, VisualColours::Scheme);
+        assert_eq!(s.visual_scheme, VisualScheme::of_one(0x102030));
+        let kept = r##"{"visual_colours":"#2F7CF0","visual_scheme":{"low":"#010203","middle":"#040506","high":"#070809","peak":"#0A0B0C"}}"##;
+        let s = Settings::from_json(kept.as_bytes()).unwrap();
+        assert_eq!(
+            s.visual_scheme,
+            VisualScheme {
+                low: 0x010203,
+                middle: 0x040506,
+                high: 0x070809,
+                peak: Some(0x0a0b0c)
+            }
+        );
+        let s = Settings::from_json(b"{}").unwrap();
+        assert_eq!(s.visual_scheme, VisualScheme::default());
     }
 
     /// The ID3v1 code page is kept by its name; a file without it, or with

@@ -944,6 +944,38 @@ fn row<R>(
     control(&mut ui)
 }
 
+/// A row as `row`, for a control taller than its text: both from the top,
+/// the row as tall as the taller.
+fn tall_row<R>(
+    ui: &mut Ui,
+    title: &str,
+    hint: &str,
+    control_width: f32,
+    control: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    const PAD: f32 = 8.0;
+    ui.add_space(PAD);
+    let width = ui.available_width();
+    let text_width = (width - control_width - 24.0).max(80.0);
+    let shown = ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.vertical(|ui| {
+            ui.set_width(text_width);
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.label(RichText::new(title).size(14.0).color(palette::text()));
+            ui.label(RichText::new(hint).size(12.5).color(palette::text_weak()));
+        });
+        ui.add_space(width - text_width - control_width);
+        ui.vertical(|ui| {
+            ui.set_width(control_width);
+            control(ui)
+        })
+        .inner
+    });
+    ui.add_space(PAD);
+    shown.inner
+}
+
 /// An on/off switch: a pill with a knob that slides.
 fn switch(ui: &mut Ui, on: &mut bool) -> Response {
     let size = vec2(40.0, 20.0);
@@ -1176,8 +1208,8 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
             ui,
             tr!("Visualization's colours", "Цвета визуализации"),
             Some(tr!(
-                "Apart from the theme: each visualization's own colours, chosen for it, the accent's shades, a rainbow across the frequencies, Winamp's green to red or fire by the level, the colours of the cover of the track playing across the frequencies (the accent's shades for a track without one), or one's own colour's shades.",
-                "Отдельно от темы: свои цвета у каждой визуализации, подобранные для неё, оттенки акцента, радуга по частотам, зелёный-жёлтый-красный как в Winamp или огонь по уровню, цвета обложки играющего трека по частотам (для трека без обложки — оттенки акцента), либо оттенки своего цвета."
+                "Apart from the theme: each visualization's own colours, chosen for it, the accent's shades, a rainbow across the frequencies, Winamp's green to red or fire by the level, the colours of the cover of the track playing across the frequencies (the accent's shades for a track without one), or one's own scheme.",
+                "Отдельно от темы: свои цвета у каждой визуализации, подобранные для неё, оттенки акцента, радуга по частотам, зелёный-жёлтый-красный как в Winamp или огонь по уровню, цвета обложки играющего трека по частотам (для трека без обложки — оттенки акцента), либо своя схема."
             )),
             ACCENTS_WIDTH,
             |ui| {
@@ -1188,6 +1220,25 @@ fn general(ui: &mut Ui, settings: &mut Settings) {
                 });
             },
         );
+        if settings.look().visual == VisualColours::Scheme {
+            divider(ui);
+            tall_row(
+                ui,
+                tr!("Your own scheme", "Своя схема"),
+                tr!(
+                    "Three colours and a light for every visualization, each laid out as it suits it: across the frequencies, by the loudness (the spectrum, the fire), symmetric (synthwave, the lightning) or round the notes (the chromagram). Each colour as chosen shows where it is loudest.",
+                    "Три цвета и блик для всех визуализаций, каждая раскладывает их по-своему: по частотам, по громкости (спектр, огонь), симметрично (синтвейв, молния) или по кругу нот (хромаграмма). Выбранный цвет виден как есть там, где громче всего."
+                ),
+                ACCENTS_WIDTH,
+                |ui| {
+                    let look = settings.look();
+                    let visual = settings.visual();
+                    ui.add_enabled_ui(settings.visual_enabled, |ui| {
+                        scheme_editor(ui, &mut settings.visual_scheme, look, visual);
+                    });
+                },
+            );
+        }
     });
     section(ui, tr!("Covers", "Обложки"), |ui| {
         row(
@@ -3058,22 +3109,13 @@ fn playlist_rows(ui: &mut Ui, settings: &mut Settings) {
 
 /// The visualization's colours as round swatches, each painted with its
 /// gradient (`gradient_disc`: up the level, across the place), the chosen
-/// one ringed (`Own` showing `visual`'s); last the user's own colour, its
-/// picker starting from the accent.
+/// one ringed (`Own` and `Scheme` showing `visual`'s); last the user's own
+/// scheme (`scheme_swatch`), edited under the row while it is chosen
+/// (`scheme_editor`). Right to left: the row's control is laid out so.
 fn visual_colours(ui: &mut Ui, colours: &mut VisualColours, look: palette::Look, visual: Visual) {
     ui.spacing_mut().item_spacing.x = 5.0;
-    let mut own = match *colours {
-        VisualColours::Custom(c) => Accent::Custom(c),
-        _ => {
-            let c = look.accent.base(look.theme);
-            custom([c.r(), c.g(), c.b()])
-        }
-    };
-    let chosen = matches!(colours, VisualColours::Custom(_));
-    if own_colour(ui, &mut own, chosen)
-        && let Accent::Custom(c) = own
-    {
-        *colours = VisualColours::Custom(c);
+    if scheme_swatch(ui, *colours, look, visual).clicked() {
+        *colours = VisualColours::Scheme;
     }
     for &c in VisualColours::ALL.iter().rev() {
         visual_swatch(ui, colours, c, look, visual);
@@ -3081,18 +3123,33 @@ fn visual_colours(ui: &mut Ui, colours: &mut VisualColours, look: palette::Look,
 }
 
 /// The visualization's colours in the display's menu, left to right: the
-/// ready ones, then the user's own once chosen (it is picked in the
-/// settings window); `Own` shows `visual`'s.
+/// ready ones, then the user's own scheme; `Own` and `Scheme` show
+/// `visual`'s. True when the scheme's swatch was clicked: it is chosen,
+/// and its panel is to open.
 pub(crate) fn visual_colours_row(
     ui: &mut Ui,
     colours: &mut VisualColours,
     look: palette::Look,
     visual: Visual,
-) {
+) -> bool {
     ui.spacing_mut().item_spacing.x = 5.0;
-    let own = matches!(*colours, VisualColours::Custom(_)).then_some(*colours);
-    for c in VisualColours::ALL.into_iter().chain(own) {
+    for c in VisualColours::ALL {
         visual_swatch(ui, colours, c, look, visual);
+    }
+    let edit = scheme_swatch(ui, *colours, look, visual).clicked();
+    if edit {
+        *colours = VisualColours::Scheme;
+    }
+    edit
+}
+
+/// `c`'s colours as `visual` shows them, for its swatch.
+fn swatch_shades(c: VisualColours, look: palette::Look, visual: Visual) -> palette::VisualPalette {
+    let shades = Palette::of(palette::Look { visual: c, ..look }).visual;
+    match c {
+        VisualColours::Cover => palette::with_cover(shades),
+        VisualColours::Own | VisualColours::Scheme => palette::with_own(shades, visual),
+        _ => shades,
     }
 }
 
@@ -3106,12 +3163,7 @@ fn visual_swatch(
 ) {
     let (rect, response) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
     let response = response.on_hover_text(c.label());
-    let mut shades = Palette::of(palette::Look { visual: c, ..look }).visual;
-    match c {
-        VisualColours::Cover => shades = palette::with_cover(shades),
-        VisualColours::Own => shades = palette::with_own(shades, visual),
-        _ => {}
-    }
+    let shades = swatch_shades(c, look, visual);
     swatch(
         ui,
         rect,
@@ -3124,6 +3176,288 @@ fn visual_swatch(
     if response.clicked() {
         *colours = c;
     }
+}
+
+/// The user's own scheme's swatch: its colours as `visual` shows them,
+/// with a pencil in its corner (a click chooses it and edits it).
+fn scheme_swatch(
+    ui: &mut Ui,
+    colours: VisualColours,
+    look: palette::Look,
+    visual: Visual,
+) -> Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
+    let response = response.on_hover_text(tr!(
+        "Your own scheme: a click chooses it and opens its colours",
+        "Своя схема: щелчок выбирает её и открывает её цвета"
+    ));
+    let shades = swatch_shades(VisualColours::Scheme, look, visual);
+    swatch(
+        ui,
+        rect,
+        colours == VisualColours::Scheme,
+        response.hovered(),
+        |p, centre, r| {
+            gradient_disc(p, centre, r, shades);
+        },
+    );
+    // The pencil on a dot of the ground, at the bottom right.
+    let badge = rect.right_bottom() - vec2(4.5, 4.5);
+    let ground = ui.visuals().window_fill();
+    ui.painter().circle_filled(badge, 5.0, ground);
+    icons::paint(
+        ui.painter(),
+        Icon::Edit,
+        badge,
+        8.0,
+        palette::text_bright(),
+        ground,
+    );
+    response
+}
+
+/// The width of the scheme's editor: four slots and the buttons.
+pub(crate) const SCHEME_WIDTH: f32 = 296.0;
+/// A slot's colour disc.
+const SLOT: f32 = 30.0;
+
+/// The user's own scheme: its four colours in slots (each a click opens the
+/// picker; the light worked out, `auto`, unless one is chosen), the scheme
+/// as `visual` lays it out (`palette::layout_of`) and how, a note for a
+/// colour too dark for a dark ground, and the tools: the low and the high
+/// swapped, the colours taken from the visualization's own, the cover's or
+/// the accent's, the default back. True when it changed.
+pub(crate) fn scheme_editor(
+    ui: &mut Ui,
+    scheme: &mut palette::VisualScheme,
+    look: palette::Look,
+    visual: Visual,
+) -> bool {
+    use palette::VisualScheme;
+    let before = *scheme;
+    ui.vertical(|ui| {
+        ui.set_width(SCHEME_WIDTH);
+        ui.spacing_mut().item_spacing.x = 0.0;
+        let slot_width = SCHEME_WIDTH / 4.0;
+        ui.horizontal(|ui| {
+            let slots = [
+                (
+                    tr!("Low", "Низ"),
+                    tr!(
+                        "The bass, the left edge, the quiet",
+                        "Бас, левый край, тихое"
+                    ),
+                ),
+                (tr!("Middle", "Середина"), tr!("The middle", "Середина")),
+                (
+                    tr!("High", "Верх"),
+                    tr!(
+                        "The treble, the right edge, the loud",
+                        "Высокие, правый край, громкое"
+                    ),
+                ),
+            ];
+            let mut three = scheme.three();
+            for ((label, hint), colour) in slots.into_iter().zip(&mut three) {
+                ui.allocate_ui_with_layout(
+                    vec2(slot_width, SLOT + 24.0),
+                    Layout::top_down(Align::Center),
+                    |ui| {
+                        let mut picked = Accent::Custom(*colour);
+                        if scheme_slot(ui, &mut picked, hint)
+                            && let Accent::Custom(c) = picked
+                        {
+                            *colour = c;
+                        }
+                        ui.label(RichText::new(label).color(palette::text_weak()));
+                    },
+                );
+            }
+            [scheme.low, scheme.middle, scheme.high] = three;
+            ui.allocate_ui_with_layout(
+                vec2(slot_width, SLOT + 24.0),
+                Layout::top_down(Align::Center),
+                |ui| {
+                    let mut picked = Accent::Custom(scheme.light_shown());
+                    if scheme_slot(
+                        ui,
+                        &mut picked,
+                        tr!(
+                            "The peaks, sparks and flashes; auto: a pale tint of the colours",
+                            "Пики, искры и вспышки; авто — светлый тон цветов"
+                        ),
+                    ) && let Accent::Custom(c) = picked
+                    {
+                        scheme.peak = Some(c);
+                    }
+                    let mut auto = scheme.peak.is_none();
+                    let text = format!("{} {}", tr!("Light", "Блик"), tr!("(auto)", "(авто)"));
+                    let label = if auto { text.as_str() } else { tr!("Light", "Блик") };
+                    ui.label(RichText::new(label).color(palette::text_weak()));
+                    if !auto
+                        && ui
+                            .small_button(tr!("auto", "авто"))
+                            .on_hover_text(tr!(
+                                "Work the light out from the colours",
+                                "Выводить блик из цветов"
+                            ))
+                            .clicked()
+                    {
+                        auto = true;
+                    }
+                    if auto {
+                        scheme.peak = None;
+                    }
+                },
+            );
+        });
+        ui.add_space(6.0);
+        scheme_preview(ui, *scheme, look, visual);
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(format!(
+                "{}: {}",
+                visual.label(),
+                palette::layout_of(visual).label()
+            ))
+            .size(12.0)
+            .color(palette::text_weak()),
+        );
+        if look.theme.is_dark() && scheme.three().into_iter().any(VisualScheme::too_dark) {
+            ui.label(
+                RichText::new(tr!(
+                    "A colour too dark for a dark ground is shown lighter.",
+                    "Слишком тёмный для тёмного фона цвет показывается светлее."
+                ))
+                .size(12.0)
+                .color(palette::text_weak()),
+            );
+        }
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            if ui
+                .button(tr!("Reverse", "Перевернуть"))
+                .on_hover_text(tr!(
+                    "The low and the high colour swapped",
+                    "Поменять местами низ и верх"
+                ))
+                .clicked()
+            {
+                *scheme = scheme.swapped();
+            }
+            ui.menu_button(tr!("Take from…", "Взять из…"), |ui| {
+                let own = format!(
+                    "{} «{}»",
+                    tr!("The own colours of", "Своих цветов"),
+                    visual.label()
+                );
+                if ui.button(own).clicked() {
+                    *scheme = VisualScheme::of_own(visual);
+                    ui.close();
+                }
+                let cover = palette::cover_heard();
+                let item = ui.add_enabled(
+                    cover.is_some(),
+                    egui::Button::new(tr!("The cover heard", "Обложки играющего трека")),
+                );
+                if item.clicked()
+                    && let Some(colours) = cover
+                {
+                    *scheme = VisualScheme::of_colours(colours);
+                    ui.close();
+                }
+                if ui.button(tr!("The accent", "Цвета акцента")).clicked() {
+                    *scheme = VisualScheme::of_accent(look.accent.base(look.theme));
+                    ui.close();
+                }
+            });
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if tool(
+                    ui,
+                    tr!("The default scheme", "Схема по умолчанию"),
+                    *scheme != VisualScheme::default(),
+                    Icon::RotateLeft,
+                )
+                .clicked()
+                {
+                    *scheme = VisualScheme::default();
+                }
+            });
+        });
+    });
+    *scheme != before
+}
+
+/// A slot of the scheme: a disc of its colour, a click opening the picker
+/// (`colour_fields`). True when a colour was picked.
+fn scheme_slot(ui: &mut Ui, colour: &mut Accent, hint: &str) -> bool {
+    let before = *colour;
+    let (rect, response) = ui.allocate_exact_size(vec2(SLOT, SLOT), Sense::click());
+    let response = response.on_hover_text(hint);
+    let shown = colour.base(palette::current().theme);
+    let r = SLOT / 2.0 - if response.hovered() { 1.0 } else { 2.0 };
+    ui.painter().circle_filled(rect.center(), r, shown);
+    ui.painter()
+        .circle_stroke(rect.center(), r, Stroke::new(1.0, palette::line()));
+    egui::Popup::menu(&response)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| colour_fields(ui, colour));
+    *colour != before
+}
+
+/// The scheme as `visual` lays it out, in a band: the level up, the place
+/// across, the light along its top.
+fn scheme_preview(ui: &mut Ui, scheme: palette::VisualScheme, look: palette::Look, visual: Visual) {
+    const COLUMNS: u32 = 32;
+    const ROWS: u32 = 8;
+    const LIGHT: f32 = 3.0;
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::hover());
+    let shades = palette::with_own(
+        Palette::of(palette::Look {
+            visual: VisualColours::Scheme,
+            scheme,
+            ..look
+        })
+        .visual,
+        visual,
+    );
+    let body = Rect::from_min_max(rect.min + vec2(0.0, LIGHT), rect.max);
+    let mut mesh = egui::Mesh::default();
+    for row in 0..=ROWS {
+        for column in 0..=COLUMNS {
+            let (place, level) = (column as f32 / COLUMNS as f32, row as f32 / ROWS as f32);
+            let at = body.lerp_inside(vec2(place, 1.0 - level));
+            mesh.colored_vertex(at, shades.at(level, place));
+            if row < ROWS && column < COLUMNS {
+                let i = row * (COLUMNS + 1) + column;
+                mesh.add_triangle(i, i + 1, i + COLUMNS + 1);
+                mesh.add_triangle(i + 1, i + COLUMNS + 2, i + COLUMNS + 1);
+            }
+        }
+    }
+    let top = Rect::from_min_max(rect.min, pos2(rect.right(), body.top()));
+    let first = mesh.vertices.len() as u32;
+    for column in 0..=COLUMNS {
+        let place = column as f32 / COLUMNS as f32;
+        let x = egui::lerp(top.x_range(), place);
+        let light = shades.peak(place);
+        mesh.colored_vertex(pos2(x, top.top()), light);
+        mesh.colored_vertex(pos2(x, top.bottom()), light);
+        if column < COLUMNS {
+            let j = first + 2 * column;
+            mesh.add_triangle(j, j + 1, j + 2);
+            mesh.add_triangle(j + 1, j + 3, j + 2);
+        }
+    }
+    let painter = ui.painter();
+    painter.add(mesh);
+    painter.rect_stroke(
+        rect,
+        2.0,
+        Stroke::new(1.0, palette::line()),
+        egui::StrokeKind::Outside,
+    );
 }
 
 /// A disc of `shades`' colours: the level up, the place across. Its edge
@@ -3197,72 +3531,77 @@ fn own_colour(ui: &mut Ui, accent: &mut Accent, chosen: bool) -> bool {
     });
     egui::Popup::menu(&response)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-        .show(|ui| {
-            let mut colour = accent.base(palette::current().theme);
-            if colour_picker(ui, &mut colour) {
-                *accent = custom([colour.r(), colour.g(), colour.b()]);
-            }
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                // The code's form, HEX, RGB or HSL, changed by a click on
-                // its name; the field takes any of them.
-                let mode_id = ui.id().with("accent_text_mode");
-                let mut mode = ui.data(|d| d.get_temp::<ColourText>(mode_id).unwrap_or_default());
-                let label = ui
-                    .add(egui::Label::new(mode.name()).sense(Sense::click()))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .on_hover_text(tr!(
-                        "Show the code as HEX, RGB or HSL",
-                        "Показать код как HEX, RGB или HSL"
-                    ));
-                if label.clicked() {
-                    mode = mode.next();
-                    ui.data_mut(|d| d.insert_temp(mode_id, mode));
-                }
-                // Kept as typed while the field has the focus.
-                let id = ui.id().with("accent_hex");
-                let base = accent.base(palette::current().theme);
-                let mut text = ui
-                    .data_mut(|d| d.get_temp::<String>(id))
-                    .unwrap_or_else(|| mode.show([base.r(), base.g(), base.b()]));
-                let width = PICKER - label.rect.width() - ui.spacing().item_spacing.x;
-                let field = ui.add(egui::TextEdit::singleline(&mut text).desired_width(width));
-                super::take_leaving_key(ui, &field);
-                if field.changed()
-                    && let Some(typed) = Accent::typed(&text)
-                {
-                    *accent = typed;
-                }
-                if field.has_focus() {
-                    ui.data_mut(|d| d.insert_temp(id, text));
-                } else {
-                    ui.data_mut(|d| d.remove::<String>(id));
-                }
-            });
-            // The same colour as red, green and blue, each 0–255, in
-            // three fields as wide as the picker.
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                let spacing = ui.spacing().item_spacing.x;
-                let size = vec2((PICKER - 2.0 * spacing) / 3.0, ui.spacing().interact_size.y);
-                let base = accent.base(palette::current().theme);
-                let mut rgb = [base.r(), base.g(), base.b()];
-                let mut edited = false;
-                for (value, name) in rgb.iter_mut().zip(["R ", "G ", "B "]) {
-                    let field = egui::DragValue::new(value)
-                        .speed(0.5)
-                        .range(0..=255)
-                        .prefix(name);
-                    let field = ui.add_sized(size, field);
-                    super::take_leaving_key(ui, &field);
-                    edited |= field.changed();
-                }
-                if edited {
-                    *accent = custom(rgb);
-                }
-            });
-        });
+        .show(|ui| colour_fields(ui, accent));
     *accent != before
+}
+
+/// The own colour's picker and fields, editing `accent` (an
+/// `Accent::Custom` once picked): the square and the hue bar, the code
+/// (HEX, RGB or HSL) and R, G, B.
+fn colour_fields(ui: &mut Ui, accent: &mut Accent) {
+    let mut colour = accent.base(palette::current().theme);
+    if colour_picker(ui, &mut colour) {
+        *accent = custom([colour.r(), colour.g(), colour.b()]);
+    }
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        // The code's form, HEX, RGB or HSL, changed by a click on
+        // its name; the field takes any of them.
+        let mode_id = ui.id().with("accent_text_mode");
+        let mut mode = ui.data(|d| d.get_temp::<ColourText>(mode_id).unwrap_or_default());
+        let label = ui
+            .add(egui::Label::new(mode.name()).sense(Sense::click()))
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(tr!(
+                "Show the code as HEX, RGB or HSL",
+                "Показать код как HEX, RGB или HSL"
+            ));
+        if label.clicked() {
+            mode = mode.next();
+            ui.data_mut(|d| d.insert_temp(mode_id, mode));
+        }
+        // Kept as typed while the field has the focus.
+        let id = ui.id().with("accent_hex");
+        let base = accent.base(palette::current().theme);
+        let mut text = ui
+            .data_mut(|d| d.get_temp::<String>(id))
+            .unwrap_or_else(|| mode.show([base.r(), base.g(), base.b()]));
+        let width = PICKER - label.rect.width() - ui.spacing().item_spacing.x;
+        let field = ui.add(egui::TextEdit::singleline(&mut text).desired_width(width));
+        super::take_leaving_key(ui, &field);
+        if field.changed()
+            && let Some(typed) = Accent::typed(&text)
+        {
+            *accent = typed;
+        }
+        if field.has_focus() {
+            ui.data_mut(|d| d.insert_temp(id, text));
+        } else {
+            ui.data_mut(|d| d.remove::<String>(id));
+        }
+    });
+    // The same colour as red, green and blue, each 0–255, in
+    // three fields as wide as the picker.
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        let spacing = ui.spacing().item_spacing.x;
+        let size = vec2((PICKER - 2.0 * spacing) / 3.0, ui.spacing().interact_size.y);
+        let base = accent.base(palette::current().theme);
+        let mut rgb = [base.r(), base.g(), base.b()];
+        let mut edited = false;
+        for (value, name) in rgb.iter_mut().zip(["R ", "G ", "B "]) {
+            let field = egui::DragValue::new(value)
+                .speed(0.5)
+                .range(0..=255)
+                .prefix(name);
+            let field = ui.add_sized(size, field);
+            super::take_leaving_key(ui, &field);
+            edited |= field.changed();
+        }
+        if edited {
+            *accent = custom(rgb);
+        }
+    });
 }
 
 /// The own colour's picker: saturation across and brightness up a square,

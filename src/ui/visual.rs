@@ -1526,7 +1526,8 @@ pub(crate) mod tests {
     /// Frames of a visualization fed `music`, drawn by hand into a PNG
     /// sheet to look at: `METALAMP_FRAMES=<file.png>
     /// METALAMP_VISUAL=<settings name> cargo test --release visual_frames --
-    /// --ignored` (`METALAMP_THEME=light` for the light theme).
+    /// --ignored` (`METALAMP_THEME=light` for the light theme,
+    /// `METALAMP_SCHEME=#low,#middle,#high[,#light]` for one's own scheme).
     #[test]
     #[ignore]
     fn visual_frames() {
@@ -1534,12 +1535,27 @@ pub(crate) mod tests {
         let out = std::env::var("METALAMP_FRAMES").expect("METALAMP_FRAMES=<file.png>");
         let name = std::env::var("METALAMP_VISUAL").unwrap_or_else(|_| "waveform".into());
         let visual: Visual = serde_json::from_str(&format!("\"{name}\"")).unwrap();
+        let mut look = palette::Look::default();
         if std::env::var("METALAMP_THEME").is_ok_and(|t| t == "light") {
-            palette::set(palette::Look {
-                theme: palette::Theme::Light,
-                ..Default::default()
-            });
+            look.theme = palette::Theme::Light;
         }
+        // METALAMP_SCHEME=#low,#middle,#high[,#light]: the own scheme.
+        if let Ok(scheme) = std::env::var("METALAMP_SCHEME") {
+            let colours: Vec<u32> = scheme
+                .split(',')
+                .filter_map(|c| palette::parse_hex(c.trim()))
+                .map(|[r, g, b]| u32::from_be_bytes([0, r, g, b]))
+                .collect();
+            assert!(colours.len() >= 3, "METALAMP_SCHEME=#low,#middle,#high[,#light]");
+            look.visual = palette::VisualColours::Scheme;
+            look.scheme = palette::VisualScheme {
+                low: colours[0],
+                middle: colours[1],
+                high: colours[2],
+                peak: colours.get(3).copied(),
+            };
+        }
+        palette::set(look);
         // METALAMP_SAMPLE=<file>: its sound (from METALAMP_FROM s) in place
         // of the made-up music.
         let (sound, rate) = if std::env::var_os("METALAMP_SAMPLE").is_some() {

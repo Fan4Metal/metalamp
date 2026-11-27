@@ -150,6 +150,8 @@ pub struct App {
     notifier: crate::notice::Notifier,
     /// The equalizer's window (the player bar's button).
     eq_window: crate::ui::eq_window::EqWindow,
+    /// The own scheme's panel (`ui/scheme_window.rs`).
+    scheme_window: crate::ui::scheme_window::SchemeWindow,
     /// `METALAMP_VIEW_EDITOR` is set: open the editor once the library is
     /// loaded, for looking at it without a hand on the window (GUI checks).
     env_view_editor: bool,
@@ -292,6 +294,7 @@ impl App {
             stats: crate::stats::Stats::load(),
             listening: crate::stats::Listening::default(),
             eq_window: crate::ui::eq_window::EqWindow::from_env(),
+            scheme_window: crate::ui::scheme_window::SchemeWindow::from_env(),
             tray: None,
             off_taskbar: false,
             notifier: crate::notice::Notifier::default(),
@@ -916,6 +919,7 @@ impl App {
                     palette::set(self.settings.look());
                     self.place_changed = Some(Instant::now());
                 }
+                BarCmd::EditScheme(display) => self.scheme_window.open_under(display),
                 BarCmd::Equalizer(button) => self.eq_window.toggle(button),
                 BarCmd::Playlist => self.fold_playlist(!self.settings.player_only),
             }
@@ -2513,6 +2517,27 @@ impl eframe::App for App {
                 &self.settings.enhancer_presets,
             ) != (&before.0, &before.1, &before.2)
         {
+            self.place_changed = Some(Instant::now());
+        }
+        // The own scheme's panel: a change chooses the scheme and is seen
+        // at once in the visualization.
+        let scheme = self.settings.visual_scheme;
+        let (look, visual) = (self.settings.look(), self.settings.visual());
+        self.scheme_window.show(
+            &ctx,
+            &mut self.settings.visual_scheme,
+            look,
+            visual,
+            !modal,
+            &self.settings.keys,
+            self.hwnd,
+        );
+        for cmd in std::mem::take(&mut self.scheme_window.cmds) {
+            self.run_key(cmd, &ctx);
+        }
+        if self.settings.visual_scheme != scheme {
+            *self.settings.visual_colours_mut() = palette::VisualColours::Scheme;
+            palette::set(self.settings.look());
             self.place_changed = Some(Instant::now());
         }
         self.file_info.cover_side = self.settings.tag_cover_side;
