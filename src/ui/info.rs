@@ -3916,6 +3916,9 @@ fn cover_items(ui: &mut Ui, menu: &CoverMenu, acts: &mut Vec<Act>) {
                     acts.push(Act::Cover(CoverAct::Side(side)));
                 }
             }
+            if let Some(side) = own_side_field(ui, menu.side) {
+                acts.push(Act::Cover(CoverAct::Side(side)));
+            }
         });
     });
     if menu.savable
@@ -3942,6 +3945,73 @@ fn cover_items(ui: &mut Ui, menu: &CoverMenu, acts: &mut Vec<Act>) {
         acts.push(Act::Cover(act));
         ui.close();
     }
+}
+
+/// One's own largest side in the cover's menu, after the ready ones: the
+/// size in use when it is one's own (on the selection's ground, as a ready
+/// one chosen), else empty; red while not a size it takes. What was typed
+/// is taken when the field lets go of the keys (Enter, a click elsewhere),
+/// not at each digit, which would make the picture again each time; Esc
+/// gives it up. The field takes Enter and Esc itself, so that the window
+/// neither saves nor closes on them.
+fn own_side_field(ui: &mut Ui, side: CoverSide) -> Option<CoverSide> {
+    let id = ui.id().with("cover_side_own");
+    let shown = match side {
+        CoverSide::Custom(px) => px.to_string(),
+        _ => String::new(),
+    };
+    let focused = ui.memory(|m| m.has_focus(id));
+    let (entered, given_up) = if focused {
+        let none = egui::Modifiers::NONE;
+        ui.input_mut(|i| {
+            (
+                i.consume_key(none, egui::Key::Enter),
+                i.consume_key(none, egui::Key::Escape),
+            )
+        })
+    } else {
+        (false, false)
+    };
+    let mut text = if focused {
+        ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| shown.clone())
+    } else {
+        shown
+    };
+    let typed = |text: &str| CoverSide::typed(text).filter(|s| s.pixels().is_some());
+    let bad = !text.trim().is_empty() && typed(&text).is_none();
+    let mut edit = egui::TextEdit::singleline(&mut text)
+        .id(id)
+        .char_limit(4)
+        .desired_width(40.0)
+        .horizontal_align(egui::Align::Center)
+        .hint_text(tr!("own", "своя"));
+    if bad {
+        edit = edit.text_color(palette::error());
+    } else if side.is_custom() && !focused {
+        edit = edit
+            .background_color(ui.visuals().selection.bg_fill)
+            .text_color(ui.visuals().selection.stroke.color);
+    }
+    let resp = ui.add(edit).on_hover_text(tr!(
+        format!(
+            "One's own size, {} to {} pixels; Enter takes it",
+            CoverSide::OWN.start(),
+            CoverSide::OWN.end()
+        ),
+        format!(
+            "Свой размер, от {} до {} пикселей; Enter применяет",
+            CoverSide::OWN.start(),
+            CoverSide::OWN.end()
+        )
+    ));
+    text.retain(|c| c.is_ascii_digit());
+    let typed = typed(&text);
+    ui.data_mut(|d| d.insert_temp(id, text));
+    if entered || given_up {
+        resp.surrender_focus();
+    }
+    let taken = entered || (resp.lost_focus() && !given_up);
+    taken.then_some(typed).flatten().filter(|&typed| typed != side)
 }
 
 /// The cover at `side` points with rounded corners, or a placeholder.

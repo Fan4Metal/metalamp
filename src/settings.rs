@@ -392,18 +392,17 @@ impl LyricsPriority {
 /// How large a cover put into tags may be: a larger picture is made that
 /// large, as a JPEG (`covers::for_tag`), so an album's tracks do not each
 /// carry megabytes of it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Kept as `original` or the pixels (`1000`; one's own size likewise).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CoverSide {
     /// As it is.
-    #[serde(rename = "original")]
     Original,
-    #[serde(rename = "500")]
     Px500,
     #[default]
-    #[serde(rename = "1000")]
     Px1000,
-    #[serde(rename = "1500")]
     Px1500,
+    /// One's own size, within `CoverSide::OWN`, none of the ready ones.
+    Custom(u32),
 }
 
 impl CoverSide {
@@ -414,6 +413,9 @@ impl CoverSide {
         CoverSide::Px1500,
     ];
 
+    /// The sizes one's own may be: covers are decoded up to 8192 pixels.
+    pub const OWN: std::ops::RangeInclusive<u32> = 100..=8192;
+
     /// The largest side in pixels; none: any.
     pub fn pixels(self) -> Option<u32> {
         match self {
@@ -421,7 +423,28 @@ impl CoverSide {
             CoverSide::Px500 => Some(500),
             CoverSide::Px1000 => Some(1000),
             CoverSide::Px1500 => Some(1500),
+            CoverSide::Custom(px) => Some(px),
         }
+    }
+
+    /// That many pixels: a ready size when it is one, else one's own;
+    /// none outside `OWN`.
+    pub fn of_pixels(px: u32) -> Option<CoverSide> {
+        let ready = CoverSide::ALL.into_iter().find(|s| s.pixels() == Some(px));
+        ready.or_else(|| CoverSide::OWN.contains(&px).then_some(CoverSide::Custom(px)))
+    }
+
+    /// As typed into the cover's menu or kept: `original`, or the pixels.
+    pub fn typed(text: &str) -> Option<CoverSide> {
+        let text = text.trim();
+        if text.eq_ignore_ascii_case("original") {
+            return Some(CoverSide::Original);
+        }
+        CoverSide::of_pixels(text.parse().ok()?)
+    }
+
+    pub fn is_custom(self) -> bool {
+        matches!(self, CoverSide::Custom(_))
     }
 
     /// As the cover's menu offers it: "As it is", or the pixels.
@@ -430,6 +453,23 @@ impl CoverSide {
             None => tr!("As it is", "Как есть").to_owned(),
             Some(px) => px.to_string(),
         }
+    }
+}
+
+impl Serialize for CoverSide {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self.pixels() {
+            None => s.serialize_str("original"),
+            Some(px) => s.serialize_str(&px.to_string()),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for CoverSide {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(d)?;
+        CoverSide::typed(&text)
+            .ok_or_else(|| serde::de::Error::custom(format!("not a cover side: {text}")))
     }
 }
 
@@ -1325,6 +1365,28 @@ mod tests {
             assert_eq!(serde_json::from_str::<Id3v1Encoding>(&json).unwrap(), e);
             assert!(!e.label().is_empty());
         }
+    }
+
+    /// The cover's side is kept as `original` or its pixels, one's own
+    /// size too; a ready size typed is that one; outside `OWN` it is not
+    /// taken, and a file holding such reads the default.
+    #[test]
+    fn the_covers_side_is_kept() {
+        for side in CoverSide::ALL.into_iter().chain([CoverSide::Custom(800)]) {
+            let json = serde_json::to_string(&side).unwrap();
+            assert_eq!(serde_json::from_str::<CoverSide>(&json).unwrap(), side);
+        }
+        assert_eq!(serde_json::to_string(&CoverSide::Original).unwrap(), r#""original""#);
+        assert_eq!(serde_json::to_string(&CoverSide::Custom(1200)).unwrap(), r#""1200""#);
+        assert_eq!(CoverSide::typed(" 500 "), Some(CoverSide::Px500));
+        assert_eq!(CoverSide::typed("1200"), Some(CoverSide::Custom(1200)));
+        assert_eq!(CoverSide::typed("99"), None);
+        assert_eq!(CoverSide::typed("9000"), None);
+        assert_eq!(CoverSide::typed("abc"), None);
+        let s = Settings::from_json(br#"{"tag_cover_side":"700"}"#).unwrap();
+        assert_eq!(s.tag_cover_side, CoverSide::Custom(700));
+        let s = Settings::from_json(br#"{"tag_cover_side":"50"}"#).unwrap();
+        assert_eq!(s.tag_cover_side, CoverSide::default());
     }
 
     #[test]
