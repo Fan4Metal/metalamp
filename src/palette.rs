@@ -1080,122 +1080,221 @@ fn brought(c: Color32, towards: Color32, bound: f32) -> Color32 {
     mix(c, towards, b)
 }
 
-/// Up to three colours that stand for a cover of `pixels`, the one that
-/// stands out most first, as vivid as the cover's own colours are where
-/// they are most vivid (means of the pixels and mixes in RGB had turned
-/// most covers grey). In Oklab (`Oklch`): the pixels (about 4096) with a
-/// colour to them (`COLOURED`, neither nearly black nor nearly white) go
-/// into a wheel of `HUES` hues, each weighed by its chroma; the wheel's
-/// peaks are the colours, apart by `APART_DEG` and each at least
-/// `LEAST_PEAK` of the first's weight; each colour its hue's (the chroma's
-/// mean round the peak), the chroma `VIVID_RANK` up its pixels' (at least
-/// `LEAST_CHROMA`), the lightness their mean. Two found: a third between
-/// them round the wheel (not through grey); one: it with its neighbours
-/// `NEIGHBOUR_DEG` either side. None when the cover has no colour to it
-/// (black and white, transparent): the accent's shades then.
+/// Three colours that stand for a cover of `pixels`, from the darkest to
+/// the lightest, each as the cover has it (the user's model, palette
+/// pickers such as gradients.app: a dark cover with a gold title and
+/// silver mist is a dark grey, the gold and the silver). In Oklab: about
+/// 4096 pixels fall into `CLUSTERS` clusters (k-means, `kmeans`); of those
+/// covering at least `LEAST_SHARE` of the picture, the most colourful is
+/// taken first (by chroma and the square root of its share: the gold of a
+/// title over a grey picture is the cover's colour, small as it is; none
+/// with a colour to it, the largest), then the ground (the largest), then
+/// the one standing furthest from those taken, its distance weighed by the
+/// fourth root of its share, so a large patch counts a little more and a
+/// speck does not count at all (`LEAST_SHARE`). Each colour is its
+/// cluster's mean (the clusters are tight: no mud). Fewer than three apart
+/// (`LEAST_APART`): two give a third between them (round the hue wheel
+/// when both have a colour to them, not through grey), one its deeper and
+/// lighter shades. None for a picture without pixels (transparent).
+///
+/// The way before this one took the hue wheel's peaks and made them vivid:
+/// the user found it gave three golds for a cover the user saw as dark
+/// grey, gold and light (and the one before it, means of RGB buckets mixed
+/// with white, grey on most covers).
 pub fn cover_colours(pixels: &[Color32]) -> Option<[Color32; 3]> {
     const SAMPLES: usize = 4096;
-    const HUES: usize = 36;
-    const COLOURED: f32 = 0.045;
-    const APART_DEG: f32 = 40.0;
-    const LEAST_PEAK: f32 = 0.15;
-    // A colour needs this share of the coloured weight at all.
-    const LEAST_SHARE: f32 = 0.01;
-    const VIVID_RANK: f32 = 0.75;
-    const LEAST_CHROMA: f32 = 0.11;
-    const NEIGHBOUR_DEG: f32 = 10.0;
-    const NEIGHBOUR_L: f32 = 0.12;
+    const LEAST_SHARE: f32 = 0.02;
+    const LEAST_APART: f32 = 0.06;
+    const SHADE_L: f32 = 0.12;
+    const COLOURFUL: f32 = 0.04;
+    const HUE_NEAR: f32 = 20.0;
     let step = (pixels.len() / SAMPLES).max(1);
-    let coloured: Vec<Oklch> = pixels
+    let lab: Vec<[f32; 3]> = pixels
         .iter()
         .step_by(step)
         .filter(|p| p.a() >= 128)
-        .map(|&p| Oklch::of(p))
-        .filter(|c| c.c >= COLOURED && (0.2..=0.97).contains(&c.l))
+        .map(|&p| Oklch::of(p).lab())
         .collect();
-    let total: f32 = coloured.iter().map(|c| c.c).sum();
-    if coloured.is_empty() || total <= 0.0 {
+    if lab.is_empty() {
         return None;
     }
-    let bin = |h: f32| ((h / 360.0 * HUES as f32) as usize).min(HUES - 1);
-    let mut wheel = [0.0f32; HUES];
-    for c in &coloured {
-        wheel[bin(c.h)] += c.c;
-    }
-    // Smoothed round the wheel, so a hue on a bin's edge is not split.
-    let smooth: [f32; HUES] = std::array::from_fn(|i| {
-        wheel[i] + 0.5 * (wheel[(i + HUES - 1) % HUES] + wheel[(i + 1) % HUES])
-    });
-    let mut peaks: Vec<usize> = (0..HUES)
-        .filter(|&i| {
-            let (before, after) = (smooth[(i + HUES - 1) % HUES], smooth[(i + 1) % HUES]);
-            smooth[i] > 0.0 && smooth[i] >= before && smooth[i] > after
-        })
+    let clusters = kmeans(&lab);
+    let total = lab.len() as f32;
+    let candidates: Vec<([f32; 3], f32)> = clusters
+        .into_iter()
+        .map(|(centre, n)| (centre, n as f32 / total))
+        .filter(|&(_, share)| share >= LEAST_SHARE)
         .collect();
-    peaks.sort_by(|&a, &b| smooth[b].total_cmp(&smooth[a]));
-    let centre = |i: usize| (i as f32 + 0.5) * 360.0 / HUES as f32;
-    let mut taken: Vec<usize> = Vec::with_capacity(3);
-    for &p in &peaks {
-        let first = taken.first().map_or(smooth[p], |&f| smooth[f]);
-        if smooth[p] < first * LEAST_PEAK || smooth[p] < total * 2.0 * LEAST_SHARE {
-            break;
-        }
-        if taken.iter().all(|&t| hue_apart(centre(t), centre(p)) >= APART_DEG) {
-            taken.push(p);
-            if taken.len() == 3 {
-                break;
-            }
-        }
-    }
-    let colours: Vec<Oklch> = taken
+    // First the cover's colour: the most colourful of the clusters with a
+    // colour to them (`COLOURFUL`), by chroma and the square root of the
+    // share of its hue (the colourful clusters within `HUE_NEAR` of it, as
+    // Material Color Utilities' `Score` counts a hue's proportion: a gold
+    // split into a darker and a lighter cluster counts as one); a picture
+    // without one, its largest cluster.
+    let chroma = |c: [f32; 3]| c[1].hypot(c[2]);
+    let hue = |c: [f32; 3]| c[2].atan2(c[1]).to_degrees();
+    let hue_share = |c: [f32; 3]| {
+        candidates
+            .iter()
+            .filter(|&&(o, _)| chroma(o) >= COLOURFUL)
+            .filter(|&&(o, _)| {
+                let d = (hue(o) - hue(c)).rem_euclid(360.0);
+                d.min(360.0 - d) <= HUE_NEAR
+            })
+            .map(|&(_, share)| share)
+            .sum::<f32>()
+    };
+    let colourful = candidates
         .iter()
-        .map(|&p| {
-            let near: Vec<&Oklch> = coloured
-                .iter()
-                .filter(|c| hue_apart(c.h, centre(p)) <= APART_DEG / 2.0)
-                .collect();
-            // Its most vivid pixels (from `VIVID_RANK` up its chromas): their
-            // mean hue (a direction), lightness and chroma. A mean of all
-            // of them had dulled gold to khaki.
-            let mut chromas: Vec<f32> = near.iter().map(|c| c.c).collect();
-            chromas.sort_by(f32::total_cmp);
-            let rank = ((chromas.len() - 1) as f32 * VIVID_RANK).round() as usize;
-            let least = chromas.get(rank).copied().unwrap_or(0.0);
-            let vivid: Vec<&&Oklch> = near.iter().filter(|c| c.c >= least).collect();
-            let n = vivid.len().max(1) as f32;
-            let (sx, sy) = vivid.iter().fold((0.0, 0.0), |(x, y), c| {
-                let r = c.h.to_radians();
-                (x + r.cos(), y + r.sin())
-            });
-            let h = sy.atan2(sx).to_degrees().rem_euclid(360.0);
-            let l = vivid.iter().map(|c| c.l).sum::<f32>() / n;
-            let c = (vivid.iter().map(|c| c.c).sum::<f32>() / n).max(LEAST_CHROMA);
-            Oklch { l, c, h }
-        })
-        .collect();
+        .filter(|&&(c, _)| chroma(c) >= COLOURFUL)
+        .map(|&(c, share)| (c, share, chroma(c) * hue_share(c).sqrt()))
+        .max_by(|a, b| a.2.total_cmp(&b.2))
+        .map(|(c, share, _)| (c, share));
+    let largest = candidates.iter().max_by(|a, b| a.1.total_cmp(&b.1));
+    let mut taken: Vec<[f32; 3]> = Vec::with_capacity(3);
+    if let Some((first, _)) = colourful.or(largest.copied()) {
+        taken.push(first);
+    }
+    // Then the ground: the largest cluster, unless it is that colour.
+    if let Some(&(ground, _)) = largest
+        && taken.iter().all(|&t| oklab_distance(ground, t) >= LEAST_APART)
+    {
+        taken.push(ground);
+    }
+    // The rest: the furthest from those taken, a larger patch counting a
+    // little more (the fourth root of its share: by its square root, a
+    // large patch of middle grey won over the light of a dark cover).
+    while taken.len() < 3 {
+        let best = candidates
+            .iter()
+            .map(|&(c, share)| {
+                let apart = taken
+                    .iter()
+                    .map(|&t| lab_distance(c, t))
+                    .fold(f32::MAX, f32::min);
+                (c, apart, apart * share.sqrt().sqrt())
+            })
+            .filter(|&(_, apart, _)| apart >= LEAST_APART)
+            .max_by(|a, b| a.2.total_cmp(&b.2));
+        match best {
+            Some((c, _, _)) => taken.push(c),
+            None => break,
+        }
+    }
+    let mut colours: Vec<Oklch> = taken.into_iter().map(Oklch::from_lab).collect();
+    colours.sort_by(|a, b| a.l.total_cmp(&b.l));
     let three = match colours[..] {
         [] => return None,
-        // One: deeper and lighter shades of it, the hue turned a little.
         [a] => [
             Oklch {
-                l: a.l - NEIGHBOUR_L,
-                h: (a.h - NEIGHBOUR_DEG).rem_euclid(360.0),
+                l: a.l - SHADE_L,
                 ..a
             },
             a,
             Oklch {
-                l: a.l + NEIGHBOUR_L,
-                h: (a.h + NEIGHBOUR_DEG).rem_euclid(360.0),
+                l: a.l + SHADE_L,
                 ..a
             },
         ],
-        [a, b] => [a, a.towards(b, 0.5), b],
+        [a, b] if a.c > 0.04 && b.c > 0.04 => [a, a.towards(b, 0.5), b],
+        [a, b] => {
+            let (x, y) = (a.lab(), b.lab());
+            [a, Oklch::from_lab(std::array::from_fn(|i| (x[i] + y[i]) / 2.0)), b]
+        }
         [a, b, c, ..] => [a, b, c],
     };
     Some(three.map(Oklch::rgb))
 }
 
+/// How many clusters a cover's pixels fall into (as many as palette
+/// pickers show).
+const CLUSTERS: usize = 10;
+/// How much more a difference of colour (Oklab's a and b) counts than one
+/// of lightness: chromas are small numbers (a vivid red 0.25) beside a
+/// lightness of 0 to 1.
+const HUE_WEIGHT: f32 = 2.0;
+
+/// The distance of two Oklab colours as they are.
+fn oklab_distance(x: [f32; 3], y: [f32; 3]) -> f32 {
+    (0..3).map(|i| (x[i] - y[i]).powi(2)).sum::<f32>().sqrt()
+}
+
+/// The distance of two Oklab colours, a and b weighed by `HUE_WEIGHT`
+/// (for the clusters: a gold apart from the greys about it).
+fn lab_distance(x: [f32; 3], y: [f32; 3]) -> f32 {
+    let d = |i: usize, w: f32| (x[i] - y[i]) * w;
+    (d(0, 1.0).powi(2) + d(1, HUE_WEIGHT).powi(2) + d(2, HUE_WEIGHT).powi(2)).sqrt()
+}
+
+/// `CLUSTERS` clusters of `points` (Oklab) by k-means, each its mean and
+/// how many points it holds: started as k-means++ with a fixed seed (the
+/// same cover, the same colours), at most 16 rounds.
+fn kmeans(points: &[[f32; 3]]) -> Vec<([f32; 3], usize)> {
+    let k = CLUSTERS.min(points.len());
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    let mut random = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed >> 11) as f32 / (1u64 << 53) as f32
+    };
+    let mut centres: Vec<[f32; 3]> = vec![points[points.len() / 2]];
+    let mut nearest: Vec<f32> = points.iter().map(|&p| lab_distance(p, centres[0]).powi(2)).collect();
+    while centres.len() < k {
+        let sum: f32 = nearest.iter().sum();
+        if sum <= 0.0 {
+            break;
+        }
+        let mut pick = random() * sum;
+        let mut chosen = points.len() - 1;
+        for (i, &d) in nearest.iter().enumerate() {
+            pick -= d;
+            if pick <= 0.0 {
+                chosen = i;
+                break;
+            }
+        }
+        let centre = points[chosen];
+        centres.push(centre);
+        for (d, &p) in nearest.iter_mut().zip(points) {
+            *d = d.min(lab_distance(p, centre).powi(2));
+        }
+    }
+    let mut owner = vec![0usize; points.len()];
+    let mut counts = vec![0usize; centres.len()];
+    for round in 0..16 {
+        let mut moved = false;
+        for (o, &p) in owner.iter_mut().zip(points) {
+            let best = (0..centres.len())
+                .min_by(|&a, &b| lab_distance(p, centres[a]).total_cmp(&lab_distance(p, centres[b])))
+                .unwrap_or(0);
+            if *o != best || round == 0 {
+                moved |= *o != best;
+                *o = best;
+            }
+        }
+        let mut sums = vec![[0.0f32; 3]; centres.len()];
+        counts = vec![0; centres.len()];
+        for (&o, p) in owner.iter().zip(points) {
+            for i in 0..3 {
+                sums[o][i] += p[i];
+            }
+            counts[o] += 1;
+        }
+        for ((centre, sum), &n) in centres.iter_mut().zip(&sums).zip(&counts) {
+            if n > 0 {
+                *centre = sum.map(|s| s / n as f32);
+            }
+        }
+        if !moved && round > 0 {
+            break;
+        }
+    }
+    centres.into_iter().zip(counts).filter(|&(_, n)| n > 0).collect()
+}
+
 /// How far apart two hues are round the wheel, 0 to 180 degrees.
+#[cfg(test)]
 fn hue_apart(a: f32, b: f32) -> f32 {
     let d = (a - b).rem_euclid(360.0);
     d.min(360.0 - d)
@@ -1210,6 +1309,20 @@ struct Oklch {
 }
 
 impl Oklch {
+    /// As Oklab: lightness, a, b.
+    fn lab(self) -> [f32; 3] {
+        let h = self.h.to_radians();
+        [self.l, self.c * h.cos(), self.c * h.sin()]
+    }
+
+    fn from_lab([l, a, b]: [f32; 3]) -> Oklch {
+        Oklch {
+            l,
+            c: a.hypot(b),
+            h: b.atan2(a).to_degrees().rem_euclid(360.0),
+        }
+    }
+
     fn of(c: Color32) -> Oklch {
         let lin = |v: u8| {
             let v = f32::from(v) / 255.0;
@@ -2642,7 +2755,7 @@ mod tests {
     /// them as a dark theme shows them and as a light one does, into a PNG
     /// to look at: `METALAMP_FRAMES=<file.png> cargo test --release
     /// colours_of_real_covers -- --ignored` (`METALAMP_COVERS=<folder>`).
-    /// A cover without colours shows a dark grey (the accent's then).
+    /// A transparent cover shows a dark grey (the accent's then).
     #[test]
     #[ignore]
     fn colours_of_real_covers() {
@@ -2653,7 +2766,7 @@ mod tests {
         let mut files: Vec<_> = std::fs::read_dir(&folder)
             .unwrap()
             .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.extension().is_some_and(|e| e == "jpg"))
+            .filter(|p| p.extension().is_some_and(|e| e == "jpg" || e == "png"))
             .collect();
         files.sort();
         const SHOWN: usize = 60;
@@ -2700,43 +2813,57 @@ mod tests {
         }
         sheet.save(&out).unwrap();
     }
-    /// A cover's colours: the vivid ones first, apart from one another,
-    /// over a larger dull ground, as vivid as the cover's are; one colour
-    /// its shades; two a third between them round the wheel, not grey; a
-    /// cover without colour (grey, black and white, transparent) none.
+    /// A cover's colours, from the darkest to the lightest, as the cover
+    /// has them: its colour, small as it is, with its ground and the one
+    /// standing apart from both (a dark grey picture with a gold title and
+    /// light mist: the dark grey, the gold, the light); one colour its
+    /// shades; two a third between them round the wheel; a grey cover
+    /// greys; a transparent one none.
     #[test]
     fn colours_of_a_cover() {
+        let lightest_last = |c: [Color32; 3]| {
+            let l = c.map(|c| Oklch::of(c).l);
+            assert!(l[0] <= l[1] + 1e-3 && l[1] <= l[2] + 1e-3, "{c:?}");
+        };
+        let mut dark_gold_light = vec![hex(0x212229); 60 * 100];
+        dark_gold_light.extend(vec![hex(0x0f1015); 10 * 100]);
+        dark_gold_light.extend(vec![hex(0x6d7282); 9 * 100]);
+        dark_gold_light.extend(vec![hex(0xc5c6cf); 16 * 100]);
+        dark_gold_light.extend(vec![hex(0xa3875b); 5 * 100]);
+        let found = cover_colours(&dark_gold_light).unwrap();
+        lightest_last(found);
+        let near = |a: Color32, b: u32| distance(a, hex(b)) < 30.0;
+        assert!(near(found[0], 0x212229), "{found:?}");
+        assert!(near(found[1], 0xa3875b), "the gold: {found:?}");
+        assert!(near(found[2], 0xc5c6cf), "{found:?}");
+        // Two colours on a dark ground: the ground and both.
         let mut pixels = vec![hex(0x202020); 60 * 100];
         pixels.extend(vec![hex(0xd02020); 25 * 100]);
         pixels.extend(vec![hex(0x2050e0); 15 * 100]);
-        // Two colours found: the red first, the blue last, a purple between.
-        let [a, m, b] = cover_colours(&pixels).unwrap();
-        assert!(a.r() > 180 && a.g() < 60, "{a:?}");
-        assert!(b.b() > 180 && b.r() < 60, "{b:?}");
-        assert!(distance(m, a) > 90.0 && distance(m, b) > 90.0, "{m:?}");
-        // A third colour of its own is taken as it is.
-        pixels.extend(vec![hex(0x20c040); 12 * 100]);
-        let [_, _, g] = cover_colours(&pixels).unwrap();
-        assert!(g.g() > 150 && g.r() < 80, "{g:?}");
-        // A muted colour is made vivid: a dull brown comes out orange.
-        let dull = cover_colours(&vec![hex(0x8a6a4a); 1000]).unwrap();
-        assert!(Oklch::of(dull[1]).c >= 0.1, "{dull:?}");
-        assert!(dull[1].r() > dull[1].b() + 40, "{dull:?}");
-        // One colour: its deeper and lighter shades about it.
-        assert!(luminance(dull[0]) < luminance(dull[1]));
-        assert!(luminance(dull[1]) < luminance(dull[2]));
-        // Two: between them round the wheel, as vivid as they are.
+        let found = cover_colours(&pixels).unwrap();
+        lightest_last(found);
+        assert!(near(found[0], 0x202020), "{found:?}");
+        assert!(found.iter().any(|&c| near(c, 0xd02020)), "{found:?}");
+        assert!(found.iter().any(|&c| near(c, 0x2050e0)), "{found:?}");
+        // One colour: its deeper and lighter shades about it, as it is.
+        let one = cover_colours(&vec![hex(0x8a6a4a); 1000]).unwrap();
+        lightest_last(one);
+        assert!(near(one[1], 0x8a6a4a), "{one:?}");
+        // Two: between them round the wheel, not grey.
         let mut two = vec![hex(0xd02020); 500];
         two.extend(vec![hex(0x2050e0); 500]);
-        let [a, m, b] = cover_colours(&two).unwrap();
-        let (ca, cm, cb) = (Oklch::of(a), Oklch::of(m), Oklch::of(b));
-        assert!(cm.c > 0.6 * ca.c.min(cb.c), "{m:?}");
+        let [_, m, _] = cover_colours(&two).unwrap();
+        assert!(Oklch::of(m).c > 0.1, "{m:?}");
         assert!(m.r() > m.g() && m.b() > m.g(), "a purple between: {m:?}");
-        // No colour to them.
-        assert_eq!(cover_colours(&vec![hex(0x808080); 1000]), None);
+        // Greys stay greys; black and white a grey between them.
+        let grey = cover_colours(&vec![hex(0x808080); 1000]).unwrap();
+        assert!(grey.iter().all(|&c| Oklch::of(c).c < 0.01), "{grey:?}");
         let mut white_and_black = vec![hex(0xf8f8f8); 500];
         white_and_black.extend(vec![hex(0x080808); 500]);
-        assert_eq!(cover_colours(&white_and_black), None);
+        let found = cover_colours(&white_and_black).unwrap();
+        assert!(near(found[0], 0x080808) && near(found[2], 0xf8f8f8), "{found:?}");
+        // The same picture, the same colours.
+        assert_eq!(cover_colours(&pixels), cover_colours(&pixels));
         assert_eq!(cover_colours(&vec![Color32::TRANSPARENT; 100]), None);
         assert_eq!(cover_colours(&[]), None);
     }
