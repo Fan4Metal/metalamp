@@ -3949,7 +3949,8 @@ fn cover_items(ui: &mut Ui, menu: &CoverMenu, acts: &mut Vec<Act>) {
 
 /// One's own largest side in the cover's menu, after the ready ones: the
 /// size in use when it is one's own (on the selection's ground, as a ready
-/// one chosen), else empty; red while not a size it takes. What was typed
+/// one chosen), else empty with an ellipsis (a word there, "own" /
+/// "своя", the user disliked); red while not a size it takes. What was typed
 /// is taken when the field lets go of the keys (Enter, a click elsewhere),
 /// not at each digit, which would make the picture again each time; Esc
 /// gives it up. The field takes Enter and Esc itself, so that the window
@@ -3984,7 +3985,7 @@ fn own_side_field(ui: &mut Ui, side: CoverSide) -> Option<CoverSide> {
         .char_limit(4)
         .desired_width(40.0)
         .horizontal_align(egui::Align::Center)
-        .hint_text(tr!("own", "своя"));
+        .hint_text("…");
     if bad {
         edit = edit.text_color(palette::error());
     } else if side.is_custom() && !focused {
