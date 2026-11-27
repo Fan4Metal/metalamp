@@ -3126,28 +3126,41 @@ fn visual_swatch(
     }
 }
 
-/// A disc of `shades`' colours: the level up, the place across.
+/// A disc of `shades`' colours: the level up, the place across. Its edge
+/// is feathered over a pixel as egui's tessellator does a `circle_filled`
+/// (a mesh is drawn as it is: without the feather its edge was jagged
+/// beside the plain swatches): an inner ring half a pixel inside `r` in
+/// the disc's colours, an outer one half a pixel outside it transparent.
 fn gradient_disc(
     painter: &egui::Painter,
     centre: egui::Pos2,
     r: f32,
     shades: palette::VisualPalette,
 ) {
+    const STEPS: u32 = 64;
     let colour = |p: egui::Pos2| {
         let level = (centre.y + r - p.y) / (2.0 * r);
         let place = (p.x - centre.x + r) / (2.0 * r);
         shades.at(level, place)
     };
+    let feather = 1.0 / painter.pixels_per_point();
+    let inner = (r - feather / 2.0).max(0.0);
+    let outer = r + feather / 2.0;
     let mut mesh = egui::Mesh::default();
     mesh.colored_vertex(centre, colour(centre));
-    const STEPS: u32 = 32;
-    for i in 0..=STEPS {
+    // Vertex 1 + 2i inside, 2 + 2i outside.
+    for i in 0..STEPS {
         let a = i as f32 / STEPS as f32 * std::f32::consts::TAU;
-        let p = centre + vec2(a.cos(), a.sin()) * r;
+        let way = vec2(a.cos(), a.sin());
+        let p = centre + way * inner;
         mesh.colored_vertex(p, colour(p));
-        if i > 0 {
-            mesh.add_triangle(0, i, i + 1);
-        }
+        mesh.colored_vertex(centre + way * outer, Color32::TRANSPARENT);
+    }
+    for i in 0..STEPS {
+        let (a, b) = (1 + 2 * i, 1 + 2 * ((i + 1) % STEPS));
+        mesh.add_triangle(0, a, b);
+        mesh.add_triangle(a, a + 1, b + 1);
+        mesh.add_triangle(a, b + 1, b);
     }
     painter.add(mesh);
 }
