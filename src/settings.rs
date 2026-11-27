@@ -397,8 +397,8 @@ impl LyricsPriority {
 pub enum CoverSide {
     /// As it is.
     Original,
-    Px500,
     #[default]
+    Px600,
     Px1000,
     Px1500,
     /// One's own size, within `CoverSide::OWN`, none of the ready ones.
@@ -408,7 +408,7 @@ pub enum CoverSide {
 impl CoverSide {
     pub const ALL: [CoverSide; 4] = [
         CoverSide::Original,
-        CoverSide::Px500,
+        CoverSide::Px600,
         CoverSide::Px1000,
         CoverSide::Px1500,
     ];
@@ -420,7 +420,7 @@ impl CoverSide {
     pub fn pixels(self) -> Option<u32> {
         match self {
             CoverSide::Original => None,
-            CoverSide::Px500 => Some(500),
+            CoverSide::Px600 => Some(600),
             CoverSide::Px1000 => Some(1000),
             CoverSide::Px1500 => Some(1500),
             CoverSide::Custom(px) => Some(px),
@@ -1378,7 +1378,9 @@ mod tests {
         }
         assert_eq!(serde_json::to_string(&CoverSide::Original).unwrap(), r#""original""#);
         assert_eq!(serde_json::to_string(&CoverSide::Custom(1200)).unwrap(), r#""1200""#);
-        assert_eq!(CoverSide::typed(" 500 "), Some(CoverSide::Px500));
+        assert_eq!(CoverSide::typed(" 600 "), Some(CoverSide::Px600));
+        assert_eq!(CoverSide::typed("500"), Some(CoverSide::Custom(500)));
+        assert_eq!(CoverSide::default(), CoverSide::Px600);
         assert_eq!(CoverSide::typed("1200"), Some(CoverSide::Custom(1200)));
         assert_eq!(CoverSide::typed("99"), None);
         assert_eq!(CoverSide::typed("9000"), None);
