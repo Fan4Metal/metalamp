@@ -2108,6 +2108,11 @@ fn enhancer_cell(ui: &mut Ui, c: &Control, e: &mut Enhancement, base: Enhancemen
         )
         .on_hover_text(&tip);
     slider_ticks(ui, marks, response.rect, c);
+    // Dragged near a long mark, the handle stands on it; the keys step on
+    // past it.
+    if response.dragged() || response.is_pointer_button_down_on() {
+        value = snapped(response.rect, ui.style().visuals.handle_shape, c, value);
+    }
     // Only what the user did: the slider's stepping alone moves a value by
     // a rounding error (0.0 read as 8.9e-8 on a 0.1 step from -6, 1.8 as
     // 1.8000001), and says it changed it.
@@ -2131,7 +2136,7 @@ fn slider_ticks(ui: &mut Ui, slot: egui::layers::ShapeIdx, slider: Rect, c: &Con
     const GAP: f32 = 1.0;
     const SHORT: f32 = 3.0;
     const LONG: f32 = 5.0;
-    let (every, major) = c.ticks;
+    let every = c.ticks.0;
     let (lo, hi) = c.range;
     let top = slider.center().y + ui.spacing().slider_rail_height / 2.0 + GAP;
     let below = top + LONG - slider.bottom();
@@ -2148,9 +2153,7 @@ fn slider_ticks(ui: &mut Ui, slot: egui::layers::ShapeIdx, slider: Rect, c: &Con
     let marks = (0..=count)
         .map(|i| {
             let v = lo + i as f32 * every;
-            let long = i == 0
-                || i == count
-                || major.iter().any(|m| (m - v).abs() < every * 0.01);
+            let long = long_marks(c).any(|m| (m - v).abs() < every * 0.01);
             let (length, colour) = if long {
                 (LONG, palette::text_weak().gamma_multiply(0.85))
             } else {
@@ -2164,6 +2167,28 @@ fn slider_ticks(ui: &mut Ui, slot: egui::layers::ShapeIdx, slider: Rect, c: &Con
         })
         .collect();
     painter.set(slot, egui::Shape::Vec(marks));
+}
+
+/// The values of `c`'s long marks: its ends and `c.ticks.1`.
+fn long_marks(c: &Control) -> impl Iterator<Item = f32> + '_ {
+    [c.range.0, c.range.1]
+        .into_iter()
+        .chain(c.ticks.1.iter().copied())
+}
+
+/// How near, in points, a handle dragged comes to a long mark to stand on
+/// it: a little, so the values beside a mark can still be reached.
+const SNAP: f32 = 4.0;
+
+/// `value` on `c`'s slider (its rect `slider`, its handle's `shape`), or the
+/// long mark nearest it when that is within `SNAP` points of the handle.
+fn snapped(slider: Rect, shape: egui::style::HandleShape, c: &Control, value: f32) -> f32 {
+    let x = slider_tick_x(slider, shape, c.range, value);
+    long_marks(c)
+        .map(|m| (m, (slider_tick_x(slider, shape, c.range, m) - x).abs()))
+        .filter(|&(_, off)| off <= SNAP)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map_or(value, |(m, _)| m)
 }
 
 /// Where the middle of egui's handle (of `shape`) stands at `value` on a
@@ -3551,6 +3576,32 @@ mod eq_tests {
                 }
             }
         }
+    }
+
+    /// A value within `SNAP` points of a long mark stands on it, one
+    /// further off stays as it is, and the short marks do not hold it.
+    #[test]
+    fn a_dragged_handle_sticks_to_the_long_marks() {
+        let slider = Rect::from_min_size(pos2(0.0, 0.0), vec2(200.0, 18.0));
+        let shape = egui::style::HandleShape::Rect { aspect_ratio: 0.75 };
+        let [first, _, last] = enhancer_controls();
+        let drive = &first[0];
+        // Drive: 140 % over 189.2 points, 1.35 points a per cent.
+        assert_eq!(snapped(slider, shape, drive, 98.0), 100.0);
+        assert_eq!(snapped(slider, shape, drive, 102.0), 100.0);
+        assert_eq!(snapped(slider, shape, drive, 104.0), 104.0);
+        assert_eq!(snapped(slider, shape, drive, 95.0), 95.0);
+        assert_eq!(snapped(slider, shape, drive, 52.0), 50.0);
+        assert_eq!(snapped(slider, shape, drive, 2.0), 0.0);
+        assert_eq!(snapped(slider, shape, drive, 138.0), 140.0);
+        // A short mark (30 %) holds nothing.
+        assert_eq!(snapped(slider, shape, drive, 31.0), 31.0);
+        // The bass: 12 dB over 189.2 points, 15.8 points a dB.
+        let bass = &last[0];
+        assert_eq!(snapped(slider, shape, bass, 0.2), 0.0);
+        assert_eq!(snapped(slider, shape, bass, -0.2), 0.0);
+        assert_eq!(snapped(slider, shape, bass, 0.3), 0.3);
+        assert_eq!(snapped(slider, shape, bass, 1.0), 1.0);
     }
 
     #[test]
