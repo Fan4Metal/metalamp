@@ -49,9 +49,17 @@ pub fn field_label(name: &str) -> Option<&'static str> {
 
 /// `template` with its fields filled by `field` (none: no such field).
 pub fn render(template: &str, field: &dyn Fn(&str) -> Option<String>) -> String {
+    render_checked(template, field).0
+}
+
+/// `render`, and the fields outside the parts in square brackets that
+/// were empty (a name made of them lacks something).
+pub fn render_checked(template: &str, field: &dyn Fn(&str) -> Option<String>) -> (String, Vec<String>) {
     let chars: Vec<char> = template.chars().collect();
     let mut at = 0;
-    render_part(&chars, &mut at, field, false).0
+    let mut empty = Vec::new();
+    let text = render_part(&chars, &mut at, field, false, &mut empty).0;
+    (text, empty)
 }
 
 /// A track's line by `template`; the file's name when the line would be
@@ -89,6 +97,7 @@ fn render_part(
     at: &mut usize,
     field: &dyn Fn(&str) -> Option<String>,
     inner: bool,
+    empty: &mut Vec<String>,
 ) -> (String, bool) {
     let mut out = String::new();
     let mut filled = false;
@@ -98,7 +107,7 @@ fn render_part(
         match c {
             ']' if inner => return (out, filled),
             '[' => {
-                let (text, any) = render_part(chars, at, field, true);
+                let (text, any) = render_part(chars, at, field, true, empty);
                 if any {
                     out.push_str(&text);
                     filled = true;
@@ -110,6 +119,9 @@ fn render_part(
                 let name: Option<String> = end.map(|e| chars[*at..*at + e].iter().collect());
                 match name.as_deref().and_then(|n| field(n).map(|v| (n.len(), v))) {
                     Some((len, value)) => {
+                        if !inner && value.trim().is_empty() {
+                            empty.extend(name.clone());
+                        }
                         *at += len + 1;
                         filled |= !value.trim().is_empty();
                         out.push_str(&value);
@@ -156,6 +168,9 @@ mod tests {
         assert_eq!(render("%nope% 100% %title", &fields), "%nope% 100% %title");
         // An unclosed part runs to the end.
         assert_eq!(render("%title%[ – %artist%", &fields), "Беспечный ангел – Ария");
+        // The empty fields outside the parts.
+        assert_eq!(render_checked("(%year%) %album%", &fields).1, ["album"]);
+        assert!(render_checked("[%album% – ]%title%", &fields).1.is_empty());
     }
 
     #[test]

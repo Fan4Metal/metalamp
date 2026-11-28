@@ -1000,6 +1000,9 @@ pub struct FilePlan {
     pub skip: Option<String>,
     /// The fields it is to have and lacks.
     pub missing: Vec<Need>,
+    /// The fields its name's template needs and it lacks: it keeps its
+    /// name (no `01 - .mp3`).
+    pub unnamed: Vec<&'static str>,
     pub read_only: bool,
 }
 
@@ -1399,7 +1402,7 @@ pub fn plan(
                 .or(numbers[i])
                 .map(|t| format!("{t:0width$}"))
                 .unwrap_or_default();
-            let name = crate::title_format::render(&template, &|field| {
+            let (name, empty) = crate::title_format::render_checked(&template, &|field| {
                 Some(match field {
                     "track" => track.clone(),
                     "title" => v[at(Key::Title)].clone(),
@@ -1419,7 +1422,8 @@ pub fn plan(
                 .extension()
                 .map(|e| e.to_string_lossy().to_lowercase())
                 .unwrap_or_default();
-            if !name.is_empty() && !v[at(Key::Title)].trim().is_empty() {
+            plan.unnamed = labels_of(&empty);
+            if !name.is_empty() && plan.unnamed.is_empty() {
                 let new = f.path.with_file_name(format!("{name}.{extension}"));
                 if new.file_name() != f.path.file_name() {
                     plan.rename = Some(new);
@@ -1454,6 +1458,25 @@ pub fn plan(
             format!("{clashes} файл(ов) получили бы имя, которое уже занято: их имена не меняются.")
         ));
     }
+    let unnamed = files.iter().filter(|f| !f.unnamed.is_empty()).count();
+    if unnamed > 0 {
+        let mut lacking: Vec<&str> = Vec::new();
+        for l in files.iter().flat_map(|f| &f.unnamed) {
+            if !lacking.contains(l) {
+                lacking.push(l);
+            }
+        }
+        warnings.push(tr!(
+            format!(
+                "{unnamed} files keep their names: the template needs {}, and they lack it.",
+                quoted(&lacking)
+            ),
+            format!(
+                "{unnamed} файл(ов) не переименовываются: шаблону нужны поля {}, а они пустые.",
+                quoted(&lacking)
+            )
+        ));
+    }
 
     let mut new_folder = None;
     if profile.rename_folder && n > 0 {
@@ -1478,7 +1501,7 @@ pub fn plan(
             ));
         } else {
             let v = &values[0];
-            let name = crate::title_format::render(&profile.folder_name, &|field| {
+            let (name, empty) = crate::title_format::render_checked(&profile.folder_name, &|field| {
                 Some(match field {
                     "album" => v[at(Key::Album)].clone(),
                     "albumartist" => v[at(Key::AlbumArtist)].clone(),
@@ -1490,7 +1513,19 @@ pub fn plan(
             });
             let name = named(&name, profile.underscores);
             let new = source.folder.with_file_name(&name);
-            if !name.is_empty() && new.file_name() != source.folder.file_name() {
+            let lacking = labels_of(&empty);
+            if !lacking.is_empty() {
+                warnings.push(tr!(
+                    format!(
+                        "The folder is not renamed: its template needs {}, and the tags lack it.",
+                        quoted(&lacking)
+                    ),
+                    format!(
+                        "Папка не переименовывается: шаблону нужны поля {}, а в тегах они пустые.",
+                        quoted(&lacking)
+                    )
+                ));
+            } else if !name.is_empty() && new.file_name() != source.folder.file_name() {
                 if new.exists() && folded(&new) != folded(&source.folder) {
                     warnings.push(tr!(
                         format!("A folder named \"{name}\" exists: the folder is not renamed."),
@@ -1599,6 +1634,27 @@ pub fn plan(
         },
         folder_template: profile.folder_name.clone(),
     }
+}
+
+/// The names people read of a template's fields.
+fn labels_of(fields: &[String]) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    for f in fields {
+        let label = crate::title_format::field_label(f).unwrap_or("?");
+        if !out.contains(&label) {
+            out.push(label);
+        }
+    }
+    out
+}
+
+/// «A», «B».
+pub fn quoted(labels: &[&str]) -> String {
+    let quoted: Vec<String> = labels
+        .iter()
+        .map(|l| tr!(format!("\"{l}\""), format!("«{l}»")))
+        .collect();
+    quoted.join(", ")
 }
 
 /// A name for a file or a folder (`as_file_name`), its spaces made
@@ -2089,6 +2145,38 @@ mod tests {
         };
         let again = super::plan(&prepared, &Profile::default(), &GenreChoice::Preset, &mut no_cover);
         assert!(again.is_empty(), "{again:#?}");
+    }
+
+    #[test]
+    fn names_lacking_a_field_kept() {
+        // No year, and a file with neither a number nor a title, its name
+        // without digits: "() Album" and " - .mp3" are not made.
+        let source = Source {
+            folder: PathBuf::from(r"Z:\Music\Album"),
+            one_place: true,
+            files: vec![
+                file(
+                    r"Z:\Music\Album\one.mp3",
+                    &[(Key::Title, "One"), (Key::Album, "Album"), (Key::Track, "1")],
+                    &[],
+                ),
+                file(r"Z:\Music\Album\two.mp3", &[(Key::Album, "Album")], &[]),
+            ],
+            ..Default::default()
+        };
+        let profile = Profile {
+            fill: Vec::new(),
+            ..Profile::default()
+        };
+        let plan = plan(&source, &profile, &GenreChoice::Preset, &mut no_cover);
+        assert_eq!(plan.new_folder, None);
+        assert!(plan.warnings.iter().any(|w| w.contains("Year") || w.contains("Год")), "{:?}", plan.warnings);
+        assert_eq!(
+            plan.files[0].rename.as_deref(),
+            Some(Path::new(r"Z:\Music\Album\01 - One.mp3"))
+        );
+        assert_eq!(plan.files[1].rename, None);
+        assert_eq!(plan.files[1].unnamed.len(), 2, "{:?}", plan.files[1].unnamed);
     }
 
     /// `METALAMP_ALBUM=<folder> cargo test --release prepares_a_copy -- --ignored --nocapture`:

@@ -803,13 +803,26 @@ fn preview(ui: &mut Ui, plan: &Plan, height: f32, only_changes: bool) {
             // The files.
             let mut hidden = 0;
             for f in &plan.files {
-                if only_changes && !f.changes() && f.skip.is_none() && f.missing.is_empty() {
+                if only_changes
+                    && !f.changes()
+                    && f.skip.is_none()
+                    && f.missing.is_empty()
+                    && f.unnamed.is_empty()
+                {
                     hidden += 1;
                     continue;
                 }
                 let mut rows = Vec::new();
                 if let Some(to) = &f.rename {
                     rows.push(change(tr!("File name", "Имя файла"), &name_of(&f.path), &name_of(to)));
+                } else if !f.unnamed.is_empty() {
+                    let why = prepare::quoted(&f.unnamed);
+                    rows.push(Row::from([
+                        RichText::new(tr!("File name", "Имя файла")).color(palette::error()),
+                        RichText::new(name_of(&f.path)).color(palette::text()),
+                        RichText::new(tr!(format!("kept: no {why}"), format!("не меняется: пусто {why}")))
+                            .color(palette::error()),
+                    ]));
                 }
                 for (key, before, after) in &f.fields {
                     let mut row = change(key.label(), before, after);
