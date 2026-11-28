@@ -330,6 +330,17 @@ pub struct Profile {
     pub only_id3v2: bool,
     /// The fields every file is to have.
     pub required: Vec<Need>,
+    /// Fields read from the files' and the folder's names by masks
+    /// (Tag&Rename's "Get Tags from File Name"), into the empty ones.
+    pub from_names: bool,
+    /// What is read goes over the tags' values too.
+    pub names_over_tags: bool,
+    /// The files' masks: each file is read by the first that fits it.
+    pub file_masks: Vec<String>,
+    /// The folder's masks: the first that fits.
+    pub folder_masks: Vec<String>,
+    /// `_` in the names read as a space.
+    pub names_underscores: bool,
     /// The letters genres are separated by in one field (`Synth, Pop`);
     /// none: the field is one genre.
     pub genre_split: String,
@@ -378,6 +389,21 @@ pub const EDITIONS: &str = "deluxe, limited, special, expanded, anniversary, col
 pub const EDITIONS_BEFORE: &str = "deluxe, limited, special, expanded, anniversary, collector, \
     remaster, reissue, bonus track, edition, digipak, japan, tour, version";
 
+/// The files' masks by default: `01 - Title`, `01. Title`, `01 Title`.
+pub const FILE_MASKS: [&str; 3] = ["%track% - %title%", "%track%. %title%", "%track% %title%"];
+
+/// The folder's masks by default; the last takes any name as the album's.
+pub const FOLDER_MASKS: [&str; 8] = [
+    "(%year%) %album%",
+    "%year% - %album%",
+    "%artist% - %year% - %album%",
+    "%artist% - (%year%) %album%",
+    "%artist% - %album% (%year%)",
+    "%album% (%year%)",
+    "%artist% - %album%",
+    "%album%",
+];
+
 impl Default for Profile {
     /// Its first owner's way (Tag&Rename's), the preset by default.
     fn default() -> Self {
@@ -417,6 +443,11 @@ impl Default for Profile {
                 Need::Track,
                 Need::Cover,
             ],
+            from_names: true,
+            names_over_tags: false,
+            file_masks: FILE_MASKS.iter().map(|m| (*m).to_owned()).collect(),
+            folder_masks: FOLDER_MASKS.iter().map(|m| (*m).to_owned()).collect(),
+            names_underscores: true,
             tag_cover: TagCover::Fitting,
             cover_min: 500,
             cover_max: 1500,
@@ -463,6 +494,7 @@ pub fn first_presets() -> Vec<Preset> {
         genre_count: 0,
         genre_from_artist: false,
         genre_spelling: false,
+        from_names: false,
         ..Profile::default()
     };
     vec![
@@ -601,6 +633,26 @@ pub enum GenreChoice {
     Keep,
     /// This one in every file.
     Own(String),
+}
+
+/// Which masks read the names this time, apart from the preset.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum MaskChoice {
+    /// The preset's.
+    #[default]
+    Preset,
+    /// None: nothing is read from the names.
+    Off,
+    /// This one.
+    Own(String),
+}
+
+/// What is chosen for the album prepared, apart from its preset.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ThisAlbum {
+    pub genre: GenreChoice,
+    pub file_mask: MaskChoice,
+    pub folder_mask: MaskChoice,
 }
 
 /// A genre field as the preset wants it: split at `genre_split`, each
@@ -845,6 +897,146 @@ fn disc_of_folder(path: &Path) -> Option<u32> {
     digits.parse().ok()
 }
 
+/// The fields a mask reads: a template's, and `skip` for a part that is
+/// not read.
+pub const MASK_FIELDS: [&str; 9] = [
+    "track",
+    "title",
+    "artist",
+    "album",
+    "albumartist",
+    "year",
+    "disc",
+    "genre",
+    "skip",
+];
+
+/// A mask's piece: text as it is, or a field.
+enum Piece {
+    Text(Vec<char>),
+    Field(String),
+}
+
+fn pieces(mask: &str) -> Vec<Piece> {
+    let chars: Vec<char> = mask.chars().collect();
+    let mut out = Vec::new();
+    let mut text = Vec::new();
+    let mut at = 0;
+    while at < chars.len() {
+        if chars[at] == '%'
+            && let Some(end) = chars[at + 1..].iter().position(|&c| c == '%')
+        {
+            let name: String = chars[at + 1..at + 1 + end].iter().collect::<String>().to_lowercase();
+            if MASK_FIELDS.contains(&name.as_str()) {
+                if !text.is_empty() {
+                    out.push(Piece::Text(std::mem::take(&mut text)));
+                }
+                out.push(Piece::Field(name));
+                at += end + 2;
+                continue;
+            }
+        }
+        text.push(chars[at]);
+        at += 1;
+    }
+    if !text.is_empty() {
+        out.push(Piece::Text(text));
+    }
+    out
+}
+
+/// What `mask` reads from `name`: each field and its value (trimmed);
+/// none when the name does not fit it. `%year%` is four digits, `%track%`
+/// and `%disc%` one to three, the other fields anything but blank; the
+/// text between them is matched in any case.
+pub fn read_name(mask: &str, name: &str) -> Option<Vec<(String, String)>> {
+    let pieces = pieces(mask);
+    if !pieces.iter().any(|p| matches!(p, Piece::Field(f) if f != "skip")) {
+        return None;
+    }
+    let chars: Vec<char> = name.chars().collect();
+    let mut found = Vec::new();
+    fits_mask(&pieces, &chars, &mut found).then_some(found)
+}
+
+fn fits_mask(pieces: &[Piece], text: &[char], found: &mut Vec<(String, String)>) -> bool {
+    let Some((first, rest)) = pieces.split_first() else {
+        return text.is_empty();
+    };
+    match first {
+        Piece::Text(t) => {
+            text.len() >= t.len()
+                && text[..t.len()]
+                    .iter()
+                    .zip(t)
+                    .all(|(a, b)| a.to_lowercase().eq(b.to_lowercase()))
+                && fits_mask(rest, &text[t.len()..], found)
+        }
+        Piece::Field(name) => {
+            let digits = matches!(name.as_str(), "year" | "track" | "disc");
+            // Numbers as long as they go; text as short as fits, the last
+            // field all that is left.
+            let lengths: Vec<usize> = match name.as_str() {
+                "year" => vec![4],
+                "track" | "disc" => vec![3, 2, 1],
+                _ if rest.is_empty() => vec![text.len()],
+                _ => (1..=text.len()).collect(),
+            };
+            for len in lengths.into_iter().filter(|&l| l <= text.len()) {
+                let value: String = text[..len].iter().collect();
+                let ok = if digits {
+                    value.chars().all(|c| c.is_ascii_digit())
+                } else {
+                    !value.trim().is_empty()
+                };
+                if !ok {
+                    continue;
+                }
+                found.push((name.clone(), value.trim().to_owned()));
+                if fits_mask(rest, &text[len..], found) {
+                    return true;
+                }
+                found.pop();
+            }
+            false
+        }
+    }
+}
+
+/// What a mask reads `path` as: as many of its last parts as the mask
+/// has (`%artist%\%year% - %album%` two), a file's without its extension,
+/// `_` made spaces when asked.
+fn name_for_mask(mask: &str, path: &Path, file: bool, underscores: bool) -> String {
+    let levels = mask.matches(['\\', '/']).count() + 1;
+    let path = if file { path.with_extension("") } else { path.to_path_buf() };
+    let parts: Vec<String> = path
+        .components()
+        .rev()
+        .take(levels)
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    let name: Vec<String> = parts.into_iter().rev().collect();
+    let name = name.join("\\");
+    if underscores { name.replace('_', " ") } else { name }
+}
+
+/// The tag's field a mask's field fills: the folder's `%artist%` is the
+/// album artist.
+fn mask_key(field: &str, folder: bool) -> Option<Key> {
+    Some(match field {
+        "track" => Key::Track,
+        "title" => Key::Title,
+        "artist" if folder => Key::AlbumArtist,
+        "artist" => Key::Artist,
+        "album" => Key::Album,
+        "albumartist" => Key::AlbumArtist,
+        "year" => Key::Year,
+        "disc" => Key::Disc,
+        "genre" => Key::Genre,
+        _ => return None,
+    })
+}
+
 /// `title` without the parts in brackets at its end that name an edition
 /// (any of `words`, separated by commas, in any case).
 pub fn without_edition(title: &str, words: &str, all: bool) -> String {
@@ -1003,6 +1195,9 @@ pub struct FilePlan {
     /// The fields its name's template needs and it lacks: it keeps its
     /// name (no `01 - .mp3`).
     pub unnamed: Vec<&'static str>,
+    /// The mask its name was read by, and the fields it filled.
+    pub mask: Option<String>,
+    pub from_name: Vec<Key>,
     pub read_only: bool,
 }
 
@@ -1049,6 +1244,14 @@ pub struct Plan {
     pub album_cuts: Vec<Cut>,
     /// The folder's template, when the folder is renamed.
     pub folder_template: String,
+    /// The files' masks were tried; each used, and how many files it read.
+    pub file_masks_tried: bool,
+    pub file_masks: Vec<(String, usize)>,
+    /// The folder's masks were tried; the one that fitted, and the fields
+    /// it filled (in some file).
+    pub folder_masks_tried: bool,
+    pub folder_mask: Option<String>,
+    pub from_folder: Vec<Key>,
     /// The genre most files have, before and after.
     pub genre: (String, String),
 }
@@ -1087,9 +1290,10 @@ fn fits(profile: &Profile, size: Option<(u32, u32)>, bytes: usize) -> bool {
 pub fn plan(
     source: &Source,
     profile: &Profile,
-    genre: &GenreChoice,
+    this: &ThisAlbum,
     make: &mut dyn FnMut(usize, Option<u32>) -> Option<Made>,
 ) -> Plan {
+    let genre = &this.genre;
     let n = source.files.len();
     let original: Vec<[String; MAIN]> = source
         .files
@@ -1101,6 +1305,86 @@ pub fn plan(
     let mut warnings = Vec::new();
     let unify = |u: Unify| profile.unify.contains(&u);
     let fill = |f: Fill| profile.fill.contains(&f);
+
+    // The names read by the masks: each file by the first that fits it,
+    // the folder by the first that fits; into the empty fields (or all).
+    let masks = |choice: &MaskChoice, preset: &[String]| -> Vec<String> {
+        match choice {
+            MaskChoice::Preset if profile.from_names => preset.to_vec(),
+            MaskChoice::Own(m) => vec![m.clone()],
+            _ => Vec::new(),
+        }
+        .into_iter()
+        .filter(|m| !m.trim().is_empty())
+        .collect()
+    };
+    let file_masks = masks(&this.file_mask, &profile.file_masks);
+    let folder_masks = masks(&this.folder_mask, &profile.folder_masks);
+    let take = |slot: &mut String, value: &str| {
+        let value = value.trim();
+        let free = slot.trim().is_empty() || profile.names_over_tags;
+        if value.is_empty() || !free || slot.trim() == value {
+            return false;
+        }
+        *slot = value.to_owned();
+        true
+    };
+    let mut read_by: Vec<Option<String>> = vec![None; n];
+    let mut from_name: Vec<Vec<Key>> = vec![Vec::new(); n];
+    for (i, f) in source.files.iter().enumerate() {
+        for mask in &file_masks {
+            let name = name_for_mask(mask, &f.path, true, profile.names_underscores);
+            let Some(found) = read_name(mask, &name) else {
+                continue;
+            };
+            for (field, value) in found {
+                if let Some(k) = mask_key(&field, false)
+                    && take(&mut values[i][at(k)], &value)
+                {
+                    from_name[i].push(k);
+                }
+            }
+            read_by[i] = Some(mask.clone());
+            break;
+        }
+    }
+    let mut folder_mask = None;
+    let mut from_folder: Vec<Key> = Vec::new();
+    if source.one_place && n > 0 {
+        for mask in &folder_masks {
+            let name = name_for_mask(mask, &source.folder, false, profile.names_underscores);
+            let Some(found) = read_name(mask, &name) else {
+                continue;
+            };
+            for (field, value) in found {
+                let Some(k) = mask_key(&field, true) else {
+                    continue;
+                };
+                // A field of the album the tags know (or the album artist,
+                // known from the artists) is not taken from the folder:
+                // "Best of - Vol 2" is no artist's.
+                let empty = |k: Key| values.iter().all(|v| v[at(k)].trim().is_empty());
+                let known = !empty(k) || (k == Key::AlbumArtist && !empty(Key::Artist));
+                if known && !profile.names_over_tags {
+                    continue;
+                }
+                for v in &mut values {
+                    if take(&mut v[at(k)], &value) && !from_folder.contains(&k) {
+                        from_folder.push(k);
+                    }
+                }
+            }
+            folder_mask = Some(mask.clone());
+            break;
+        }
+    }
+    let mut masks_used: Vec<(String, usize)> = Vec::new();
+    for m in read_by.iter().flatten() {
+        match masks_used.iter_mut().find(|(u, _)| u == m) {
+            Some((_, count)) => *count += 1,
+            None => masks_used.push((m.clone(), 1)),
+        }
+    }
 
     if profile.album_title {
         for v in &mut values {
@@ -1311,6 +1595,8 @@ pub fn plan(
         let mut plan = FilePlan {
             path: f.path.clone(),
             read_only: f.read_only,
+            mask: read_by[i].clone(),
+            from_name: from_name[i].clone(),
             ..FilePlan::default()
         };
         match &f.tag {
@@ -1633,6 +1919,11 @@ pub fn plan(
             Vec::new()
         },
         folder_template: profile.folder_name.clone(),
+        file_masks_tried: !file_masks.is_empty(),
+        file_masks: masks_used,
+        folder_masks_tried: !folder_masks.is_empty() && source.one_place,
+        folder_mask,
+        from_folder,
     }
 }
 
@@ -2011,7 +2302,11 @@ mod tests {
             ..Default::default()
         };
         let genre = |source: &Source, choice: &GenreChoice| {
-            plan(source, &Profile::default(), choice, &mut no_cover).genre.1
+            let this = ThisAlbum {
+                genre: choice.clone(),
+                ..ThisAlbum::default()
+            };
+            plan(source, &Profile::default(), &this, &mut no_cover).genre.1
         };
         assert_eq!(genre(&source, &GenreChoice::Preset), "Dark Synth");
         source.known.artists.insert("meteor".into(), "Synthwave".into());
@@ -2094,7 +2389,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let plan = plan(&source, &Profile::default(), &GenreChoice::Preset, &mut no_cover);
+        let plan = plan(&source, &Profile::default(), &ThisAlbum::default(), &mut no_cover);
         let first = &plan.files[0];
         let field = |f: &FilePlan, k: Key| f.fields.iter().find(|(key, ..)| *key == k).map(|(_, _, a)| a.clone());
         assert_eq!(field(first, Key::Album).as_deref(), Some("Amaranthe"));
@@ -2143,8 +2438,86 @@ mod tests {
                 .collect(),
             ..source.clone()
         };
-        let again = super::plan(&prepared, &Profile::default(), &GenreChoice::Preset, &mut no_cover);
+        let again = super::plan(&prepared, &Profile::default(), &ThisAlbum::default(), &mut no_cover);
         assert!(again.is_empty(), "{again:#?}");
+    }
+
+    #[test]
+    fn names_read_by_masks() {
+        let read = |mask: &str, name: &str| {
+            read_name(mask, name).map(|f| f.into_iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>())
+        };
+        assert_eq!(
+            read("%track% - %title%", "01 - Hunger - Part 1").unwrap(),
+            ["track=01", "title=Hunger - Part 1"]
+        );
+        assert_eq!(read("%track% - %title%", "01. Song"), None);
+        assert_eq!(read("%track%. %title%", "01. Song").unwrap(), ["track=01", "title=Song"]);
+        // A year is four digits: "Amaranthe - 2011" is no "%year% - %album%".
+        assert_eq!(read("%year% - %album%", "Amaranthe - 2011"), None);
+        assert_eq!(
+            read("%artist% - %year% - %album%", "Ария - 1998 - Генератор зла").unwrap(),
+            ["artist=Ария", "year=1998", "album=Генератор зла"]
+        );
+        assert_eq!(read("%skip% %track% %title%", "CD1 03 Song").unwrap(), ["skip=CD1", "track=03", "title=Song"]);
+        assert_eq!(read("no fields", "no fields"), None);
+        assert_eq!(
+            name_for_mask(r"%artist%\%year% - %album%", Path::new(r"G:\T\Band\2021 - A_B"), false, true),
+            r"Band\2021 - A B"
+        );
+        assert_eq!(name_for_mask("%track% - %title%", Path::new(r"G:\T\01 - A.b.mp3"), true, false), "01 - A.b");
+    }
+
+    #[test]
+    fn an_album_without_tags() {
+        let folder = r"G:\Torrents\Temperance\2021 - Melodies of Green and Blue (Acoustic Version) (EP)";
+        let source = Source {
+            folder: PathBuf::from(folder),
+            one_place: true,
+            files: vec![
+                file(&format!(r"{folder}\01 - Pure Life Unfolds.mp3"), &[], &[]),
+                file(&format!(r"{folder}\02_-_Start_Another_Round.mp3"), &[], &[]),
+            ],
+            ..Default::default()
+        };
+        let field = |f: &FilePlan, k: Key| f.fields.iter().find(|(key, ..)| *key == k).map(|(_, _, a)| a.clone());
+        let plan = plan(&source, &Profile::default(), &ThisAlbum::default(), &mut no_cover);
+        let second = &plan.files[1];
+        assert_eq!(field(second, Key::Title).as_deref(), Some("Start Another Round"));
+        assert_eq!(field(second, Key::Track).as_deref(), Some("02"));
+        assert_eq!(field(second, Key::Album).as_deref(), Some("Melodies of Green and Blue"));
+        assert_eq!(field(second, Key::Year).as_deref(), Some("2021"));
+        assert_eq!(second.from_name, [Key::Track, Key::Title]);
+        assert_eq!(plan.folder_mask.as_deref(), Some("%year% - %album%"));
+        assert_eq!(plan.file_masks, [("%track% - %title%".to_owned(), 2)]);
+        assert_eq!(
+            plan.new_folder.as_deref(),
+            Some(Path::new(r"G:\Torrents\Temperance\(2021) Melodies of Green and Blue"))
+        );
+        assert_eq!(second.rename.as_deref().and_then(Path::file_name), Some("02 - Start Another Round.mp3".as_ref()));
+        // The artist from the folder above, by one's own mask.
+        let this = ThisAlbum {
+            folder_mask: MaskChoice::Own(r"%artist%\%year% - %album%".into()),
+            ..ThisAlbum::default()
+        };
+        let plan = super::plan(&source, &Profile::default(), &this, &mut no_cover);
+        assert_eq!(field(&plan.files[0], Key::AlbumArtist).as_deref(), Some("Temperance"));
+        assert_eq!(field(&plan.files[0], Key::Artist).as_deref(), Some("Temperance"));
+        // Not when a track has an artist: the album artist is theirs.
+        let mut tagged = source.clone();
+        tagged.files[1] = file(&format!(r"{folder}\02 - Start Another Round.mp3"), &[(Key::Artist, "Band")], &[]);
+        let plan = super::plan(&tagged, &Profile::default(), &this, &mut no_cover);
+        assert_eq!(field(&plan.files[0], Key::AlbumArtist).as_deref(), Some("Band"));
+        assert!(!plan.from_folder.contains(&Key::AlbumArtist));
+        // Not read: nothing but the title from the name.
+        let this = ThisAlbum {
+            file_mask: MaskChoice::Off,
+            folder_mask: MaskChoice::Off,
+            ..ThisAlbum::default()
+        };
+        let plan = super::plan(&source, &Profile::default(), &this, &mut no_cover);
+        assert_eq!(field(&plan.files[1], Key::Album), None);
+        assert_eq!(field(&plan.files[1], Key::Title).as_deref(), Some("Start_Another_Round"));
     }
 
     #[test]
@@ -2168,7 +2541,7 @@ mod tests {
             fill: Vec::new(),
             ..Profile::default()
         };
-        let plan = plan(&source, &profile, &GenreChoice::Preset, &mut no_cover);
+        let plan = plan(&source, &profile, &ThisAlbum::default(), &mut no_cover);
         assert_eq!(plan.new_folder, None);
         assert!(plan.warnings.iter().any(|w| w.contains("Year") || w.contains("Год")), "{:?}", plan.warnings);
         assert_eq!(
@@ -2209,7 +2582,7 @@ mod tests {
             ..Profile::default()
         };
         let source = read(paths);
-        let first = plan(&source, &profile, &GenreChoice::Preset, &mut made(&source));
+        let first = plan(&source, &profile, &ThisAlbum::default(), &mut made(&source));
         println!("folder: {:?} -> {:?}", first.folder, first.new_folder);
         println!("folder.jpg written: {}", first.folder_jpg.is_some());
         for w in &first.warnings {
@@ -2238,7 +2611,7 @@ mod tests {
             .map(walkdir::DirEntry::into_path)
             .collect();
         let source = read(paths);
-        let again = plan(&source, &profile, &GenreChoice::Preset, &mut made(&source));
+        let again = plan(&source, &profile, &ThisAlbum::default(), &mut made(&source));
         let _ = std::fs::remove_dir_all(&root);
         assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
         let left: Vec<String> = again

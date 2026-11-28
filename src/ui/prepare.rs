@@ -21,8 +21,8 @@ use egui::{Align, Key, Layout, RichText, Ui, vec2};
 
 use crate::library::edit::{self, Item, TagPart};
 use crate::library::prepare::{
-    self, CoverFrom, DiscFormat, Extras, Fill, FolderJpg, GenreChoice, Kind, Known, Made, Need,
-    Outcome, Plan, Preset, Profile, Source, TagCover, TrackFormat, Unify,
+    self, CoverFrom, DiscFormat, Extras, Fill, FolderJpg, GenreChoice, Kind, Known, Made, MaskChoice,
+    Need, Outcome, Plan, Preset, Profile, Source, TagCover, ThisAlbum, TrackFormat, Unify,
 };
 use crate::palette;
 use crate::settings::{CoverSide, Settings};
@@ -58,12 +58,15 @@ pub struct PrepareWindow {
     source: Option<Arc<Source>>,
     /// What the library knows, given to the source read.
     known: Known,
-    /// The album's genre this time.
-    genre: GenreChoice,
+    /// The album's genre and masks this time.
+    this: ThisAlbum,
     /// The genre typed for this album.
     own_genre: String,
-    /// The plan for the profile and the genre it was made of.
-    plan: Option<(Profile, GenreChoice, Arc<Plan>)>,
+    /// The masks typed for this album.
+    own_file_mask: String,
+    own_folder_mask: String,
+    /// The plan for the profile and the choices it was made of.
+    plan: Option<(Profile, ThisAlbum, Arc<Plan>)>,
     /// The covers made ready for the tags, by candidate and side.
     made: HashMap<(usize, Option<u32>), Option<Made>>,
     applying: Option<Applying>,
@@ -104,12 +107,13 @@ impl PrepareWindow {
             only_changes: self.only_changes,
             ..PrepareWindow::default()
         };
-        // `METALAMP_PREPARE_TAB=tags|cover|names|folder`: the presets'
+        // `METALAMP_PREPARE_TAB=tags|read|genre|cover|names|folder`: the presets'
         // editor on that tab (GUI checks).
         if let Ok(tab) = std::env::var("METALAMP_PREPARE_TAB") {
             self.editor.open = true;
             self.editor.tab = match tab.as_str() {
                 "genre" => Tab::Genre,
+                "read" => Tab::Read,
                 "cover" => Tab::Cover,
                 "names" => Tab::Names,
                 "folder" => Tab::Folder,
@@ -217,7 +221,7 @@ impl PrepareWindow {
             && self
                 .plan
                 .as_ref()
-                .is_none_or(|(p, g, _)| *p != profile || *g != self.genre)
+                .is_none_or(|(p, t, _)| *p != profile || *t != self.this)
         {
             let made = &mut self.made;
             let mut make = |i: usize, side: Option<u32>| {
@@ -225,8 +229,8 @@ impl PrepareWindow {
                     .or_insert_with(|| prepare::make_cover(&source.candidates[i].bytes, side))
                     .clone()
             };
-            let plan = prepare::plan(source, &profile, &self.genre, &mut make);
-            self.plan = Some((profile, self.genre.clone(), Arc::new(plan)));
+            let plan = prepare::plan(source, &profile, &self.this, &mut make);
+            self.plan = Some((profile, self.this.clone(), Arc::new(plan)));
         }
 
         let busy = self.applying.is_some();
@@ -295,7 +299,11 @@ impl PrepareWindow {
                             });
                         });
                     });
-                    ui.add_enabled_ui(!busy, |ui| self.genre_row(ui));
+                    ui.add_enabled_ui(!busy, |ui| {
+                        self.genre_row(ui);
+                        self.mask_row(ui, false);
+                        self.mask_row(ui, true);
+                    });
                     ui.add_space(4.0);
                     match (&self.plan, &self.source) {
                         (Some((_, _, plan)), Some(_)) => {
@@ -390,7 +398,7 @@ impl PrepareWindow {
     fn genre_row(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
             ui.label(tr!("Genre", "Жанр"));
-            let mode = match &self.genre {
+            let mode = match &self.this.genre {
                 GenreChoice::Preset => 0,
                 GenreChoice::Keep => 1,
                 GenreChoice::Own(_) => 2,
@@ -399,10 +407,10 @@ impl PrepareWindow {
                 .selectable_label(mode == 0, tr!("By the preset", "По пресету"))
                 .clicked()
             {
-                self.genre = GenreChoice::Preset;
+                self.this.genre = GenreChoice::Preset;
             }
             if ui.selectable_label(mode == 1, tr!("As it is", "Как есть")).clicked() {
-                self.genre = GenreChoice::Keep;
+                self.this.genre = GenreChoice::Keep;
             }
             if ui.selectable_label(mode == 2, tr!("Own", "Свой")).clicked() {
                 if self.own_genre.is_empty()
@@ -410,7 +418,7 @@ impl PrepareWindow {
                 {
                     self.own_genre = plan.genre.1.clone();
                 }
-                self.genre = GenreChoice::Own(self.own_genre.clone());
+                self.this.genre = GenreChoice::Own(self.own_genre.clone());
             }
             if mode == 2 {
                 let field = ui.add(
@@ -475,7 +483,7 @@ impl PrepareWindow {
                     self.own_genre = g;
                 }
                 if field.changed() || picked {
-                    self.genre = GenreChoice::Own(self.own_genre.clone());
+                    self.this.genre = GenreChoice::Own(self.own_genre.clone());
                 }
             }
             if let Some((_, _, plan)) = &self.plan {
@@ -497,6 +505,159 @@ impl PrepareWindow {
             }
         });
     }
+}
+
+impl PrepareWindow {
+    /// The masks the files' names (or the folder's) are read by this time:
+    /// the preset's, none, or one's own; then what they read.
+    fn mask_row(&mut self, ui: &mut Ui, folder: bool) {
+        let (choice, own) = if folder {
+            (&mut self.this.folder_mask, &mut self.own_folder_mask)
+        } else {
+            (&mut self.this.file_mask, &mut self.own_file_mask)
+        };
+        let plan = self.plan.as_ref().map(|(_, _, p)| p.clone());
+        ui.horizontal(|ui| {
+            let label = if folder {
+                tr!("Folder's name", "Имя папки")
+            } else {
+                tr!("Files' names", "Имена файлов")
+            };
+            ui.label(label).on_hover_text(tr!(
+                "Empty fields read from the names by masks",
+                "Пустые поля берутся из имён по маскам"
+            ));
+            let mode = match choice {
+                MaskChoice::Preset => 0,
+                MaskChoice::Off => 1,
+                MaskChoice::Own(_) => 2,
+            };
+            if ui.selectable_label(mode == 0, tr!("By the preset", "По пресету")).clicked() {
+                *choice = MaskChoice::Preset;
+            }
+            if ui.selectable_label(mode == 1, tr!("Not read", "Не брать")).clicked() {
+                *choice = MaskChoice::Off;
+            }
+            if ui.selectable_label(mode == 2, tr!("Own mask", "Своя маска")).clicked() {
+                if own.is_empty() {
+                    let used = plan.as_ref().and_then(|p| {
+                        if folder {
+                            p.folder_mask.clone()
+                        } else {
+                            p.file_masks.first().map(|(m, _)| m.clone())
+                        }
+                    });
+                    *own = used.unwrap_or_else(|| {
+                        if folder { prepare::FOLDER_MASKS[0] } else { prepare::FILE_MASKS[0] }.to_owned()
+                    });
+                }
+                *choice = MaskChoice::Own(own.clone());
+            }
+            if mode == 2 {
+                let field = ui.add(egui::TextEdit::singleline(own).desired_width(220.0));
+                // Only what is typed or added sets the mask: a click on the
+                // other two in this frame stands.
+                let added = mask_fields_menu(ui, own);
+                if field.changed() || added {
+                    *choice = MaskChoice::Own(own.clone());
+                }
+            }
+            if let Some(plan) = &plan {
+                let (text, colour) = mask_status(plan, folder);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.add(egui::Label::new(RichText::new(text).color(colour)).truncate());
+                });
+            }
+        });
+    }
+}
+
+/// The "+" menu of a mask's fields; true when one was added.
+fn mask_fields_menu(ui: &mut Ui, text: &mut String) -> bool {
+    let mut added = false;
+    ui.menu_button("+", |ui| {
+        for field in prepare::MASK_FIELDS {
+            let name = crate::title_format::field_label(field).unwrap_or(tr!("Skip a part", "Пропустить часть"));
+            if ui.button(format!("{name}  %{field}%")).clicked() {
+                text.push_str(&format!("%{field}%"));
+                added = true;
+                ui.close();
+            }
+        }
+    })
+    .response
+    .on_hover_text(tr!("Add a field", "Добавить поле"));
+    added
+}
+
+/// What the masks read, as the row of the files' or the folder's names
+/// says it.
+fn mask_status(plan: &Plan, folder: bool) -> (String, egui::Color32) {
+    let weak = palette::text_weak();
+    let quoted = |m: &str| tr!(format!("\"{m}\""), format!("«{m}»"));
+    if folder {
+        if !plan.folder_masks_tried {
+            return (tr!("not read", "не читается").to_owned(), weak);
+        }
+        let Some(mask) = &plan.folder_mask else {
+            return (tr!("no mask fits", "ни одна маска не подходит").to_owned(), palette::error());
+        };
+        if plan.from_folder.is_empty() {
+            return (
+                tr!(
+                    format!("{}: the fields are filled", quoted(mask)),
+                    format!("{}: поля уже заполнены", quoted(mask))
+                ),
+                weak,
+            );
+        }
+        let names: Vec<&str> = plan.from_folder.iter().map(|k| k.label()).collect();
+        return (format!("{}: {}", quoted(mask), names.join(", ")), palette::accent());
+    }
+    if !plan.file_masks_tried {
+        return (tr!("not read", "не читаются").to_owned(), weak);
+    }
+    let read: usize = plan.file_masks.iter().map(|(_, n)| n).sum();
+    if read == 0 {
+        return (tr!("no mask fits", "ни одна маска не подходит").to_owned(), palette::error());
+    }
+    let used: Vec<String> = plan
+        .file_masks
+        .iter()
+        .map(|(m, n)| format!("{} {n}", quoted(m)))
+        .collect();
+    let filled = plan.files.iter().filter(|f| !f.from_name.is_empty()).count();
+    let mut text = used.join(", ");
+    if read < plan.files.len() {
+        text.push_str(&tr!(
+            format!(", {} fit none", plan.files.len() - read),
+            format!(", не подходят: {}", plan.files.len() - read)
+        ));
+    }
+    let colour = if filled > 0 { palette::accent() } else { weak };
+    if filled == 0 {
+        text.push_str(tr!(" (the fields are filled)", " (поля уже заполнены)"));
+    }
+    (text, colour)
+}
+
+/// Where a field's new value was read from, for its row's tooltip.
+fn read_hint(plan: &Plan, f: &prepare::FilePlan, key: edit::Key) -> Option<String> {
+    if f.from_name.contains(&key) {
+        let mask = f.mask.as_deref().unwrap_or("");
+        return Some(tr!(
+            format!("Read from the file's name by the mask \"{mask}\""),
+            format!("Взято из имени файла по маске «{mask}»")
+        ));
+    }
+    if plan.from_folder.contains(&key) {
+        let mask = plan.folder_mask.as_deref().unwrap_or("");
+        return Some(tr!(
+            format!("Read from the folder's name by the mask \"{mask}\" (where the field was empty)"),
+            format!("Взято из имени папки по маске «{mask}» (там, где поле было пустым)")
+        ));
+    }
+    None
 }
 
 /// The line under the table: what the preset would do.
@@ -826,9 +987,12 @@ fn preview(ui: &mut Ui, plan: &Plan, height: f32, only_changes: bool) {
                 }
                 for (key, before, after) in &f.fields {
                     let mut row = change(key.label(), before, after);
-                    if *key == edit::Key::Album {
-                        row.hint = cut_hint(plan);
-                    }
+                    let read = read_hint(plan, f, *key);
+                    let cut = (*key == edit::Key::Album).then(|| cut_hint(plan)).flatten();
+                    row.hint = match (read, cut) {
+                        (Some(r), Some(c)) => Some(format!("{r}\n\n{c}")),
+                        (r, c) => r.or(c),
+                    };
                     rows.push(row);
                 }
                 rows.extend(f.removed.iter().map(removed_row));
@@ -952,6 +1116,7 @@ fn report(ui: &mut Ui, outcome: &Outcome, height: f32) {
 enum Tab {
     #[default]
     Tags,
+    Read,
     Genre,
     Cover,
     Names,
@@ -959,11 +1124,12 @@ enum Tab {
 }
 
 impl Tab {
-    const ALL: [Tab; 5] = [Tab::Tags, Tab::Genre, Tab::Cover, Tab::Names, Tab::Folder];
+    const ALL: [Tab; 6] = [Tab::Tags, Tab::Read, Tab::Genre, Tab::Cover, Tab::Names, Tab::Folder];
 
     fn label(self) -> &'static str {
         match self {
             Tab::Tags => tr!("Tags", "Теги"),
+            Tab::Read => tr!("From the names", "Из имён"),
             Tab::Genre => tr!("Genre", "Жанр"),
             Tab::Cover => tr!("Cover", "Обложка"),
             Tab::Names => tr!("Names", "Имена"),
@@ -1052,6 +1218,7 @@ impl PresetEditor {
                             .auto_shrink([false, false])
                             .show(ui, |ui| match self.tab {
                                 Tab::Tags => tags_tab(ui, profile),
+                                Tab::Read => read_tab(ui, profile),
                                 Tab::Genre => genre_tab(ui, profile),
                                 Tab::Cover => cover_tab(ui, profile),
                                 Tab::Names => names_tab(ui, profile, sample),
@@ -1362,6 +1529,91 @@ fn tags_tab(ui: &mut Ui, p: &mut Profile) {
             |ui| toggles(ui, &mut p.required, &Need::ALL, Need::label, |_| None),
         );
     });
+}
+
+/// Masks, one a line: edited as text, kept as a list.
+fn masks_field(ui: &mut Ui, id: &str, masks: &mut Vec<String>) {
+    let mut text = masks.join("\n");
+    ui.horizontal_top(|ui| {
+        let field = ui.add(
+            egui::TextEdit::multiline(&mut text)
+                .id_salt(id)
+                .desired_rows(masks.len().clamp(3, 8))
+                .desired_width(ui.available_width() - 40.0)
+                .font(egui::TextStyle::Monospace),
+        );
+        let added = mask_fields_menu(ui, &mut text);
+        if field.changed() || added {
+            *masks = text.lines().map(str::to_owned).collect();
+        }
+    });
+}
+
+fn read_tab(ui: &mut Ui, p: &mut Profile) {
+    section(ui, tr!("Tags from the names", "Теги из имён"), |ui| {
+        row(
+            ui,
+            tr!("Read the names", "Брать поля из имён"),
+            Some(tr!(
+                "The files' and the folder's names read by masks, as Tag&Rename's \"Get Tags from File Name\"",
+                "Имена файлов и папки разбираются по маскам, как «Get Tags from File Name» в Tag&Rename"
+            )),
+            60.0,
+            |ui| switch(ui, &mut p.from_names),
+        );
+        if p.from_names {
+            divider(ui);
+            row(
+                ui,
+                tr!("Over the tags' values too", "Заменять и заполненные поля"),
+                Some(tr!(
+                    "Off: only empty fields are filled. On: a name read wins over the tag (\"Hunger: Part 1\" in the tag becomes \"Hunger - Part 1\" of the name)",
+                    "Выключено — заполняются только пустые поля. Включено — прочитанное из имени заменяет значение тега («Hunger: Part 1» в теге станет «Hunger - Part 1» из имени)"
+                )),
+                60.0,
+                |ui| switch(ui, &mut p.names_over_tags),
+            );
+            divider(ui);
+            row(ui, tr!("_ read as a space", "_ считать пробелом"), None, 60.0, |ui| {
+                switch(ui, &mut p.names_underscores)
+            });
+        }
+    });
+    if p.from_names {
+        section(ui, tr!("Files' masks", "Маски имён файлов"), |ui| {
+            ui.label(
+                RichText::new(tr!(
+                    "One a line; each file is read by the first that fits it.",
+                    "По одной в строке; каждый файл читается первой подходящей."
+                ))
+                .size(12.5)
+                .color(palette::text_weak()),
+            );
+            masks_field(ui, "prepare_file_masks", &mut p.file_masks);
+            ui.add_space(6.0);
+        });
+        section(ui, tr!("Folder's masks", "Маски имени папки"), |ui| {
+            ui.label(
+                RichText::new(tr!(
+                    "One a line; the first that fits. The folder's %artist% is the album artist.",
+                    "По одной в строке; берётся первая подходящая. %artist% папки — исполнитель альбома."
+                ))
+                .size(12.5)
+                .color(palette::text_weak()),
+            );
+            masks_field(ui, "prepare_folder_masks", &mut p.folder_masks);
+            ui.add_space(6.0);
+        });
+    }
+    ui.add_space(8.0);
+    ui.label(
+        RichText::new(tr!(
+            "%year% is four digits, %track% and %disc% are digits; %skip% is a part not read. A \\ takes the folder above too: %artist%\\%year% - %album%. The masks for one album are also chosen in the preparation's window.",
+            "%year% — четыре цифры, %track% и %disc% — цифры; %skip% — часть, которая не читается. \\ захватывает и папку выше: %artist%\\%year% - %album%. Маску для конкретного альбома можно задать и в окне подготовки."
+        ))
+        .size(12.5)
+        .color(palette::text_weak()),
+    );
 }
 
 fn genre_tab(ui: &mut Ui, p: &mut Profile) {
