@@ -408,22 +408,54 @@ impl PrepareWindow {
             if mode == 2 {
                 let field = ui.add(
                     egui::TextEdit::singleline(&mut self.own_genre)
-                        .desired_width(180.0)
+                        .desired_width(260.0)
                         .hint_text(tr!("the album's genre", "жанр альбома")),
                 );
                 let genres = self.source.as_ref().map(|s| s.known.genres.clone()).unwrap_or_default();
-                let typed = self.own_genre.trim().to_lowercase();
+                // The genres like what the field holds (each of its parts:
+                // "Acoustic / Melodic Modern Metal" is two), then all of
+                // them: the whole text matched none, and the menu was empty.
+                let parts: Vec<String> = self
+                    .own_genre
+                    .split([';', ',', '/', '|'])
+                    .map(|p| p.trim().to_lowercase())
+                    .filter(|p| !p.is_empty())
+                    .collect();
+                let like: Vec<&String> = genres
+                    .iter()
+                    .filter(|g| {
+                        let g = g.to_lowercase();
+                        parts.iter().any(|p| g.contains(p.as_str()) || p.contains(g.as_str()))
+                    })
+                    .collect();
                 let mut chosen = None;
                 ui.menu_button(tr!("Choose…", "Выбрать…"), |ui| {
-                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-                        for g in genres
-                            .iter()
-                            .filter(|g| typed.is_empty() || g.to_lowercase().contains(&typed))
-                        {
+                    ui.set_min_width(220.0);
+                    egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                        let mut item = |ui: &mut Ui, g: &String| {
                             if ui.button(g).clicked() {
                                 chosen = Some(g.clone());
                                 ui.close();
                             }
+                        };
+                        if !like.is_empty() {
+                            ui.label(
+                                RichText::new(tr!("Like the field", "Похожие"))
+                                    .size(12.0)
+                                    .color(palette::text_weak()),
+                            );
+                            for g in &like {
+                                item(ui, g);
+                            }
+                            ui.separator();
+                            ui.label(
+                                RichText::new(tr!("All the genres", "Все жанры"))
+                                    .size(12.0)
+                                    .color(palette::text_weak()),
+                            );
+                        }
+                        for g in &genres {
+                            item(ui, g);
                         }
                     });
                 })
@@ -1358,13 +1390,46 @@ fn cover_tab(ui: &mut Ui, p: &mut Profile) {
                 "A larger picture is made smaller, as a JPEG",
                 "Картинка больше уменьшается и сохраняется как JPEG"
             )),
-            260.0,
+            300.0,
             |ui| {
-                let mut sides: Vec<CoverSide> = CoverSide::ALL.to_vec();
-                if p.cover_side.is_custom() {
-                    sides.push(p.cover_side);
+                // Right to left: one's own size's field, then the list.
+                if let CoverSide::Custom(px) = p.cover_side {
+                    ui.label(tr!("px", "пикс."));
+                    let mut own = px;
+                    let field = egui::DragValue::new(&mut own).range(CoverSide::OWN).speed(10);
+                    if ui
+                        .add(field)
+                        .on_hover_text(tr!(
+                            "100 to 8192 pixels: drag, or click and type",
+                            "От 100 до 8192 пикселей: потяните или щёлкните и введите"
+                        ))
+                        .changed()
+                    {
+                        p.cover_side = CoverSide::Custom(own);
+                    }
                 }
-                choice(ui, "prepare_side", &mut p.cover_side, &sides, CoverSide::label, 240.0)
+                let own = tr!("Own…", "Свой…");
+                let shown = if p.cover_side.is_custom() {
+                    own.to_owned()
+                } else {
+                    p.cover_side.label()
+                };
+                egui::ComboBox::from_id_salt("prepare_side")
+                    .width(150.0)
+                    .selected_text(shown)
+                    .show_ui(ui, |ui| {
+                        for side in CoverSide::ALL {
+                            let on = !p.cover_side.is_custom() && p.cover_side == side;
+                            if ui.selectable_label(on, side.label()).clicked() {
+                                p.cover_side = side;
+                            }
+                        }
+                        if ui.selectable_label(p.cover_side.is_custom(), own).clicked()
+                            && !p.cover_side.is_custom()
+                        {
+                            p.cover_side = CoverSide::Custom(p.cover_side.pixels().unwrap_or(800));
+                        }
+                    });
             },
         );
     });
