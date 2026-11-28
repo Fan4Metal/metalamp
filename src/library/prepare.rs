@@ -251,7 +251,10 @@ impl Fill {
     pub fn label(self) -> &'static str {
         match self {
             Fill::AlbumArtist => tr!("Album artist from the artists", "Исполнитель альбома — из исполнителей"),
-            Fill::Title => tr!("Title from the file's name", "Название — из имени файла"),
+            Fill::Title => tr!(
+                "Title from the file's name, without its number",
+                "Название — из имени файла без номера"
+            ),
             Fill::Artist => tr!("Artist from the album artist", "Исполнитель — из исполнителя альбома"),
         }
     }
@@ -1297,6 +1300,11 @@ pub struct Plan {
     pub cover: Option<CoverPlan>,
     /// The other files deleted or moved.
     pub extras: Vec<PathBuf>,
+    /// The subfolder they are moved into; none: the recycle bin.
+    pub extras_to: Option<String>,
+    /// The fields the folder's template needs and the tags lack: it keeps
+    /// its name.
+    pub folder_unnamed: Vec<&'static str>,
     pub warnings: Vec<String>,
     /// What was cut from the album's title (the one most files have), and
     /// why, from the end.
@@ -1888,6 +1896,7 @@ pub fn plan(
     }
 
     let mut new_folder = None;
+    let mut folder_unnamed = Vec::new();
     if profile.rename_folder && n > 0 {
         if !source.one_place {
             warnings.push(
@@ -1923,6 +1932,7 @@ pub fn plan(
             let name = named(&name, profile.underscores);
             let new = source.folder.with_file_name(&name);
             let lacking = labels_of(&empty);
+            folder_unnamed = lacking.clone();
             if !lacking.is_empty() {
                 warnings.push(tr!(
                     format!(
@@ -2033,6 +2043,8 @@ pub fn plan(
             .map(|(_, b)| (picture_size(b).unwrap_or_default(), b.len())),
         cover,
         extras,
+        extras_to: (profile.extras == Extras::Folder).then(|| profile.extras_folder.clone()),
+        folder_unnamed,
         warnings,
         album_cuts: if profile.album_title && !own.contains(&Key::Album) {
             common(&original, Key::Album)
@@ -2719,6 +2731,7 @@ mod tests {
         };
         let plan = plan(&source, &profile, &ThisAlbum::default(), &mut no_cover);
         assert_eq!(plan.new_folder, None);
+        assert_eq!(plan.folder_unnamed.len(), 1);
         assert!(plan.warnings.iter().any(|w| w.contains("Year") || w.contains("Год")), "{:?}", plan.warnings);
         assert_eq!(
             plan.files[0].rename.as_deref(),

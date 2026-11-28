@@ -272,7 +272,8 @@ impl PrepareWindow {
                 // and the two masks' rows.
                 let body = (size.y - 250.0).max(200.0);
                 if let Some(outcome) = &self.outcome {
-                    report(ui, outcome, body);
+                    let plan = self.plan.as_ref().map(|(_, _, p)| p.clone());
+                    report(ui, outcome, plan.as_deref(), body);
                 } else {
                     ui.add_enabled_ui(!busy, |ui| {
                         ui.horizontal(|ui| {
@@ -660,7 +661,7 @@ fn mask_fields_menu(ui: &mut Ui, text: &mut String) -> bool {
 /// says it.
 fn mask_status(plan: &Plan, folder: bool) -> (String, egui::Color32) {
     let weak = palette::text_weak();
-    let quoted = |m: &str| tr!(format!("\"{m}\""), format!("«{m}»"));
+    let quoted = |m: &str| prepare::quoted(&[m]);
     if folder {
         if !plan.folder_masks_tried {
             return (tr!("not read", "не читается").to_owned(), weak);
@@ -736,6 +737,14 @@ fn read_hint(plan: &Plan, f: &prepare::FilePlan, key: edit::Key) -> Option<Strin
         ));
     }
     None
+}
+
+/// Where the other files go, as the table says it.
+fn extras_where(plan: &Plan) -> String {
+    match &plan.extras_to {
+        Some(sub) => tr!(format!("into the subfolder \"{sub}\""), format!("в подпапку «{sub}»")),
+        None => tr!("into the recycle bin", "в корзину").to_owned(),
+    }
 }
 
 /// The line under the table: what the preset would do.
@@ -906,6 +915,16 @@ fn change(name: &str, before: &str, after: &str) -> Row {
     ])
 }
 
+/// A name kept because its template's fields are empty.
+fn kept_name(name: &str, now: &str, lacking: &[&str]) -> Row {
+    let why = prepare::quoted(lacking);
+    Row::from([
+        RichText::new(name).color(palette::error()),
+        RichText::new(now).color(palette::text()),
+        RichText::new(tr!(format!("kept: no {why}"), format!("не меняется: пусто {why}"))).color(palette::error()),
+    ])
+}
+
 /// A row of what stays as it is.
 fn same(name: &str, now: &str) -> Row {
     Row::from([
@@ -999,6 +1018,11 @@ fn preview(ui: &mut Ui, plan: &Plan, height: f32, only_changes: bool) {
                     row.hint = Some(hint);
                     rows.push(row);
                 }
+                None if !plan.folder_unnamed.is_empty() => rows.push(kept_name(
+                    tr!("Folder", "Папка"),
+                    &folder,
+                    &plan.folder_unnamed,
+                )),
                 None => rows.push(same(tr!("Folder", "Папка"), &folder)),
             }
             if let Some(cover) = &plan.cover {
@@ -1028,11 +1052,7 @@ fn preview(ui: &mut Ui, plan: &Plan, height: f32, only_changes: bool) {
             }
             if !plan.extras.is_empty() {
                 let names: Vec<String> = plan.extras.iter().map(|p| name_of(p)).collect();
-                rows.push(change(
-                    tr!("Other files", "Прочие файлы"),
-                    &names.join(", "),
-                    tr!("removed", "убираются"),
-                ));
+                rows.push(change(tr!("Other files", "Прочие файлы"), &names.join(", "), &extras_where(plan)));
             }
             group(
                 ui,
@@ -1061,13 +1081,7 @@ fn preview(ui: &mut Ui, plan: &Plan, height: f32, only_changes: bool) {
                 if let Some(to) = &f.rename {
                     rows.push(change(tr!("File name", "Имя файла"), &name_of(&f.path), &name_of(to)));
                 } else if !f.unnamed.is_empty() {
-                    let why = prepare::quoted(&f.unnamed);
-                    rows.push(Row::from([
-                        RichText::new(tr!("File name", "Имя файла")).color(palette::error()),
-                        RichText::new(name_of(&f.path)).color(palette::text()),
-                        RichText::new(tr!(format!("kept: no {why}"), format!("не меняется: пусто {why}")))
-                            .color(palette::error()),
-                    ]));
+                    rows.push(kept_name(tr!("File name", "Имя файла"), &name_of(&f.path), &f.unnamed));
                 }
                 for (key, before, after) in &f.fields {
                     let mut row = change(key.label(), before, after);
@@ -1091,7 +1105,11 @@ fn preview(ui: &mut Ui, plan: &Plan, height: f32, only_changes: bool) {
                     ));
                 }
                 if f.other_tags {
-                    rows.push(change("ID3v1 / APE", tr!("present", "есть"), ""));
+                    rows.push(Row::from([
+                        RichText::new("ID3v1 / APE").color(palette::text_weak()),
+                        RichText::new(tr!("present", "есть")).color(palette::text()),
+                        RichText::new(tr!("removed", "удаляются")).color(palette::text_weak()),
+                    ]));
                 }
                 if !f.missing.is_empty() {
                     let names: Vec<&str> = f.missing.iter().map(|n| n.label()).collect();
@@ -1131,7 +1149,7 @@ fn preview(ui: &mut Ui, plan: &Plan, height: f32, only_changes: bool) {
 }
 
 /// What was done.
-fn report(ui: &mut Ui, outcome: &Outcome, height: f32) {
+fn report(ui: &mut Ui, outcome: &Outcome, plan: Option<&Plan>, height: f32) {
     egui::ScrollArea::vertical()
         .id_salt("prepare_report")
         .max_height(height)
@@ -1171,8 +1189,16 @@ fn report(ui: &mut Ui, outcome: &Outcome, height: f32) {
             }
             if outcome.extras > 0 {
                 line(ui, tr!(
-                    format!("Other files dealt with: {}", outcome.extras),
-                    format!("Прочих файлов убрано: {}", outcome.extras)
+                    format!(
+                        "Other files {}: {}",
+                        plan.map(extras_where).unwrap_or_default(),
+                        outcome.extras
+                    ),
+                    format!(
+                        "Прочие файлы {}: {}",
+                        plan.map(extras_where).unwrap_or_default(),
+                        outcome.extras
+                    )
                 ));
             }
             if let Some(journal) = &outcome.journal {
@@ -1461,7 +1487,7 @@ fn toggles<T: Copy + PartialEq>(
     chosen: &mut Vec<T>,
     all: &[T],
     label: impl Fn(T) -> &'static str,
-    hint: impl Fn(T) -> Option<&'static str>,
+    hint: impl Fn(T) -> Option<String>,
 ) {
     ui.horizontal_wrapped(|ui| {
         for &item in all {
@@ -1585,7 +1611,14 @@ fn tags_tab(ui: &mut Ui, p: &mut Profile, sample: Option<&Plan>) {
             |ui| {
                 for f in Fill::ALL {
                     let mut on = p.fill.contains(&f);
-                    if ui.checkbox(&mut on, f.label()).changed() {
+                    let mut resp = ui.checkbox(&mut on, f.label());
+                    if f == Fill::Title {
+                        resp = resp.on_hover_text(tr!(
+                            "When the masks of \"From the names\" gave none: \"01 - Title\" becomes \"Title\"",
+                            "Если маски вкладки «Из имён» его не дали: «01 - Title» даёт «Title»"
+                        ));
+                    }
+                    if resp.changed() {
                         if on {
                             p.fill.push(f);
                         } else {
@@ -1609,7 +1642,7 @@ fn tags_tab(ui: &mut Ui, p: &mut Profile, sample: Option<&Plan>) {
         );
         if p.clean {
             ui.label(RichText::new(tr!("Keep:", "Оставлять:")).color(palette::text_weak()));
-            toggles(ui, &mut p.keep, &TagPart::ALL, TagPart::label, |t| Some(t.hint()));
+            toggles(ui, &mut p.keep, &TagPart::ALL, TagPart::label, |t| Some(part_hint(t)));
             ui.add_space(6.0);
             if let Some(plan) = sample {
                 album_parts(ui, plan, &p.keep);
@@ -1721,6 +1754,23 @@ fn read_tab(ui: &mut Ui, p: &mut Profile) {
         .size(12.5)
         .color(palette::text_weak()),
     );
+}
+
+/// What a part of the tag is made of, each field named as the table
+/// names it: "publisher, label, copyright…" left the user guessing what
+/// the "…" held.
+fn part_hint(part: TagPart) -> String {
+    let mut names: Vec<String> = Vec::new();
+    for key in part.keys() {
+        let name = super::info::field_name(key);
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    if let Some(more) = part.more() {
+        names.push(more.to_owned());
+    }
+    names.join(", ")
 }
 
 /// What the album's tags hold of each part, and whether it stays: the

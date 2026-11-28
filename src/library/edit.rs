@@ -363,6 +363,63 @@ impl TagPart {
     }
 }
 
+impl TagPart {
+    /// The fields it is made of, as lofty knows them (in an order people
+    /// read: the usual fields' groups').
+    pub fn keys(self) -> Vec<ItemKey> {
+        use ItemKey as K;
+        const KNOWN: &[ItemKey] = &[
+            K::Composer,
+            K::Comment,
+            K::Lyrics,
+            K::UnsyncLyrics,
+            K::ReplayGainTrackGain,
+            K::ReplayGainTrackPeak,
+            K::ReplayGainAlbumGain,
+            K::ReplayGainAlbumPeak,
+            K::MusicBrainzRecordingId,
+            K::MusicBrainzTrackId,
+            K::MusicBrainzReleaseId,
+            K::MusicBrainzReleaseGroupId,
+            K::MusicBrainzArtistId,
+            K::MusicBrainzReleaseArtistId,
+            K::MusicBrainzWorkId,
+            K::MusicBrainzReleaseType,
+            K::Popularimeter,
+            K::EncodedBy,
+            K::EncoderSoftware,
+            K::EncoderSettings,
+            K::AlbumTitleSortOrder,
+            K::AlbumArtistSortOrder,
+            K::TrackTitleSortOrder,
+            K::TrackArtistSortOrder,
+            K::ComposerSortOrder,
+            K::ReleaseCountry,
+        ];
+        let mut out: Vec<ItemKey> = Vec::new();
+        for key in STANDARD.iter().map(|&(_, k)| k).chain(KNOWN.iter().copied()) {
+            if part_of_key(key) == Some(self) && !out.contains(&key) {
+                out.push(key);
+            }
+        }
+        out
+    }
+
+    /// What it holds besides `keys`: frames lofty has no key for; for the
+    /// pictures and the rest, what they are.
+    pub fn more(self) -> Option<&'static str> {
+        Some(match self {
+            TagPart::Lyrics => tr!("synchronised lyrics (SYLT)", "синхронизированный текст (SYLT)"),
+            TagPart::ReplayGain => tr!("volume adjustment (RVA2)", "регулировка громкости (RVA2)"),
+            TagPart::MusicBrainz => tr!("AcoustID, the file's identifier (UFID)", "AcoustID, идентификатор файла (UFID)"),
+            TagPart::Rating => tr!("play counter (PCNT)", "счётчик воспроизведений (PCNT)"),
+            TagPart::Links => tr!("one's own links (WXXX)", "свои ссылки (WXXX)"),
+            TagPart::Pictures | TagPart::Other => self.hint(),
+            _ => return None,
+        })
+    }
+}
+
 /// The part an item of a tag is of; `None`: a main field, which stays.
 pub fn part_of_key(key: ItemKey) -> Option<TagPart> {
     use ItemKey as K;
@@ -1378,6 +1435,15 @@ fn put_other(tag: &mut Tag, key: ItemKey, value: &str) {
 
 #[cfg(test)]
 mod tests {
+    /// Every part says what it is made of (its chip's tooltip).
+    #[test]
+    fn every_part_says_what_it_holds() {
+        for part in super::TagPart::ALL {
+            assert!(!part.keys().is_empty() || part.more().is_some(), "{part:?}");
+        }
+        assert_eq!(super::TagPart::Release.keys().first(), Some(&lofty::tag::ItemKey::Publisher));
+    }
+
     use super::*;
 
     #[test]
