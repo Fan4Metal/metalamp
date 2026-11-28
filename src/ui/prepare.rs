@@ -828,18 +828,7 @@ fn table_row(ui: &mut Ui, widths: [f32; 3], cells: [RichText; 3], hint: Option<&
 /// A field of the tag removed: its name in words (the file info's), its
 /// value before, "removed" after; the tag's own code as the tooltip.
 fn removed_row(item: &Item) -> Row {
-    let name = match (item.key, item.code.split_once(':')) {
-        (Some(key), _) => super::info::field_name(key),
-        (None, Some(("TXXX" | "WXXX", description))) => description.to_owned(),
-        (None, _) if item.part == TagPart::Pictures => tr!(
-            format!("Picture: {}", item.code),
-            format!("Картинка: {}", item.code)
-        ),
-        (None, _) => tr!(
-            format!("Private data ({})", item.code),
-            format!("Служебные данные ({})", item.code)
-        ),
-    };
+    let name = item_name(item);
     let before = if item.value.is_empty() {
         RichText::new(tr!("(empty)", "(пусто)")).color(palette::text_weak())
     } else {
@@ -853,6 +842,23 @@ fn removed_row(item: &Item) -> Row {
             RichText::new(tr!("removed", "удаляется")).color(palette::text_weak()),
         ],
         hint,
+    }
+}
+
+/// A tag's item named in words: as the file info names its field, a user
+/// text frame by its description.
+fn item_name(item: &Item) -> String {
+    match (item.key, item.code.split_once(':')) {
+        (Some(key), _) => super::info::field_name(key),
+        (None, Some(("TXXX" | "WXXX", description))) => description.to_owned(),
+        (None, _) if item.part == TagPart::Pictures => tr!(
+            format!("Picture: {}", item.code),
+            format!("Картинка: {}", item.code)
+        ),
+        (None, _) => tr!(
+            format!("Private data ({})", item.code),
+            format!("Служебные данные ({})", item.code)
+        ),
     }
 }
 
@@ -1295,7 +1301,7 @@ impl PresetEditor {
                             .max_height(body - 70.0)
                             .auto_shrink([false, false])
                             .show(ui, |ui| match self.tab {
-                                Tab::Tags => tags_tab(ui, profile),
+                                Tab::Tags => tags_tab(ui, profile, sample),
                                 Tab::Read => read_tab(ui, profile),
                                 Tab::Genre => genre_tab(ui, profile),
                                 Tab::Cover => cover_tab(ui, profile),
@@ -1475,7 +1481,7 @@ fn toggles<T: Copy + PartialEq>(
     });
 }
 
-fn tags_tab(ui: &mut Ui, p: &mut Profile) {
+fn tags_tab(ui: &mut Ui, p: &mut Profile, sample: Option<&Plan>) {
     section(ui, tr!("Numbers", "Номера"), |ui| {
         row(
             ui,
@@ -1605,6 +1611,9 @@ fn tags_tab(ui: &mut Ui, p: &mut Profile) {
             ui.label(RichText::new(tr!("Keep:", "Оставлять:")).color(palette::text_weak()));
             toggles(ui, &mut p.keep, &TagPart::ALL, TagPart::label, |t| Some(t.hint()));
             ui.add_space(6.0);
+            if let Some(plan) = sample {
+                album_parts(ui, plan, &p.keep);
+            }
         }
         divider(ui);
         row(
@@ -1712,6 +1721,42 @@ fn read_tab(ui: &mut Ui, p: &mut Profile) {
         .size(12.5)
         .color(palette::text_weak()),
     );
+}
+
+/// What the album's tags hold of each part, and whether it stays: the
+/// parts' names alone did not say that "Release" keeps the publisher, the
+/// ISRC and the barcode (the user's report).
+fn album_parts(ui: &mut Ui, plan: &Plan, keep: &[TagPart]) {
+    ui.label(RichText::new(tr!("In this album's tags:", "В тегах этого альбома:")).color(palette::text_weak()));
+    if plan.parts.is_empty() {
+        ui.label(
+            RichText::new(tr!("nothing but the main fields", "ничего, кроме основных полей"))
+                .size(12.5)
+                .color(palette::text_weak()),
+        );
+    }
+    for (part, items) in &plan.parts {
+        let stays = keep.contains(part);
+        let mut names: Vec<String> = Vec::new();
+        for name in items.iter().map(item_name) {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.label(RichText::new(part.label()).size(12.5).strong().color(palette::text()));
+            ui.label(RichText::new("—").size(12.5).color(palette::text_weak()));
+            ui.label(RichText::new(names.join(", ")).size(12.5).color(palette::text()));
+            let (status, colour) = if stays {
+                (tr!("· stays", "· остаётся"), palette::text_weak())
+            } else {
+                (tr!("· removed", "· удаляется"), palette::accent())
+            };
+            ui.label(RichText::new(status).size(12.5).color(colour));
+        });
+    }
+    ui.add_space(6.0);
 }
 
 fn genre_tab(ui: &mut Ui, p: &mut Profile) {

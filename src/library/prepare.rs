@@ -1313,6 +1313,10 @@ pub struct Plan {
     pub from_folder: Vec<Key>,
     /// The fields given the album's own values (`ThisAlbum`).
     pub own: Vec<Key>,
+    /// The tag's parts the album's files hold, each with its items (one
+    /// of a code), in `TagPart::ALL`'s order: what the preset's "Keep"
+    /// keeps or not, for this album.
+    pub parts: Vec<(TagPart, Vec<Item>)>,
     /// The album, its artist and year most files will have.
     pub album: String,
     pub album_artist: String,
@@ -1694,6 +1698,20 @@ pub fn plan(
         let aa = super::main_artist(&v[at(Key::AlbumArtist)]);
         !aa.is_empty() && super::main_artist(&v[at(Key::Artist)]) != aa
     });
+    let mut parts: Vec<(TagPart, Vec<Item>)> = Vec::new();
+    for item in source.files.iter().filter_map(|f| f.tag.as_ref().ok()).flat_map(|t| &t.parts) {
+        let at = match parts.iter().position(|(p, _)| *p == item.part) {
+            Some(at) => at,
+            None => {
+                parts.push((item.part, Vec::new()));
+                parts.len() - 1
+            }
+        };
+        if !parts[at].1.iter().any(|i| i.code == item.code) {
+            parts[at].1.push(item.clone());
+        }
+    }
+    parts.sort_by_key(|(p, _)| TagPart::ALL.iter().position(|a| a == p));
     let mut files: Vec<FilePlan> = Vec::with_capacity(n);
     for (i, f) in source.files.iter().enumerate() {
         let mut plan = FilePlan {
@@ -2033,6 +2051,7 @@ pub fn plan(
         album_artist: common(&values, Key::AlbumArtist).unwrap_or_default(),
         year: common(&values, Key::Year).unwrap_or_default(),
         own,
+        parts,
     }
 }
 
@@ -2509,6 +2528,8 @@ mod tests {
         assert_eq!(field(first, Key::Genre), None, "the first's genre is one of the most common");
         assert_eq!(field(&plan.files[1], Key::Genre).as_deref(), Some("Metal"));
         assert_eq!(first.removed.iter().map(|i| i.part).collect::<Vec<_>>(), [TagPart::Comment]);
+        let parts: Vec<TagPart> = plan.parts.iter().map(|(p, _)| *p).collect();
+        assert_eq!(parts, [TagPart::Comment, TagPart::ReplayGain, TagPart::Encoder]);
         assert_eq!(
             first.rename.as_deref(),
             Some(Path::new(r"Z:\Music\Amaranthe\Amaranthe - 2011 [Deluxe]\01 - Leave Everything Behind.mp3"))
