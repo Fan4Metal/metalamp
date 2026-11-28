@@ -1296,8 +1296,7 @@ impl App {
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 if let Some(ctx) = self.wake.get().cloned() {
-                    let side = self.settings.tag_cover_side.pixels();
-                    self.prepare.open(&ctx, files, title, side);
+                    self.prepare.open(&ctx, files, title);
                 }
             }
         }
@@ -1311,8 +1310,7 @@ impl App {
         };
         let paths = self.paths_of(&a.tracks);
         let title = format!("{} — {}", a.artist, a.title);
-        let side = self.settings.tag_cover_side.pixels();
-        self.prepare.open(ctx, paths, title, side);
+        self.prepare.open(ctx, paths, title);
     }
 
     /// The preparation window's frame: Apply started (the player stopped
@@ -1339,8 +1337,9 @@ impl App {
                 id3v1: self.settings.id3v1,
                 ape: self.settings.ape,
             };
+            let profile = crate::ui::prepare::profile_in_use(&self.settings);
             self.prepare
-                .start(ctx, self.settings.prepare.clone(), how, self.player.releaser());
+                .start(ctx, profile, how, self.player.releaser());
         }
         let shown = self.prepare.show(ctx, &mut self.settings);
         if shown.changed {
@@ -2252,13 +2251,11 @@ impl eframe::App for App {
             && ctx.cumulative_frame_nr() == 1
         {
             let folder = PathBuf::from(folder);
-            let side = self.settings.tag_cover_side.pixels();
             let title = folder
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            self.prepare
-                .open(&ctx, audio_in_folder(&folder), title, side);
+            self.prepare.open(&ctx, audio_in_folder(&folder), title);
         }
         if self.env_view_editor && self.loaded {
             self.env_view_editor = false;

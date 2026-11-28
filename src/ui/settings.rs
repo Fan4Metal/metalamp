@@ -867,7 +867,7 @@ fn child(ui: &mut Ui, rect: Rect) -> Ui {
 }
 
 /// A card: a lighter rounded ground without a frame.
-fn card(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+pub(crate) fn card(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     egui::Frame::new()
         .fill(palette::card_bg())
         .corner_radius(8.0)
@@ -879,7 +879,7 @@ fn card(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
 }
 
 /// A titled group of settings: the title over a card.
-fn section(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
+pub(crate) fn section(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
     ui.add_space(16.0);
     ui.label(RichText::new(title).strong().color(palette::text_bright()));
     ui.add_space(4.0);
@@ -899,7 +899,7 @@ pub(crate) fn divider(ui: &mut Ui) {
 /// A row of a card: the name with an optional hint under it on the left,
 /// what `control` adds right-aligned in `control_width` points on the
 /// right, centred vertically.
-fn row<R>(
+pub(crate) fn row<R>(
     ui: &mut Ui,
     title: &str,
     hint: Option<&str>,
@@ -946,7 +946,7 @@ fn row<R>(
 
 /// A row as `row`, for a control taller than its text: both from the top,
 /// the row as tall as the taller.
-fn tall_row<R>(
+pub(crate) fn tall_row<R>(
     ui: &mut Ui,
     title: &str,
     hint: &str,

@@ -84,25 +84,243 @@ pub enum Extras {
     Folder,
 }
 
-/// What the preparation does (the settings' `prepare`).
+impl Extras {
+    pub const ALL: [Extras; 3] = [Extras::Keep, Extras::Delete, Extras::Folder];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Extras::Keep => tr!("Keep", "Оставить"),
+            Extras::Delete => tr!("Into the recycle bin", "В корзину"),
+            Extras::Folder => tr!("Into a subfolder", "В подпапку"),
+        }
+    }
+}
+
+/// How the track's number is written (Tag&Rename's "Format Track #").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrackFormat {
+    /// As it is.
+    Keep,
+    /// `1`
+    Plain,
+    /// `01`
+    Two,
+    /// `001`
+    Three,
+    /// `01`, or `001` on an album of more than 99 tracks.
+    #[default]
+    Auto,
+    /// `01/16`: the number and the disc's tracks.
+    WithTotal,
+}
+
+impl TrackFormat {
+    pub const ALL: [TrackFormat; 6] = [
+        TrackFormat::Keep,
+        TrackFormat::Plain,
+        TrackFormat::Two,
+        TrackFormat::Three,
+        TrackFormat::Auto,
+        TrackFormat::WithTotal,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            TrackFormat::Keep => tr!("As it is", "Как есть"),
+            TrackFormat::Plain => "x",
+            TrackFormat::Two => "0x",
+            TrackFormat::Three => "00x",
+            TrackFormat::Auto => tr!("0x, 00x past 99 tracks", "0x, при 100+ треках 00x"),
+            TrackFormat::WithTotal => "0x/xx",
+        }
+    }
+
+    /// `n` of `total`, `width` the digits of the album's largest number.
+    fn format(self, n: u32, total: u32, width: usize) -> Option<String> {
+        Some(match self {
+            TrackFormat::Keep => return None,
+            TrackFormat::Plain => n.to_string(),
+            TrackFormat::Two => format!("{n:02}"),
+            TrackFormat::Three => format!("{n:03}"),
+            TrackFormat::Auto => format!("{n:0width$}"),
+            TrackFormat::WithTotal => format!("{n:0width$}/{total:0width$}"),
+        })
+    }
+}
+
+/// How the disc's number is written.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscFormat {
+    Keep,
+    Remove,
+    /// `2` on an album of several discs, none on one of one.
+    #[default]
+    Several,
+    /// `1` always.
+    Plain,
+    /// `1/2`.
+    WithTotal,
+}
+
+impl DiscFormat {
+    pub const ALL: [DiscFormat; 5] = [
+        DiscFormat::Keep,
+        DiscFormat::Remove,
+        DiscFormat::Several,
+        DiscFormat::Plain,
+        DiscFormat::WithTotal,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            DiscFormat::Keep => tr!("As it is", "Как есть"),
+            DiscFormat::Remove => tr!("Removed", "Удалять"),
+            DiscFormat::Several => tr!("x, only with several discs", "x, только у нескольких дисков"),
+            DiscFormat::Plain => "x",
+            DiscFormat::WithTotal => "x/x",
+        }
+    }
+}
+
+/// A field made alike in every file (the value most of them have).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Unify {
+    Album,
+    AlbumArtist,
+    Year,
+    Genre,
+}
+
+impl Unify {
+    pub const ALL: [Unify; 4] = [Unify::Album, Unify::AlbumArtist, Unify::Year, Unify::Genre];
+
+    pub fn key(self) -> Key {
+        match self {
+            Unify::Album => Key::Album,
+            Unify::AlbumArtist => Key::AlbumArtist,
+            Unify::Year => Key::Year,
+            Unify::Genre => Key::Genre,
+        }
+    }
+}
+
+/// An empty field filled from another.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Fill {
+    /// From the artists (Various Artists for a compilation).
+    AlbumArtist,
+    /// From the file's name, without its number.
+    Title,
+    /// From the album artist.
+    Artist,
+}
+
+impl Fill {
+    pub const ALL: [Fill; 3] = [Fill::AlbumArtist, Fill::Title, Fill::Artist];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Fill::AlbumArtist => tr!("Album artist from the artists", "Исполнитель альбома — из исполнителей"),
+            Fill::Title => tr!("Title from the file's name", "Название — из имени файла"),
+            Fill::Artist => tr!("Artist from the album artist", "Исполнитель — из исполнителя альбома"),
+        }
+    }
+}
+
+/// What becomes of the covers in the tags.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TagCover {
+    /// Left as they are.
+    Keep,
+    /// Put only into the files without one.
+    Missing,
+    /// A cover that fits (`Profile::cover_min`, `cover_max`, `cover_kb`)
+    /// stays; the others are replaced.
+    #[default]
+    Fitting,
+    /// Every file gets the album's cover.
+    Replace,
+}
+
+impl TagCover {
+    pub const ALL: [TagCover; 4] = [TagCover::Keep, TagCover::Missing, TagCover::Fitting, TagCover::Replace];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            TagCover::Keep => tr!("Left as they are", "Не трогать"),
+            TagCover::Missing => tr!("Put in where none", "Добавить, где нет"),
+            TagCover::Fitting => tr!("Replace those that do not fit", "Заменить неподходящие"),
+            TagCover::Replace => tr!("Replace in every file", "Заменить во всех"),
+        }
+    }
+}
+
+/// Where the album's cover is taken from first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoverFrom {
+    /// `folder.jpg`, another picture of the folder, then the tags.
+    #[default]
+    Folder,
+    /// The cover most tags hold, then the folder.
+    Tags,
+}
+
+impl CoverFrom {
+    pub const ALL: [CoverFrom; 2] = [CoverFrom::Folder, CoverFrom::Tags];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            CoverFrom::Folder => tr!("The folder, then the tags", "Из папки, затем из тегов"),
+            CoverFrom::Tags => tr!("The tags, then the folder", "Из тегов, затем из папки"),
+        }
+    }
+}
+
+/// What becomes of `folder.jpg`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FolderJpg {
+    Keep,
+    /// The picture the tags get.
+    #[default]
+    Same,
+    /// The cover's picture as it is (a PNG made a JPEG).
+    Original,
+}
+
+impl FolderJpg {
+    pub const ALL: [FolderJpg; 3] = [FolderJpg::Keep, FolderJpg::Same, FolderJpg::Original];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            FolderJpg::Keep => tr!("Left as it is", "Не трогать"),
+            FolderJpg::Same => tr!("The picture the tags get", "Та же, что в тегах"),
+            FolderJpg::Original => tr!("The source picture as it is", "Исходная картинка"),
+        }
+    }
+}
+
+/// What the preparation does: a preset's settings.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Profile {
+    pub track: TrackFormat,
+    pub disc: DiscFormat,
     /// The edition cut from the album's title: a part in brackets at its
     /// end holding one of `editions` (`Album [Deluxe Edition]`).
     pub album_title: bool,
     /// The words of an edition, separated by commas.
     pub editions: String,
-    /// Track numbers as `01` (three digits past 99 tracks), without the
-    /// total; the disc's number only on an album of several discs.
-    pub numbers: bool,
-    /// The album, album artist, year and genre alike in every file (the
-    /// most common one), the empty ones filled: the album artist from the
-    /// artists, the title from the file's name, the artist from the album
-    /// artist.
-    pub unify: bool,
     /// The year as its four digits (`2011-05-01` → `2011`).
     pub year_only: bool,
+    pub unify: Vec<Unify>,
+    pub fill: Vec<Fill>,
     /// The tag's parts not in `keep` removed.
     pub clean: bool,
     pub keep: Vec<TagPart>,
@@ -110,11 +328,16 @@ pub struct Profile {
     pub only_id3v2: bool,
     /// The fields every file is to have.
     pub required: Vec<Need>,
-    /// `folder.jpg` and the same cover in every file's tag.
-    pub cover: bool,
-    /// `folder.jpg` the picture the tags get (at most the tags' side);
-    /// else the source as it is, the tags a copy at most that side.
-    pub folder_jpg_same: bool,
+    pub tag_cover: TagCover,
+    /// A cover in a tag fits when its sides are within these pixels and
+    /// it is no larger than `cover_kb` kilobytes.
+    pub cover_min: u32,
+    pub cover_max: u32,
+    pub cover_kb: u32,
+    pub cover_from: CoverFrom,
+    /// The largest side of the cover put into the tags.
+    pub cover_side: crate::settings::CoverSide,
+    pub folder_jpg: FolderJpg,
     pub rename_files: bool,
     /// The files' names, by `title_format`'s templates (the extension
     /// follows); for an album of several artists the second.
@@ -122,6 +345,8 @@ pub struct Profile {
     pub file_name_various: String,
     pub rename_folder: bool,
     pub folder_name: String,
+    /// Spaces in the names made underscores.
+    pub underscores: bool,
     pub extras: Extras,
     pub extras_folder: String,
     /// A file with the read-only attribute has it taken off to be written.
@@ -133,13 +358,16 @@ pub const EDITIONS: &str = "deluxe, limited, special, expanded, anniversary, col
     remaster, reissue, bonus track, edition, digipak, japan, tour, version";
 
 impl Default for Profile {
+    /// Its first owner's way (Tag&Rename's), the preset by default.
     fn default() -> Self {
         Profile {
+            track: TrackFormat::Auto,
+            disc: DiscFormat::Several,
             album_title: true,
             editions: EDITIONS.to_owned(),
-            numbers: true,
-            unify: true,
             year_only: true,
+            unify: Unify::ALL.to_vec(),
+            fill: Fill::ALL.to_vec(),
             clean: true,
             keep: vec![
                 TagPart::Composer,
@@ -162,13 +390,19 @@ impl Default for Profile {
                 Need::Track,
                 Need::Cover,
             ],
-            cover: true,
-            folder_jpg_same: true,
+            tag_cover: TagCover::Fitting,
+            cover_min: 500,
+            cover_max: 1500,
+            cover_kb: 1000,
+            cover_from: CoverFrom::Folder,
+            cover_side: crate::settings::CoverSide::Px600,
+            folder_jpg: FolderJpg::Same,
             rename_files: true,
             file_name: "%track% - %title%".to_owned(),
             file_name_various: "%track% - %artist% - %title%".to_owned(),
             rename_folder: true,
             folder_name: "(%year%) %album%".to_owned(),
+            underscores: false,
             extras: Extras::Delete,
             extras_folder: "Scans".to_owned(),
             clear_read_only: true,
@@ -183,31 +417,32 @@ pub struct Preset {
     pub profile: Profile,
 }
 
-/// The ready profiles: everything; the tags and the cover alone; the
-/// names alone.
-pub fn ready() -> [(&'static str, Profile); 3] {
-    let all = Profile::default();
-    let tags = Profile {
-        rename_files: false,
-        rename_folder: false,
-        extras: Extras::Keep,
-        ..Profile::default()
-    };
+/// The presets a first run gets: the album as its first owner keeps them,
+/// and one that only renames.
+pub fn first_presets() -> Vec<Preset> {
     let names = Profile {
+        track: TrackFormat::Keep,
+        disc: DiscFormat::Keep,
         album_title: false,
-        numbers: false,
-        unify: false,
         year_only: false,
+        unify: Vec::new(),
+        fill: Vec::new(),
         clean: false,
-        cover: false,
-        extras: Extras::Keep,
         required: Vec::new(),
+        tag_cover: TagCover::Keep,
+        folder_jpg: FolderJpg::Keep,
+        extras: Extras::Keep,
         ..Profile::default()
     };
-    [
-        (tr!("Everything", "Всё"), all),
-        (tr!("Tags and cover", "Теги и обложка"), tags),
-        (tr!("Names only", "Только имена"), names),
+    vec![
+        Preset {
+            name: tr!("Standard", "Стандартный").to_owned(),
+            profile: Profile::default(),
+        },
+        Preset {
+            name: tr!("Names only", "Только имена").to_owned(),
+            profile: names,
+        },
     ]
 }
 
@@ -220,17 +455,49 @@ pub struct FileRead {
     pub writable: bool,
 }
 
-/// The cover the album gets, and where it came from.
+/// Where a cover the album may get is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    FolderJpg,
+    /// Another picture of the folder named as a cover.
+    Picture,
+    /// A tag's: the one most files hold.
+    Tag,
+}
+
+/// A cover the album may get.
 #[derive(Clone, Debug)]
-pub struct CoverSource {
-    /// The picture, or the track whose tag held it.
+pub struct Candidate {
+    /// The picture, or a track whose tag holds it.
     pub from: PathBuf,
-    pub in_tag: bool,
-    pub original: Arc<Vec<u8>>,
-    /// As the tags get it (`covers::for_tag` at the settings' side).
-    pub for_tag: Arc<Vec<u8>>,
+    pub kind: Kind,
+    pub bytes: Arc<Vec<u8>>,
+    pub size: Option<(u32, u32)>,
+}
+
+/// A cover made ready for the tags (`covers::for_tag`).
+#[derive(Clone, Debug)]
+pub struct Made {
+    pub data: Arc<Vec<u8>>,
     pub size: (u32, u32),
-    pub tag_size: (u32, u32),
+}
+
+/// `bytes` made ready for the tags, no side over `side`.
+pub fn make_cover(bytes: &[u8], side: Option<u32>) -> Option<Made> {
+    let made = crate::covers::for_tag(bytes.to_vec(), side, 16).ok()?;
+    Some(Made {
+        data: Arc::new(made.data),
+        size: made.to,
+    })
+}
+
+/// A picture's size from its header.
+pub fn picture_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()
 }
 
 /// What was read of an album and its folder.
@@ -247,15 +514,16 @@ pub struct Source {
     /// The folder's other files (and its subfolders without audio).
     pub extras: Vec<PathBuf>,
     pub folder_jpg: Option<(PathBuf, Arc<Vec<u8>>)>,
-    pub cover: Option<CoverSource>,
+    /// The covers the album may get.
+    pub candidates: Vec<Candidate>,
     /// Audio files of the folders that are not the album's: the folder is
     /// not renamed then.
     pub foreign: Vec<PathBuf>,
 }
 
 /// Reads the album of the files at `paths` (on a thread: every tag is
-/// read, the cover decoded); `side` the tags' largest cover.
-pub fn read(paths: Vec<PathBuf>, side: Option<u32>) -> Source {
+/// read, the covers it may get looked for).
+pub fn read(paths: Vec<PathBuf>) -> Source {
     let mut files: Vec<FileRead> = paths
         .iter()
         .map(|path| {
@@ -326,14 +594,14 @@ pub fn read(paths: Vec<PathBuf>, side: Option<u32>) -> Source {
     }
     extras.sort();
     foreign.sort();
-    let cover = cover_source(&folder, folder_jpg.as_ref(), &files, side);
+    let candidates = candidates(&folder, folder_jpg.as_ref(), &files);
     Source {
         folder,
         one_place,
         files,
         extras,
         folder_jpg,
-        cover,
+        candidates,
         foreign,
     }
 }
@@ -364,46 +632,48 @@ fn album_folder(paths: &[PathBuf]) -> (PathBuf, bool) {
     (common, false)
 }
 
-/// The cover the album gets: `folder.jpg`, else another picture of the
-/// folder named as a cover, else the cover most of its tags hold.
-fn cover_source(
+/// The covers the album may get: `folder.jpg`, another picture of the
+/// folder named as a cover, the cover most of its tags hold.
+fn candidates(
     folder: &Path,
     folder_jpg: Option<&(PathBuf, Arc<Vec<u8>>)>,
     files: &[FileRead],
-    side: Option<u32>,
-) -> Option<CoverSource> {
-    let mut candidates: Vec<(PathBuf, bool, Arc<Vec<u8>>)> = Vec::new();
+) -> Vec<Candidate> {
+    let mut out = Vec::new();
+    let mut push = |from: PathBuf, kind: Kind, bytes: Arc<Vec<u8>>| {
+        let size = picture_size(&bytes);
+        out.push(Candidate {
+            from,
+            kind,
+            bytes,
+            size,
+        });
+    };
     if let Some((path, bytes)) = folder_jpg {
-        candidates.push((path.clone(), false, bytes.clone()));
+        push(path.clone(), Kind::FolderJpg, bytes.clone());
     }
     if let Some(path) = crate::covers::in_folder(folder)
         && !is_folder_jpg(&path)
         && let Ok(bytes) = std::fs::read(&path)
     {
-        candidates.push((path, false, Arc::new(bytes)));
+        push(path, Kind::Picture, Arc::new(bytes));
     }
-    let mut counts: HashMap<&[u8], (usize, &Path)> = HashMap::new();
+    let mut counts: Vec<(&[u8], usize, &Path)> = Vec::new();
     for f in files {
         if let Ok(tag) = &f.tag
             && let Some(cover) = &tag.cover
         {
-            counts.entry(cover.as_slice()).or_insert((0, &f.path)).0 += 1;
+            match counts.iter_mut().find(|(b, ..)| *b == cover.as_slice()) {
+                Some((_, n, _)) => *n += 1,
+                None => counts.push((cover.as_slice(), 1, &f.path)),
+            }
         }
     }
-    if let Some((bytes, (_, path))) = counts.into_iter().max_by_key(|(_, (n, _))| *n) {
-        candidates.push((path.to_path_buf(), true, Arc::new(bytes.to_vec())));
+    let most = counts.iter().map(|(_, n, _)| *n).max().unwrap_or(0);
+    if let Some((bytes, _, path)) = counts.into_iter().find(|(_, n, _)| *n == most) {
+        push(path.to_path_buf(), Kind::Tag, Arc::new(bytes.to_vec()));
     }
-    candidates.into_iter().find_map(|(from, in_tag, original)| {
-        let made = crate::covers::for_tag(original.to_vec(), side, 16).ok()?;
-        Some(CoverSource {
-            from,
-            in_tag,
-            original,
-            for_tag: Arc::new(made.data),
-            size: made.from,
-            tag_size: made.to,
-        })
-    })
+    out
 }
 
 fn is_folder_jpg(path: &Path) -> bool {
@@ -563,6 +833,8 @@ pub struct FilePlan {
     pub removed: Vec<(TagPart, String)>,
     /// The album's cover put into its tag.
     pub cover: bool,
+    /// Its cover now: its size and bytes.
+    pub cover_now: Option<((u32, u32), usize)>,
     /// Its ID3v1 or APE tag removed.
     pub other_tags: bool,
     /// Its new name, in its folder.
@@ -581,6 +853,21 @@ impl FilePlan {
         self.skip.is_none()
             && (!self.fields.is_empty() || !self.removed.is_empty() || self.cover || self.other_tags)
     }
+
+    /// Anything changes.
+    pub fn changes(&self) -> bool {
+        self.writes() || self.rename.is_some()
+    }
+}
+
+/// The album's cover as the plan has it.
+#[derive(Clone, Debug)]
+pub struct CoverPlan {
+    pub from: PathBuf,
+    pub kind: Kind,
+    /// The source's size, and the size the tags get.
+    pub size: (u32, u32),
+    pub made: Made,
 }
 
 /// What the preparation would do.
@@ -591,8 +878,10 @@ pub struct Plan {
     pub files: Vec<FilePlan>,
     /// `folder.jpg` written with these bytes.
     pub folder_jpg: Option<Arc<Vec<u8>>>,
+    /// `folder.jpg` now: its size and bytes.
+    pub folder_jpg_now: Option<((u32, u32), usize)>,
     /// The cover the tags get.
-    pub cover: Option<Arc<Vec<u8>>>,
+    pub cover: Option<CoverPlan>,
     /// The other files deleted or moved.
     pub extras: Vec<PathBuf>,
     pub warnings: Vec<String>,
@@ -604,7 +893,7 @@ impl Plan {
         self.new_folder.is_none()
             && self.folder_jpg.is_none()
             && self.extras.is_empty()
-            && self.files.iter().all(|f| !f.writes() && f.rename.is_none())
+            && self.files.iter().all(|f| !f.changes())
     }
 
     pub fn writes(&self) -> usize {
@@ -616,8 +905,24 @@ impl Plan {
     }
 }
 
-/// What `profile` would do to the album `source` read.
-pub fn plan(source: &Source, profile: &Profile) -> Plan {
+/// A cover fits the profile: its sides within `cover_min`…`cover_max`,
+/// its bytes no more than `cover_kb` kilobytes.
+fn fits(profile: &Profile, size: Option<(u32, u32)>, bytes: usize) -> bool {
+    size.is_some_and(|(w, h)| {
+        w.min(h) >= profile.cover_min
+            && w.max(h) <= profile.cover_max
+            && bytes as u64 <= u64::from(profile.cover_kb) * 1024
+    })
+}
+
+/// What `profile` would do to the album `source` read; `make` makes the
+/// cover of a candidate (its index) ready for the tags at a side (the
+/// window keeps what it made).
+pub fn plan(
+    source: &Source,
+    profile: &Profile,
+    make: &mut dyn FnMut(usize, Option<u32>) -> Option<Made>,
+) -> Plan {
     let n = source.files.len();
     let original: Vec<[String; MAIN]> = source
         .files
@@ -627,6 +932,8 @@ pub fn plan(source: &Source, profile: &Profile) -> Plan {
     let mut values = original.clone();
     let at = |k: Key| k as usize;
     let mut warnings = Vec::new();
+    let unify = |u: Unify| profile.unify.contains(&u);
+    let fill = |f: Fill| profile.fill.contains(&f);
 
     if profile.album_title {
         for v in &mut values {
@@ -638,24 +945,25 @@ pub fn plan(source: &Source, profile: &Profile) -> Plan {
             v[at(Key::Year)] = year_only(&v[at(Key::Year)]);
         }
     }
-    let main_artists: HashSet<String> = values
-        .iter()
-        .map(|v| super::main_artist(&v[at(Key::Artist)]))
-        .filter(|a| !a.is_empty())
-        .collect();
-    if profile.unify && n > 0 {
-        let common = |values: &[[String; MAIN]], k: Key| {
-            most_common(values.iter().map(|v| v[at(k)].as_str()))
-        };
-        if let Some(album) = common(&values, Key::Album) {
+    let common = |values: &[[String; MAIN]], k: Key| {
+        most_common(values.iter().map(|v| v[at(k)].as_str()))
+    };
+    if n > 0 {
+        if unify(Unify::Album)
+            && let Some(album) = common(&values, Key::Album)
+        {
             values.iter_mut().for_each(|v| v[at(Key::Album)] = album.clone());
         }
-        let album_artist = common(&values, Key::AlbumArtist).or_else(|| {
+        // The album artist: the most common one, else from the artists.
+        let main_artists: HashSet<String> = values
+            .iter()
+            .map(|v| super::main_artist(&v[at(Key::Artist)]))
+            .filter(|a| !a.is_empty())
+            .collect();
+        let from_artists = || {
             let mut counts: HashMap<&String, usize> = HashMap::new();
             for v in &values {
-                *counts
-                    .entry(&v[at(Key::Artist)])
-                    .or_default() += 1;
+                *counts.entry(&v[at(Key::Artist)]).or_default() += 1;
             }
             let most = counts.values().copied().max().unwrap_or(0);
             if main_artists.len() >= 3 && most * 2 <= n {
@@ -663,29 +971,40 @@ pub fn plan(source: &Source, profile: &Profile) -> Plan {
             } else {
                 common(&values, Key::Artist)
             }
-        });
+        };
+        let album_artist = common(&values, Key::AlbumArtist)
+            .or_else(|| fill(Fill::AlbumArtist).then(from_artists).flatten());
         if let Some(aa) = &album_artist {
-            values.iter_mut().for_each(|v| v[at(Key::AlbumArtist)] = aa.clone());
+            for v in &mut values {
+                if unify(Unify::AlbumArtist)
+                    || (fill(Fill::AlbumArtist) && v[at(Key::AlbumArtist)].trim().is_empty())
+                {
+                    v[at(Key::AlbumArtist)] = aa.clone();
+                }
+            }
         }
         let various = album_artist
             .as_deref()
             .is_some_and(|a| a.eq_ignore_ascii_case(super::VARIOUS_ARTISTS));
         for (v, f) in values.iter_mut().zip(&source.files) {
-            if v[at(Key::Artist)].trim().is_empty()
-                && let Some(aa) = &album_artist
+            if fill(Fill::Artist)
+                && v[at(Key::Artist)].trim().is_empty()
                 && !various
+                && !v[at(Key::AlbumArtist)].trim().is_empty()
             {
-                v[at(Key::Artist)] = aa.clone();
+                v[at(Key::Artist)] = v[at(Key::AlbumArtist)].clone();
             }
-            if v[at(Key::Title)].trim().is_empty() {
+            if fill(Fill::Title) && v[at(Key::Title)].trim().is_empty() {
                 v[at(Key::Title)] = title_from_name(&f.path);
             }
         }
-        for k in [Key::Year, Key::Genre] {
-            if let Some(value) = common(&values, k) {
+        for (u, k) in [(Unify::Year, Key::Year), (Unify::Genre, Key::Genre)] {
+            if unify(u)
+                && let Some(value) = common(&values, k)
+            {
                 for v in &mut values {
                     // A compilation's tracks keep their own years.
-                    if !various || v[at(k)].trim().is_empty() {
+                    if !various || k != Key::Year || v[at(k)].trim().is_empty() {
                         v[at(k)] = value.clone();
                     }
                 }
@@ -700,12 +1019,18 @@ pub fn plan(source: &Source, profile: &Profile) -> Plan {
         .filter_map(|f| f.path.parent())
         .map(folded)
         .collect();
-    let discs: HashSet<u32> = values
+    let disc_numbers: Vec<Option<u32>> = values
         .iter()
-        .filter_map(|v| number_of(&v[at(Key::Disc)]))
-        .filter(|&d| d > 0)
+        .zip(&source.files)
+        .map(|(v, f)| {
+            number_of(&v[at(Key::Disc)])
+                .filter(|&d| d > 0)
+                .or_else(|| (folders.len() > 1).then(|| disc_of_folder(&f.path)).flatten())
+        })
         .collect();
+    let discs: HashSet<u32> = disc_numbers.iter().flatten().copied().collect();
     let several_discs = discs.len() > 1 || folders.len() > 1;
+    let disc_count = discs.iter().copied().max().unwrap_or(1).max(discs.len() as u32);
     let numbers: Vec<Option<u32>> = values
         .iter()
         .zip(&source.files)
@@ -713,29 +1038,81 @@ pub fn plan(source: &Source, profile: &Profile) -> Plan {
         .collect();
     let most = numbers.iter().flatten().copied().max().unwrap_or(0).max(n as u32);
     let width = most.to_string().len().max(2);
-    let padded = |number: Option<u32>| number.map(|t| format!("{t:0width$}"));
-    if profile.numbers {
-        for ((v, f), number) in values.iter_mut().zip(&source.files).zip(&numbers) {
-            if let Some(t) = padded(*number) {
-                v[at(Key::Track)] = t;
-            }
-            v[at(Key::Disc)] = if several_discs {
-                number_of(&v[at(Key::Disc)])
-                    .filter(|&d| d > 0)
-                    .or_else(|| (folders.len() > 1).then(|| disc_of_folder(&f.path)).flatten())
-                    .map(|d| d.to_string())
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            };
+    // A disc's tracks: its files or its largest number.
+    let total_of = |disc: Option<u32>| {
+        let on: Vec<usize> = (0..n).filter(|&i| disc_numbers[i] == disc).collect();
+        let largest = on.iter().filter_map(|&i| numbers[i]).max().unwrap_or(0);
+        largest.max(on.len() as u32)
+    };
+    for i in 0..n {
+        if let Some(number) = numbers[i]
+            && let Some(t) = profile.track.format(number, total_of(disc_numbers[i]), width)
+        {
+            values[i][at(Key::Track)] = t;
         }
+        let disc = disc_numbers[i];
+        let written = match profile.disc {
+            DiscFormat::Keep => None,
+            DiscFormat::Remove => Some(String::new()),
+            DiscFormat::Several if several_discs => Some(disc.map(|d| d.to_string()).unwrap_or_default()),
+            DiscFormat::Several => Some(String::new()),
+            DiscFormat::Plain => Some(disc.unwrap_or(1).to_string()),
+            DiscFormat::WithTotal => Some(format!("{}/{disc_count}", disc.unwrap_or(1))),
+        };
+        if let Some(d) = written {
+            values[i][at(Key::Disc)] = d;
+        }
+    }
+
+    // The cover: its source, then what each tag gets.
+    let candidate = {
+        let order: [Kind; 3] = match profile.cover_from {
+            CoverFrom::Folder => [Kind::FolderJpg, Kind::Picture, Kind::Tag],
+            CoverFrom::Tags => [Kind::Tag, Kind::FolderJpg, Kind::Picture],
+        };
+        let of = |kind: Kind| {
+            source
+                .candidates
+                .iter()
+                .position(|c| c.kind == kind && c.size.is_some())
+        };
+        // Tags whose cover fits keep it: it is the album's then.
+        let fitting_tag = (profile.tag_cover == TagCover::Fitting)
+            .then(|| of(Kind::Tag))
+            .flatten()
+            .filter(|&i| {
+                let c = &source.candidates[i];
+                fits(profile, c.size, c.bytes.len())
+            });
+        fitting_tag.or_else(|| order.into_iter().find_map(of))
+    };
+    let touches_cover = profile.tag_cover != TagCover::Keep || profile.folder_jpg != FolderJpg::Keep;
+    let cover = candidate
+        .filter(|_| touches_cover)
+        .and_then(|i| {
+            let c = &source.candidates[i];
+            let made = make(i, profile.cover_side.pixels())?;
+            Some(CoverPlan {
+                from: c.from.clone(),
+                kind: c.kind,
+                size: c.size.unwrap_or_default(),
+                made,
+            })
+        });
+    if touches_cover && cover.is_none() {
+        warnings.push(
+            tr!(
+                "No cover was found: not folder.jpg, nor a picture, nor a tag's.",
+                "Обложка не найдена: нет ни folder.jpg, ни картинки в папке, ни обложки в тегах."
+            )
+            .to_owned(),
+        );
     }
 
     let various = values.iter().any(|v| {
         let aa = super::main_artist(&v[at(Key::AlbumArtist)]);
         !aa.is_empty() && super::main_artist(&v[at(Key::Artist)]) != aa
     });
-    let cover = source.cover.as_ref().filter(|_| profile.cover);
     let mut files: Vec<FilePlan> = Vec::with_capacity(n);
     for (i, f) in source.files.iter().enumerate() {
         let mut plan = FilePlan {
@@ -783,13 +1160,29 @@ pub fn plan(source: &Source, profile: &Profile) -> Plan {
                     .cloned()
                     .collect();
             }
-            plan.cover = cover.is_some_and(|c| tag.cover.as_deref() != Some(c.for_tag.as_slice()));
+            plan.cover_now = tag
+                .cover
+                .as_ref()
+                .map(|c| (picture_size(c).unwrap_or_default(), c.len()));
+            plan.cover = cover.as_ref().is_some_and(|c| {
+                let now = tag.cover.as_deref();
+                let differs = now != Some(c.made.data.as_slice());
+                differs
+                    && match profile.tag_cover {
+                        TagCover::Keep => false,
+                        TagCover::Missing => now.is_none(),
+                        TagCover::Fitting => {
+                            now.is_none_or(|b| !fits(profile, picture_size(b), b.len()))
+                        }
+                        TagCover::Replace => true,
+                    }
+            });
             plan.other_tags = profile.only_id3v2 && (tag.id3v1 || tag.ape);
             let lyrics = tag.parts.iter().any(|(p, _)| *p == TagPart::Lyrics)
                 && !(profile.clean && !profile.keep.contains(&TagPart::Lyrics));
             for need in &profile.required {
                 let lacks = match need {
-                    Need::Cover => cover.is_none() && tag.cover.is_none(),
+                    Need::Cover => !plan.cover && tag.cover.is_none(),
                     Need::Lyrics => !lyrics,
                     other => other
                         .key()
@@ -806,13 +1199,16 @@ pub fn plan(source: &Source, profile: &Profile) -> Plan {
             } else {
                 &profile.file_name
             };
-            let template = if several_discs && folders.len() == 1 {
+            let template = if several_discs && folders.len() == 1 && !template.contains("%disc%") {
                 format!("%disc%-{template}")
             } else {
                 template.clone()
             };
             let v = &values[i];
-            let track = padded(number_of(&v[at(Key::Track)]).or(numbers[i])).unwrap_or_default();
+            let track = number_of(&v[at(Key::Track)])
+                .or(numbers[i])
+                .map(|t| format!("{t:0width$}"))
+                .unwrap_or_default();
             let name = crate::title_format::render(&template, &|field| {
                 Some(match field {
                     "track" => track.clone(),
@@ -822,12 +1218,12 @@ pub fn plan(source: &Source, profile: &Profile) -> Plan {
                     "albumartist" => v[at(Key::AlbumArtist)].clone(),
                     "year" => year_only(&v[at(Key::Year)]),
                     "genre" => v[at(Key::Genre)].clone(),
-                    "disc" => number_of(&v[at(Key::Disc)]).map(|d| d.to_string()).unwrap_or_default(),
+                    "disc" => disc_numbers[i].map(|d| d.to_string()).unwrap_or_default(),
                     "filename" => stem(&f.path),
                     _ => return None,
                 })
             });
-            let name = as_file_name(&name);
+            let name = named(&name, profile.underscores);
             let extension = f
                 .path
                 .extension()
@@ -902,7 +1298,7 @@ pub fn plan(source: &Source, profile: &Profile) -> Plan {
                     _ => return None,
                 })
             });
-            let name = as_file_name(&name);
+            let name = named(&name, profile.underscores);
             let new = source.folder.with_file_name(&name);
             if !name.is_empty() && new.file_name() != source.folder.file_name() {
                 if new.exists() && folded(&new) != folded(&source.folder) {
@@ -918,27 +1314,23 @@ pub fn plan(source: &Source, profile: &Profile) -> Plan {
     }
 
     let mut folder_jpg = None;
-    if let Some(c) = cover {
-        let wanted = if profile.folder_jpg_same {
-            &c.for_tag
-        } else {
-            &c.original
+    if let Some(c) = &cover
+        && source.one_place
+    {
+        let wanted = match profile.folder_jpg {
+            FolderJpg::Keep => None,
+            FolderJpg::Same => Some(c.made.data.clone()),
+            FolderJpg::Original => candidate.map(|i| source.candidates[i].bytes.clone()),
         };
-        let same = source
-            .folder_jpg
-            .as_ref()
-            .is_some_and(|(_, bytes)| bytes.as_slice() == wanted.as_slice());
-        if !same && source.one_place {
-            folder_jpg = Some(wanted.clone());
+        if let Some(wanted) = wanted {
+            let same = source
+                .folder_jpg
+                .as_ref()
+                .is_some_and(|(_, bytes)| bytes.as_slice() == wanted.as_slice());
+            if !same {
+                folder_jpg = Some(wanted);
+            }
         }
-    } else if profile.cover {
-        warnings.push(
-            tr!(
-                "No cover was found: not folder.jpg, nor a picture, nor a tag's.",
-                "Обложка не найдена: нет ни folder.jpg, ни картинки в папке, ни обложки в тегах."
-            )
-            .to_owned(),
-        );
     }
 
     let extras = match profile.extras {
@@ -997,10 +1389,21 @@ pub fn plan(source: &Source, profile: &Profile) -> Plan {
         new_folder,
         files,
         folder_jpg,
-        cover: cover.map(|c| c.for_tag.clone()),
+        folder_jpg_now: source
+            .folder_jpg
+            .as_ref()
+            .map(|(_, b)| (picture_size(b).unwrap_or_default(), b.len())),
+        cover,
         extras,
         warnings,
     }
+}
+
+/// A name for a file or a folder (`as_file_name`), its spaces made
+/// underscores when asked.
+fn named(text: &str, underscores: bool) -> String {
+    let name = as_file_name(text);
+    if underscores { name.replace(' ', "_") } else { name }
 }
 
 /// What the preparation did.
@@ -1059,7 +1462,7 @@ pub fn apply(
             if f.cover
                 && let Some(cover) = &plan.cover
             {
-                changes.cover = Some(edit::CoverChange::Set(cover.clone()));
+                changes.cover = Some(edit::CoverChange::Set(cover.made.data.clone()));
             }
             match crate::guard::catch(&f.path, || edit::write(&f.path, &changes, how)) {
                 Some(Ok(())) => outcome.written += 1,
@@ -1278,6 +1681,36 @@ mod tests {
         assert_eq!(disc_of_folder(Path::new(r"D:\A\CD2\01.mp3")), Some(2));
     }
 
+    fn no_cover(_: usize, _: Option<u32>) -> Option<Made> {
+        None
+    }
+
+    /// The covers made as the window makes them.
+    fn made(source: &Source) -> impl FnMut(usize, Option<u32>) -> Option<Made> + '_ {
+        |i, side| make_cover(&source.candidates[i].bytes, side)
+    }
+
+    #[test]
+    fn track_formats() {
+        let f = |t: TrackFormat, n, total, width| t.format(n, total, width);
+        assert_eq!(f(TrackFormat::Plain, 3, 12, 2).as_deref(), Some("3"));
+        assert_eq!(f(TrackFormat::Two, 3, 12, 3).as_deref(), Some("03"));
+        assert_eq!(f(TrackFormat::Three, 3, 12, 2).as_deref(), Some("003"));
+        assert_eq!(f(TrackFormat::Auto, 3, 120, 3).as_deref(), Some("003"));
+        assert_eq!(f(TrackFormat::WithTotal, 3, 12, 2).as_deref(), Some("03/12"));
+        assert_eq!(f(TrackFormat::Keep, 3, 12, 2), None);
+    }
+
+    /// A tag's cover that fits stays, and becomes the album's.
+    #[test]
+    fn a_fitting_cover_stays() {
+        let profile = Profile::default();
+        assert!(fits(&profile, Some((600, 600)), 80_000));
+        assert!(!fits(&profile, Some((300, 300)), 20_000));
+        assert!(!fits(&profile, Some((3000, 3000)), 900_000));
+        assert!(!fits(&profile, Some((800, 800)), 2_000_000));
+    }
+
     fn file(path: &str, main: &[(Key, &str)], parts: &[TagPart]) -> FileRead {
         let mut values: [String; MAIN] = Default::default();
         for (k, v) in main {
@@ -1331,7 +1764,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let plan = plan(&source, &Profile::default());
+        let plan = plan(&source, &Profile::default(), &mut no_cover);
         let first = &plan.files[0];
         let field = |f: &FilePlan, k: Key| f.fields.iter().find(|(key, ..)| *key == k).map(|(_, _, a)| a.clone());
         assert_eq!(field(first, Key::Album).as_deref(), Some("Amaranthe"));
@@ -1380,7 +1813,7 @@ mod tests {
                 .collect(),
             ..source.clone()
         };
-        let again = super::plan(&prepared, &Profile::default());
+        let again = super::plan(&prepared, &Profile::default(), &mut no_cover);
         assert!(again.is_empty(), "{again:#?}");
     }
 
@@ -1413,8 +1846,8 @@ mod tests {
             extras: Extras::Keep,
             ..Profile::default()
         };
-        let source = read(paths, Some(600));
-        let first = plan(&source, &profile);
+        let source = read(paths);
+        let first = plan(&source, &profile, &mut made(&source));
         println!("folder: {:?} -> {:?}", first.folder, first.new_folder);
         println!("folder.jpg written: {}", first.folder_jpg.is_some());
         for w in &first.warnings {
@@ -1442,7 +1875,8 @@ mod tests {
             .filter(|e| e.file_type().is_file() && crate::filetypes::is_audio(e.path()))
             .map(walkdir::DirEntry::into_path)
             .collect();
-        let again = plan(&read(paths, Some(600)), &profile);
+        let source = read(paths);
+        let again = plan(&source, &profile, &mut made(&source));
         let _ = std::fs::remove_dir_all(&root);
         assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
         let left: Vec<String> = again
