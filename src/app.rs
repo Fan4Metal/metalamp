@@ -1296,7 +1296,8 @@ impl App {
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 if let Some(ctx) = self.wake.get().cloned() {
-                    self.prepare.open(&ctx, files, title);
+                    let known = crate::library::prepare::known(&self.library, &files);
+                    self.prepare.open(&ctx, files, title, known);
                 }
             }
         }
@@ -1310,7 +1311,8 @@ impl App {
         };
         let paths = self.paths_of(&a.tracks);
         let title = format!("{} — {}", a.artist, a.title);
-        self.prepare.open(ctx, paths, title);
+        let known = crate::library::prepare::known(&self.library, &paths);
+        self.prepare.open(ctx, paths, title, known);
     }
 
     /// The preparation window's frame: Apply started (the player stopped
@@ -2255,7 +2257,9 @@ impl eframe::App for App {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            self.prepare.open(&ctx, audio_in_folder(&folder), title);
+            let files = audio_in_folder(&folder);
+            let known = crate::library::prepare::known(&self.library, &files);
+            self.prepare.open(&ctx, files, title, known);
         }
         if self.env_view_editor && self.loaded {
             self.env_view_editor = false;

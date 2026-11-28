@@ -328,6 +328,18 @@ pub struct Profile {
     pub only_id3v2: bool,
     /// The fields every file is to have.
     pub required: Vec<Need>,
+    /// The letters genres are separated by in one field (`Synth, Pop`);
+    /// none: the field is one genre.
+    pub genre_split: String,
+    /// How many genres stay, the first ones; 0: all.
+    pub genre_count: u8,
+    /// What is written between the genres that stay.
+    pub genre_join: String,
+    /// The genre the artist's other albums in the library have, when
+    /// they have one.
+    pub genre_from_artist: bool,
+    /// Each genre spelt as the library (or the usual genres) spells it.
+    pub genre_spelling: bool,
     pub tag_cover: TagCover,
     /// A cover in a tag fits when its sides are within these pixels and
     /// it is no larger than `cover_kb` kilobytes.
@@ -380,6 +392,11 @@ impl Default for Profile {
                 TagPart::Music,
             ],
             only_id3v2: false,
+            genre_split: ";,/|".to_owned(),
+            genre_count: 1,
+            genre_join: "; ".to_owned(),
+            genre_from_artist: true,
+            genre_spelling: true,
             required: vec![
                 Need::Title,
                 Need::Artist,
@@ -432,6 +449,10 @@ pub fn first_presets() -> Vec<Preset> {
         tag_cover: TagCover::Keep,
         folder_jpg: FolderJpg::Keep,
         extras: Extras::Keep,
+        genre_split: String::new(),
+        genre_count: 0,
+        genre_from_artist: false,
+        genre_spelling: false,
         ..Profile::default()
     };
     vec![
@@ -519,6 +540,85 @@ pub struct Source {
     /// Audio files of the folders that are not the album's: the folder is
     /// not renamed then.
     pub foreign: Vec<PathBuf>,
+    /// What the library knows (set by the window, not read).
+    pub known: Known,
+}
+
+/// What the library knows that a preparation uses: the genres as it
+/// spells them, and each artist's genre.
+#[derive(Clone, Debug, Default)]
+pub struct Known {
+    /// The library's genres and the usual ones it lacks.
+    pub genres: Vec<String>,
+    /// Lower-case artist (as albums are filed) to the genre most of its
+    /// tracks have, the album prepared left out.
+    pub artists: HashMap<String, String>,
+}
+
+/// What `library` knows, the files at `paths` (the album prepared) left
+/// out of the artists' genres.
+pub fn known(library: &super::Library, paths: &[PathBuf]) -> Known {
+    let mine: HashSet<String> = paths.iter().map(|p| folded(p)).collect();
+    let mut by_artist: HashMap<String, Vec<&str>> = HashMap::new();
+    for t in &library.tracks {
+        if !mine.contains(&folded(&t.path)) {
+            by_artist
+                .entry(t.filed_artist().trim().to_lowercase())
+                .or_default()
+                .push(&t.genre);
+        }
+    }
+    let artists = by_artist
+        .into_iter()
+        .filter_map(|(artist, genres)| Some((artist, most_common(genres.into_iter())?)))
+        .collect();
+    let mut genres = super::genres::of_library(library);
+    genres.extend(
+        super::genres::common_besides(&genres)
+            .into_iter()
+            .map(str::to_owned),
+    );
+    Known { genres, artists }
+}
+
+/// What becomes of the album's genre this time, apart from the preset.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum GenreChoice {
+    /// As the preset says.
+    #[default]
+    Preset,
+    /// Left as the files have it.
+    Keep,
+    /// This one in every file.
+    Own(String),
+}
+
+/// A genre field as the preset wants it: split at `genre_split`, each
+/// spelt as the library spells it, each once, the first `genre_count`
+/// joined with `genre_join`.
+pub fn genres_of(text: &str, profile: &Profile, known: &Known) -> String {
+    let split: Vec<char> = profile.genre_split.chars().filter(|c| !c.is_whitespace()).collect();
+    let mut out: Vec<String> = Vec::new();
+    for g in text.split(|c| split.contains(&c)).map(str::trim).filter(|g| !g.is_empty()) {
+        let lower = g.to_lowercase();
+        let g = if profile.genre_spelling {
+            known
+                .genres
+                .iter()
+                .find(|k| k.to_lowercase() == lower)
+                .cloned()
+                .unwrap_or_else(|| g.to_owned())
+        } else {
+            g.to_owned()
+        };
+        if !out.iter().any(|o| o.to_lowercase() == lower) {
+            out.push(g);
+        }
+    }
+    if profile.genre_count > 0 {
+        out.truncate(usize::from(profile.genre_count));
+    }
+    out.join(&profile.genre_join)
 }
 
 /// Reads the album of the files at `paths` (on a thread: every tag is
@@ -603,6 +703,7 @@ pub fn read(paths: Vec<PathBuf>) -> Source {
         folder_jpg,
         candidates,
         foreign,
+        known: Known::default(),
     }
 }
 
@@ -885,6 +986,8 @@ pub struct Plan {
     /// The other files deleted or moved.
     pub extras: Vec<PathBuf>,
     pub warnings: Vec<String>,
+    /// The genre most files have, before and after.
+    pub genre: (String, String),
 }
 
 impl Plan {
@@ -921,6 +1024,7 @@ fn fits(profile: &Profile, size: Option<(u32, u32)>, bytes: usize) -> bool {
 pub fn plan(
     source: &Source,
     profile: &Profile,
+    genre: &GenreChoice,
     make: &mut dyn FnMut(usize, Option<u32>) -> Option<Made>,
 ) -> Plan {
     let n = source.files.len();
@@ -998,7 +1102,32 @@ pub fn plan(
                 v[at(Key::Title)] = title_from_name(&f.path);
             }
         }
+        // The genre: this album's own, as it is, or as the preset says
+        // (the artist's other albums' first, the list cut and spelt).
+        match genre {
+            GenreChoice::Own(g) => {
+                values.iter_mut().for_each(|v| v[at(Key::Genre)] = g.trim().to_owned());
+            }
+            GenreChoice::Keep => {}
+            GenreChoice::Preset => {
+                for v in &mut values {
+                    let artist = match v[at(Key::AlbumArtist)].trim() {
+                        "" => v[at(Key::Artist)].trim().to_lowercase(),
+                        aa => aa.to_lowercase(),
+                    };
+                    let theirs = profile
+                        .genre_from_artist
+                        .then(|| source.known.artists.get(&artist))
+                        .flatten();
+                    let text = theirs.unwrap_or(&v[at(Key::Genre)]).clone();
+                    v[at(Key::Genre)] = genres_of(&text, profile, &source.known);
+                }
+            }
+        }
         for (u, k) in [(Unify::Year, Key::Year), (Unify::Genre, Key::Genre)] {
+            if k == Key::Genre && *genre == GenreChoice::Keep {
+                continue;
+            }
             if unify(u)
                 && let Some(value) = common(&values, k)
             {
@@ -1389,6 +1518,10 @@ pub fn plan(
         new_folder,
         files,
         folder_jpg,
+        genre: (
+            common(&original, Key::Genre).unwrap_or_default(),
+            common(&values, Key::Genre).unwrap_or_default(),
+        ),
         folder_jpg_now: source
             .folder_jpg
             .as_ref()
@@ -1701,6 +1834,55 @@ mod tests {
         assert_eq!(f(TrackFormat::Keep, 3, 12, 2), None);
     }
 
+    #[test]
+    fn genres_cut_and_spelt() {
+        let known = Known {
+            genres: vec!["Modern Metal".into(), "Synthwave".into()],
+            ..Default::default()
+        };
+        let profile = Profile::default();
+        let g = |t: &str, p: &Profile| genres_of(t, p, &known);
+        assert_eq!(g("Dark Synth, Shredwave, Synthwave", &profile), "Dark Synth");
+        assert_eq!(g("modern metal", &profile), "Modern Metal");
+        let all = Profile {
+            genre_count: 0,
+            ..Profile::default()
+        };
+        assert_eq!(g("synthwave/Retrowave; SYNTHWAVE", &all), "Synthwave; Retrowave");
+        let names = &first_presets()[1].profile;
+        assert_eq!(g("Dark Synth, Shredwave", names), "Dark Synth, Shredwave");
+    }
+
+    /// The artist's other albums give the genre; one's own wins over it,
+    /// and "as it is" keeps the files' own.
+    #[test]
+    fn the_artists_genre() {
+        let main = [
+            (Key::Title, "Overture"),
+            (Key::Artist, "Meteor"),
+            (Key::Album, "Phantom Zone"),
+            (Key::Genre, "Dark Synth, Shredwave, Synthwave, Retrowave, Outrun"),
+            (Key::Track, "01"),
+        ];
+        let mut source = Source {
+            folder: PathBuf::from(r"Z:\Meteor\(2022) Phantom Zone"),
+            one_place: true,
+            files: vec![file(r"Z:\Meteor\(2022) Phantom Zone\01 - Overture.mp3", &main, &[])],
+            ..Default::default()
+        };
+        let genre = |source: &Source, choice: &GenreChoice| {
+            plan(source, &Profile::default(), choice, &mut no_cover).genre.1
+        };
+        assert_eq!(genre(&source, &GenreChoice::Preset), "Dark Synth");
+        source.known.artists.insert("meteor".into(), "Synthwave".into());
+        assert_eq!(genre(&source, &GenreChoice::Preset), "Synthwave");
+        assert_eq!(genre(&source, &GenreChoice::Own("Darksynth".into())), "Darksynth");
+        assert_eq!(
+            genre(&source, &GenreChoice::Keep),
+            "Dark Synth, Shredwave, Synthwave, Retrowave, Outrun"
+        );
+    }
+
     /// A tag's cover that fits stays, and becomes the album's.
     #[test]
     fn a_fitting_cover_stays() {
@@ -1764,7 +1946,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let plan = plan(&source, &Profile::default(), &mut no_cover);
+        let plan = plan(&source, &Profile::default(), &GenreChoice::Preset, &mut no_cover);
         let first = &plan.files[0];
         let field = |f: &FilePlan, k: Key| f.fields.iter().find(|(key, ..)| *key == k).map(|(_, _, a)| a.clone());
         assert_eq!(field(first, Key::Album).as_deref(), Some("Amaranthe"));
@@ -1813,7 +1995,7 @@ mod tests {
                 .collect(),
             ..source.clone()
         };
-        let again = super::plan(&prepared, &Profile::default(), &mut no_cover);
+        let again = super::plan(&prepared, &Profile::default(), &GenreChoice::Preset, &mut no_cover);
         assert!(again.is_empty(), "{again:#?}");
     }
 
@@ -1847,7 +2029,7 @@ mod tests {
             ..Profile::default()
         };
         let source = read(paths);
-        let first = plan(&source, &profile, &mut made(&source));
+        let first = plan(&source, &profile, &GenreChoice::Preset, &mut made(&source));
         println!("folder: {:?} -> {:?}", first.folder, first.new_folder);
         println!("folder.jpg written: {}", first.folder_jpg.is_some());
         for w in &first.warnings {
@@ -1876,7 +2058,7 @@ mod tests {
             .map(walkdir::DirEntry::into_path)
             .collect();
         let source = read(paths);
-        let again = plan(&source, &profile, &mut made(&source));
+        let again = plan(&source, &profile, &GenreChoice::Preset, &mut made(&source));
         let _ = std::fs::remove_dir_all(&root);
         assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
         let left: Vec<String> = again

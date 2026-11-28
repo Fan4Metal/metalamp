@@ -21,8 +21,8 @@ use egui::{Align, Key, Layout, RichText, Ui, vec2};
 
 use crate::library::edit::{self, TagPart};
 use crate::library::prepare::{
-    self, CoverFrom, DiscFormat, Extras, Fill, FolderJpg, Kind, Made, Need, Outcome, Plan, Preset,
-    Profile, Source, TagCover, TrackFormat, Unify,
+    self, CoverFrom, DiscFormat, Extras, Fill, FolderJpg, GenreChoice, Kind, Known, Made, Need,
+    Outcome, Plan, Preset, Profile, Source, TagCover, TrackFormat, Unify,
 };
 use crate::palette;
 use crate::settings::{CoverSide, Settings};
@@ -56,8 +56,14 @@ pub struct PrepareWindow {
     title: String,
     reading: Option<Receiver<Source>>,
     source: Option<Arc<Source>>,
-    /// The plan for the profile it was made of.
-    plan: Option<(Profile, Arc<Plan>)>,
+    /// What the library knows, given to the source read.
+    known: Known,
+    /// The album's genre this time.
+    genre: GenreChoice,
+    /// The genre typed for this album.
+    own_genre: String,
+    /// The plan for the profile and the genre it was made of.
+    plan: Option<(Profile, GenreChoice, Arc<Plan>)>,
     /// The covers made ready for the tags, by candidate and side.
     made: HashMap<(usize, Option<u32>), Option<Made>>,
     applying: Option<Applying>,
@@ -86,14 +92,15 @@ pub struct Shown {
 
 impl PrepareWindow {
     /// Opens the window for the files at `paths` (an album's, or a
-    /// folder's audio) and reads them.
-    pub fn open(&mut self, ctx: &egui::Context, paths: Vec<PathBuf>, title: String) {
+    /// folder's audio) and reads them; `known` what the library knows.
+    pub fn open(&mut self, ctx: &egui::Context, paths: Vec<PathBuf>, title: String, known: Known) {
         if paths.is_empty() || self.applying.is_some() {
             return;
         }
         *self = PrepareWindow {
             open: true,
             title,
+            known,
             only_changes: self.only_changes,
             ..PrepareWindow::default()
         };
@@ -102,6 +109,7 @@ impl PrepareWindow {
         if let Ok(tab) = std::env::var("METALAMP_PREPARE_TAB") {
             self.editor.open = true;
             self.editor.tab = match tab.as_str() {
+                "genre" => Tab::Genre,
                 "cover" => Tab::Cover,
                 "names" => Tab::Names,
                 "folder" => Tab::Folder,
@@ -128,7 +136,7 @@ impl PrepareWindow {
         if !std::mem::take(&mut self.start_asked) {
             return None;
         }
-        self.plan.as_ref().map(|(_, plan)| plan.clone())
+        self.plan.as_ref().map(|(_, _, plan)| plan.clone())
     }
 
     /// Does the plan on a thread.
@@ -139,7 +147,7 @@ impl PrepareWindow {
         how: edit::WriteTags,
         releaser: crate::audio::Releaser,
     ) {
-        let Some((_, plan)) = self.plan.clone() else {
+        let Some((_, _, plan)) = self.plan.clone() else {
             return;
         };
         let done = Arc::new(AtomicUsize::new(0));
@@ -169,8 +177,9 @@ impl PrepareWindow {
     pub fn show(&mut self, ctx: &egui::Context, settings: &mut Settings) -> Shown {
         let mut shown = Shown::default();
         if let Some(rx) = &self.reading
-            && let Ok(source) = rx.try_recv()
+            && let Ok(mut source) = rx.try_recv()
         {
+            source.known = std::mem::take(&mut self.known);
             self.source = Some(Arc::new(source));
             self.made.clear();
             self.reading = None;
@@ -198,7 +207,10 @@ impl PrepareWindow {
         let profile = profile_in_use(settings);
         if let Some(source) = &self.source
             && self.outcome.is_none()
-            && self.plan.as_ref().is_none_or(|(p, _)| *p != profile)
+            && self
+                .plan
+                .as_ref()
+                .is_none_or(|(p, g, _)| *p != profile || *g != self.genre)
         {
             let made = &mut self.made;
             let mut make = |i: usize, side: Option<u32>| {
@@ -206,8 +218,8 @@ impl PrepareWindow {
                     .or_insert_with(|| prepare::make_cover(&source.candidates[i].bytes, side))
                     .clone()
             };
-            let plan = prepare::plan(source, &profile, &mut make);
-            self.plan = Some((profile, Arc::new(plan)));
+            let plan = prepare::plan(source, &profile, &self.genre, &mut make);
+            self.plan = Some((profile, self.genre.clone(), Arc::new(plan)));
         }
 
         let busy = self.applying.is_some();
@@ -276,9 +288,12 @@ impl PrepareWindow {
                             });
                         });
                     });
+                    ui.add_enabled_ui(!busy, |ui| self.genre_row(ui));
                     ui.add_space(4.0);
                     match (&self.plan, &self.source) {
-                        (Some((_, plan)), Some(_)) => preview(ui, plan, body, self.only_changes),
+                        (Some((_, _, plan)), Some(_)) => {
+                            preview(ui, plan, body - 30.0, self.only_changes)
+                        }
                         _ => {
                             ui.allocate_ui(vec2(ui.available_width(), body), |ui| {
                                 ui.set_min_height(body);
@@ -300,7 +315,7 @@ impl PrepareWindow {
                             format!("Выполняется… {done} из {}", applying.total)
                         ));
                     } else if self.outcome.is_none()
-                        && let Some((_, plan)) = &self.plan
+                        && let Some((_, _, plan)) = &self.plan
                     {
                         ui.label(RichText::new(summary(plan)).color(palette::text_weak()));
                     }
@@ -313,14 +328,14 @@ impl PrepareWindow {
                                 .folder
                                 .as_ref()
                                 .map(|(_, new)| new.clone())
-                                .or_else(|| self.plan.as_ref().map(|(_, p)| p.folder.clone()));
+                                .or_else(|| self.plan.as_ref().map(|(_, _, p)| p.folder.clone()));
                             if let Some(folder) = folder
                                 && ui.button(tr!("Open the folder", "Открыть папку")).clicked()
                             {
                                 crate::win::shell_open(&folder);
                             }
                         } else {
-                            let ready = !busy && self.plan.as_ref().is_some_and(|(_, p)| !p.is_empty());
+                            let ready = !busy && self.plan.as_ref().is_some_and(|(_, _, p)| !p.is_empty());
                             if ui
                                 .add_enabled(
                                     ready,
@@ -341,7 +356,7 @@ impl PrepareWindow {
                     });
                 });
             });
-        let sample = self.plan.as_ref().map(|(_, p)| p.clone());
+        let sample = self.plan.as_ref().map(|(_, _, p)| p.clone());
         shown.changed |= self.editor.show(ctx, settings, sample.as_deref());
         if !busy
             && !self.editor.open
@@ -360,6 +375,85 @@ impl PrepareWindow {
             self.made.clear();
         }
         shown
+    }
+
+    /// The album's genre this time: as the preset says, as it is, or one's
+    /// own (typed, or chosen among the library's); then what most files
+    /// have now and will have.
+    fn genre_row(&mut self, ui: &mut Ui) {
+        ui.horizontal(|ui| {
+            ui.label(tr!("Genre", "Жанр"));
+            let mode = match &self.genre {
+                GenreChoice::Preset => 0,
+                GenreChoice::Keep => 1,
+                GenreChoice::Own(_) => 2,
+            };
+            if ui
+                .selectable_label(mode == 0, tr!("By the preset", "По пресету"))
+                .clicked()
+            {
+                self.genre = GenreChoice::Preset;
+            }
+            if ui.selectable_label(mode == 1, tr!("As it is", "Как есть")).clicked() {
+                self.genre = GenreChoice::Keep;
+            }
+            if ui.selectable_label(mode == 2, tr!("Own", "Свой")).clicked() {
+                if self.own_genre.is_empty()
+                    && let Some((_, _, plan)) = &self.plan
+                {
+                    self.own_genre = plan.genre.1.clone();
+                }
+                self.genre = GenreChoice::Own(self.own_genre.clone());
+            }
+            if mode == 2 {
+                let field = ui.add(
+                    egui::TextEdit::singleline(&mut self.own_genre)
+                        .desired_width(180.0)
+                        .hint_text(tr!("the album's genre", "жанр альбома")),
+                );
+                let genres = self.source.as_ref().map(|s| s.known.genres.clone()).unwrap_or_default();
+                let typed = self.own_genre.trim().to_lowercase();
+                let mut chosen = None;
+                ui.menu_button(tr!("Choose…", "Выбрать…"), |ui| {
+                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                        for g in genres
+                            .iter()
+                            .filter(|g| typed.is_empty() || g.to_lowercase().contains(&typed))
+                        {
+                            if ui.button(g).clicked() {
+                                chosen = Some(g.clone());
+                                ui.close();
+                            }
+                        }
+                    });
+                })
+                .response
+                .on_hover_text(tr!("The library's genres", "Жанры библиотеки"));
+                if let Some(g) = chosen {
+                    self.own_genre = g;
+                }
+                if field.changed() || self.genre != GenreChoice::Own(self.own_genre.clone()) {
+                    self.genre = GenreChoice::Own(self.own_genre.clone());
+                }
+            }
+            if let Some((_, _, plan)) = &self.plan {
+                let (before, after) = &plan.genre;
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let colour = if before == after {
+                        palette::text_weak()
+                    } else {
+                        palette::accent()
+                    };
+                    let dash = |t: &str| if t.is_empty() { "—".to_owned() } else { t.to_owned() };
+                    ui.add(egui::Label::new(RichText::new(dash(after)).color(colour)).truncate());
+                    ui.label(RichText::new("»").color(palette::text_weak()));
+                    ui.add(
+                        egui::Label::new(RichText::new(dash(before)).color(palette::text()))
+                            .truncate(),
+                    );
+                });
+            }
+        });
     }
 }
 
@@ -712,17 +806,19 @@ fn report(ui: &mut Ui, outcome: &Outcome, height: f32) {
 enum Tab {
     #[default]
     Tags,
+    Genre,
     Cover,
     Names,
     Folder,
 }
 
 impl Tab {
-    const ALL: [Tab; 4] = [Tab::Tags, Tab::Cover, Tab::Names, Tab::Folder];
+    const ALL: [Tab; 5] = [Tab::Tags, Tab::Genre, Tab::Cover, Tab::Names, Tab::Folder];
 
     fn label(self) -> &'static str {
         match self {
             Tab::Tags => tr!("Tags", "Теги"),
+            Tab::Genre => tr!("Genre", "Жанр"),
             Tab::Cover => tr!("Cover", "Обложка"),
             Tab::Names => tr!("Names", "Имена"),
             Tab::Folder => tr!("Folder", "Папка"),
@@ -810,6 +906,7 @@ impl PresetEditor {
                             .auto_shrink([false, false])
                             .show(ui, |ui| match self.tab {
                                 Tab::Tags => tags_tab(ui, profile),
+                                Tab::Genre => genre_tab(ui, profile),
                                 Tab::Cover => cover_tab(ui, profile),
                                 Tab::Names => names_tab(ui, profile, sample),
                                 Tab::Folder => folder_tab(ui, profile),
@@ -1100,6 +1197,81 @@ fn tags_tab(ui: &mut Ui, p: &mut Profile) {
             |ui| toggles(ui, &mut p.required, &Need::ALL, Need::label, |_| None),
         );
     });
+}
+
+fn genre_tab(ui: &mut Ui, p: &mut Profile) {
+    section(ui, tr!("Genres in the tags", "Жанры в тегах"), |ui| {
+        row(
+            ui,
+            tr!("The artist's genre", "Как у других альбомов исполнителя"),
+            Some(tr!(
+                "When the library holds other albums of the artist, their genre",
+                "Если в библиотеке есть другие альбомы исполнителя, берётся их жанр"
+            )),
+            60.0,
+            |ui| switch(ui, &mut p.genre_from_artist),
+        );
+        divider(ui);
+        row(
+            ui,
+            tr!("Separated by", "Разделители в поле"),
+            Some(tr!(
+                "Any of these letters parts the genres of one field; empty: the field is one genre",
+                "Любой из этих знаков разделяет жанры в одном поле; пусто — поле считается одним жанром"
+            )),
+            120.0,
+            |ui| {
+                ui.add(egui::TextEdit::singleline(&mut p.genre_split).desired_width(100.0));
+            },
+        );
+        divider(ui);
+        row(
+            ui,
+            tr!("Genres kept", "Оставлять жанров"),
+            Some(tr!("The first ones of the list", "Первые из списка")),
+            160.0,
+            |ui| {
+                let label = |n: u8| {
+                    if n == 0 {
+                        tr!("All", "Все").to_owned()
+                    } else {
+                        n.to_string()
+                    }
+                };
+                choice(ui, "prepare_genre_count", &mut p.genre_count, &[0, 1, 2, 3], label, 140.0)
+            },
+        );
+        divider(ui);
+        row(
+            ui,
+            tr!("Written between them", "Записывать через"),
+            Some(tr!("When more than one stays", "Если остаётся больше одного")),
+            120.0,
+            |ui| {
+                ui.add(egui::TextEdit::singleline(&mut p.genre_join).desired_width(100.0));
+            },
+        );
+        divider(ui);
+        row(
+            ui,
+            tr!("Spelt as the library", "Написание как в библиотеке"),
+            Some(tr!(
+                "\"modern metal\" becomes \"Modern Metal\" when the library or the usual genres spell it so",
+                "«modern metal» становится «Modern Metal», если так он записан в библиотеке или в списке жанров"
+            )),
+            60.0,
+            |ui| switch(ui, &mut p.genre_spelling),
+        );
+    });
+    ui.add_space(8.0);
+    ui.label(
+        RichText::new(tr!(
+            "The genre for one album is also chosen in the preparation's window: by the preset, as it is, or one's own.",
+            "Жанр конкретного альбома можно выбрать и в окне подготовки: по пресету, как есть или свой."
+        ))
+        .size(12.5)
+        .color(palette::text_weak()),
+    );
 }
 
 fn cover_tab(ui: &mut Ui, p: &mut Profile) {
