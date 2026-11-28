@@ -119,6 +119,44 @@ pub fn shell_open(target: impl AsRef<OsStr>) -> bool {
     result as isize > 32
 }
 
+/// Files and folders put into the recycle bin (`SHFileOperationW` with
+/// `FOF_ALLOWUNDO`), without asking and without the shell's progress or
+/// error windows.
+pub fn recycle(paths: &[std::path::PathBuf]) -> Result<(), String> {
+    use windows_sys::Win32::UI::Shell::{
+        FO_DELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, SHFILEOPSTRUCTW,
+        SHFileOperationW,
+    };
+    if paths.is_empty() {
+        return Ok(());
+    }
+    // The paths one after another, each ending with a NUL, and one more.
+    let mut from: Vec<u16> = Vec::new();
+    for path in paths {
+        from.extend(wide(path));
+    }
+    from.push(0);
+    let mut op = SHFILEOPSTRUCTW {
+        hwnd: std::ptr::null_mut(),
+        wFunc: FO_DELETE,
+        pFrom: from.as_ptr(),
+        pTo: std::ptr::null(),
+        fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT) as u16,
+        fAnyOperationsAborted: 0,
+        hNameMappings: std::ptr::null_mut(),
+        lpszProgressTitle: std::ptr::null(),
+    };
+    let result = unsafe { SHFileOperationW(&mut op) };
+    if result == 0 && op.fAnyOperationsAborted == 0 {
+        Ok(())
+    } else {
+        Err(tr!(
+            format!("the files were not put into the recycle bin (error {result:#x})"),
+            format!("файлы не удалось отправить в корзину (ошибка {result:#x})")
+        ))
+    }
+}
+
 /// HTTPS GET of `path` on `host` through WinHTTP, which brings the system's
 /// TLS and proxy settings (no HTTP crate); `headers` are extra request
 /// lines joined with `\r\n`. Returns the status code and the body, refused

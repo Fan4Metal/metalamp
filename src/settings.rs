@@ -174,6 +174,10 @@ pub struct Settings {
     pub media_keys: MediaKeys,
     /// How large a cover put into tags may be (the file info window).
     pub tag_cover_side: CoverSide,
+    /// What preparing an album does (`library::prepare`), and the
+    /// profiles kept under names.
+    pub prepare: crate::library::prepare::Profile,
+    pub prepare_presets: Vec<crate::library::prepare::Preset>,
     /// The ID3v2 version an MP3's (or a WAV's) tag is written in.
     pub id3v2_version: Id3Version,
     /// What becomes of an MP3's ID3v1 tag when its tags are written.
@@ -995,6 +999,8 @@ impl Default for Settings {
             volume_step: DEFAULT_VOLUME_STEP,
             media_keys: MediaKeys::default(),
             tag_cover_side: CoverSide::default(),
+            prepare: Default::default(),
+            prepare_presets: Vec::new(),
             id3v2_version: Id3Version::default(),
             id3v1: Id3v1Tag::default(),
             id3v1_encoding: Id3v1Encoding::default(),

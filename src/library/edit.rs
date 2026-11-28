@@ -271,6 +271,288 @@ pub struct Changes {
     pub lyrics: Option<String>,
     /// The cover put or removed, or `None` to leave it as it is.
     pub cover: Option<CoverChange>,
+    /// The parts of the tag beyond the main fields that stay, the rest
+    /// removed (an album's preparation, `prepare`); `None`: all stay.
+    pub keep: Option<Vec<TagPart>>,
+}
+
+/// The parts of a tag beyond the main fields, kept or removed as a whole
+/// when an album is prepared (`prepare::Profile::keep`). The main fields
+/// (title, artists, album, year, genre, numbers, the length) and the front
+/// cover are none of them: they always stay.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TagPart {
+    Composer,
+    Comment,
+    Lyrics,
+    ReplayGain,
+    MusicBrainz,
+    Rating,
+    /// The pictures other than the front cover (the back, the booklet).
+    Pictures,
+    /// The other people: conductor, lyricist, remixer…
+    People,
+    /// Publisher, label, copyright, ISRC, catalogue number, dates…
+    Release,
+    /// BPM, key, mood, language, grouping…
+    Music,
+    /// Encoded by, the encoder's name and settings.
+    Encoder,
+    Links,
+    Sorting,
+    /// Whatever else: private frames, players' and rippers' own.
+    Other,
+}
+
+impl TagPart {
+    pub const ALL: [TagPart; 14] = [
+        TagPart::Composer,
+        TagPart::Comment,
+        TagPart::Lyrics,
+        TagPart::ReplayGain,
+        TagPart::MusicBrainz,
+        TagPart::Rating,
+        TagPart::Pictures,
+        TagPart::People,
+        TagPart::Release,
+        TagPart::Music,
+        TagPart::Encoder,
+        TagPart::Links,
+        TagPart::Sorting,
+        TagPart::Other,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            TagPart::Composer => tr!("Composer", "Композитор"),
+            TagPart::Comment => tr!("Comment", "Комментарий"),
+            TagPart::Lyrics => tr!("Lyrics", "Текст песни"),
+            TagPart::ReplayGain => "ReplayGain",
+            TagPart::MusicBrainz => "MusicBrainz",
+            TagPart::Rating => tr!("Rating", "Рейтинг"),
+            TagPart::Pictures => tr!("Other pictures", "Другие картинки"),
+            TagPart::People => tr!("People", "Участники"),
+            TagPart::Release => tr!("Release", "Издание"),
+            TagPart::Music => tr!("Music", "Музыка"),
+            TagPart::Encoder => tr!("Encoder", "Кодировщик"),
+            TagPart::Links => tr!("Links", "Ссылки"),
+            TagPart::Sorting => tr!("Sort orders", "Сортировка"),
+            TagPart::Other => tr!("Other", "Прочее"),
+        }
+    }
+
+    /// What it holds, for the tooltip.
+    pub fn hint(self) -> &'static str {
+        match self {
+            TagPart::Composer => "TCOM",
+            TagPart::Comment => "COMM",
+            TagPart::Lyrics => tr!("USLT, SYLT", "USLT, SYLT"),
+            TagPart::ReplayGain => tr!("Track and album gain and peak", "Усиление и пик трека и альбома"),
+            TagPart::MusicBrainz => tr!("MusicBrainz and AcoustID identifiers", "Идентификаторы MusicBrainz и AcoustID"),
+            TagPart::Rating => tr!("Ratings and play counts of other players (POPM, PCNT)", "Рейтинги и счётчики других плееров (POPM, PCNT)"),
+            TagPart::Pictures => tr!("Back cover, booklet, disc… (the front cover stays)", "Задняя обложка, буклет, диск… (передняя обложка остаётся)"),
+            TagPart::People => tr!("Conductor, lyricist, remixer, producer…", "Дирижёр, автор текста, ремиксер, продюсер…"),
+            TagPart::Release => tr!("Publisher, label, copyright, ISRC, catalogue number, release dates…", "Издатель, лейбл, копирайт, ISRC, каталожный номер, даты выпуска…"),
+            TagPart::Music => tr!("BPM, key, mood, language, grouping…", "BPM, тональность, настроение, язык, группа…"),
+            TagPart::Encoder => tr!("Encoded by, encoder and its settings (TENC, TSSE)", "Кем закодировано, кодировщик и его настройки (TENC, TSSE)"),
+            TagPart::Links => tr!("URLs (W*** frames)", "Адреса URL (кадры W***)"),
+            TagPart::Sorting => tr!("Sort orders of the titles and names", "Порядок сортировки названий и имён"),
+            TagPart::Other => tr!("Private frames, rippers' and players' own fields", "Служебные кадры, поля рипперов и плееров"),
+        }
+    }
+}
+
+/// The part an item of a tag is of; `None`: a main field, which stays.
+pub fn part_of_key(key: ItemKey) -> Option<TagPart> {
+    use ItemKey as K;
+    Some(match key {
+        K::TrackTitle
+        | K::TrackArtist
+        | K::AlbumTitle
+        | K::AlbumArtist
+        | K::Year
+        | K::RecordingDate
+        | K::Genre
+        | K::TrackNumber
+        | K::TrackTotal
+        | K::DiscNumber
+        | K::DiscTotal
+        | K::Length => return None,
+        K::Composer => TagPart::Composer,
+        K::Comment => TagPart::Comment,
+        K::Lyrics | K::UnsyncLyrics => TagPart::Lyrics,
+        K::ReplayGainAlbumGain
+        | K::ReplayGainAlbumPeak
+        | K::ReplayGainTrackGain
+        | K::ReplayGainTrackPeak => TagPart::ReplayGain,
+        K::MusicBrainzRecordingId
+        | K::MusicBrainzTrackId
+        | K::MusicBrainzReleaseId
+        | K::MusicBrainzReleaseGroupId
+        | K::MusicBrainzArtistId
+        | K::MusicBrainzReleaseArtistId
+        | K::MusicBrainzWorkId
+        | K::MusicBrainzReleaseType => TagPart::MusicBrainz,
+        K::Popularimeter => TagPart::Rating,
+        K::EncodedBy | K::EncoderSoftware | K::EncoderSettings => TagPart::Encoder,
+        K::AlbumTitleSortOrder
+        | K::AlbumArtistSortOrder
+        | K::TrackTitleSortOrder
+        | K::TrackArtistSortOrder
+        | K::ComposerSortOrder
+        | K::ShowNameSortOrder => TagPart::Sorting,
+        K::ReleaseCountry => TagPart::Release,
+        other => match STANDARD.iter().find(|(_, k)| *k == other) {
+            Some((Group::People, _)) => TagPart::People,
+            Some((Group::Release, _)) => TagPart::Release,
+            Some((Group::Music, _)) => TagPart::Music,
+            Some((Group::Links, _)) => TagPart::Links,
+            None => TagPart::Other,
+        },
+    })
+}
+
+/// The part an ID3v2 frame is of, as the tag has it before lofty splits
+/// it (so the frames it would keep apart, PRIV and the like, count too);
+/// `None`: a main field or a picture (pictures are decided with the
+/// common fields, `strip_items`).
+fn part_of_frame(frame: &Frame) -> Option<TagPart> {
+    let id = frame.id_str();
+    match id {
+        "APIC" | "TLEN" | "TYER" | "TDAT" | "TIME" => return None,
+        "COMM" => return Some(TagPart::Comment),
+        "USLT" | "SYLT" => return Some(TagPart::Lyrics),
+        "POPM" | "PCNT" => return Some(TagPart::Rating),
+        "UFID" => return Some(TagPart::MusicBrainz),
+        "RVA2" | "RVAD" => return Some(TagPart::ReplayGain),
+        "WXXX" => return Some(TagPart::Links),
+        _ => {}
+    }
+    if let Frame::UserText(f) = frame {
+        let description = f.description.to_uppercase();
+        if description.starts_with("REPLAYGAIN") {
+            return Some(TagPart::ReplayGain);
+        }
+        if description.starts_with("MUSICBRAINZ") || description.starts_with("ACOUSTID") {
+            return Some(TagPart::MusicBrainz);
+        }
+        return match ItemKey::from_key(TagType::Id3v2, &f.description) {
+            Some(key) => part_of_key(key),
+            None => Some(TagPart::Other),
+        };
+    }
+    match ItemKey::from_key(TagType::Id3v2, id) {
+        Some(key) => part_of_key(key),
+        None => Some(TagPart::Other),
+    }
+}
+
+/// An ID3v2 frame's name as the preparation lists it: its ID, a user
+/// text frame's with its description.
+fn frame_name(frame: &Frame) -> String {
+    match frame {
+        Frame::UserText(f) => format!("TXXX:{}", f.description),
+        _ => frame.id_str().to_owned(),
+    }
+}
+
+/// Removes the frames of the parts not in `keep`, before the tag is
+/// split; what was removed, by part and name.
+fn strip_frames(tag: &mut Id3v2Tag, keep: &[TagPart]) -> Vec<(TagPart, String)> {
+    let mut removed = Vec::new();
+    tag.retain(|frame| match part_of_frame(frame) {
+        Some(part) if !keep.contains(&part) => {
+            removed.push((part, frame_name(frame)));
+            false
+        }
+        _ => true,
+    });
+    removed
+}
+
+/// Removes the common tag's items of the parts not in `keep`, and its
+/// pictures other than the front cover (the first front cover, else the
+/// first picture) unless `TagPart::Pictures` is kept; what was removed.
+fn strip_items(tag: &mut Tag, keep: &[TagPart]) -> Vec<(TagPart, String)> {
+    let mut removed = Vec::new();
+    let tag_type = tag.tag_type();
+    tag.retain(|item| match part_of_key(item.key()) {
+        Some(part) if !keep.contains(&part) => {
+            let name = item
+                .key()
+                .map_key(tag_type)
+                .map_or_else(|| format!("{:?}", item.key()), str::to_owned);
+            removed.push((part, name));
+            false
+        }
+        _ => true,
+    });
+    if !keep.contains(&TagPart::Pictures) && tag.pictures().len() > 1 {
+        let cover = tag
+            .pictures()
+            .iter()
+            .position(|p| p.pic_type() == PictureType::CoverFront)
+            .unwrap_or(0);
+        for i in (0..tag.pictures().len()).rev() {
+            if i != cover {
+                let picture = tag.remove_picture(i);
+                removed.push((TagPart::Pictures, format!("{:?}", picture.pic_type())));
+            }
+        }
+    }
+    removed
+}
+
+/// What an album's preparation needs to know of a file's tag: its main
+/// fields, the parts beyond them it holds (each item by part and name), and
+/// its cover (the front cover, else the first picture), as the bytes.
+#[derive(Clone, Debug, Default)]
+pub struct Inspected {
+    pub main: [String; MAIN],
+    pub parts: Vec<(TagPart, String)>,
+    pub cover: Option<Vec<u8>>,
+    /// An MP3's ID3v1 and APE tags.
+    pub id3v1: bool,
+    pub ape: bool,
+}
+
+/// Reads `path`'s tag as [`Inspected`] (nothing is written).
+pub fn inspect(path: &Path) -> Result<Inspected, String> {
+    let mut inspected = with_tag(
+        path,
+        |tag, _, raw| {
+            let main = values(tag);
+            let cover = tag
+                .pictures()
+                .iter()
+                .find(|p| p.pic_type() == PictureType::CoverFront)
+                .or_else(|| tag.pictures().first())
+                .map(|p| p.data().to_vec());
+            let mut parts = raw;
+            parts.extend(strip_items(&mut tag.clone(), &[]));
+            Ok(Inspected {
+                main,
+                parts,
+                cover,
+                id3v1: false,
+                ape: false,
+            })
+        },
+        None,
+        Id3Version::default(),
+        Some(&[]),
+    )?;
+    if FileType::from_path(path) == Some(FileType::Mpeg) {
+        let options = ParseOptions::new().read_properties(false);
+        if let Ok(file) = std::fs::File::open(path)
+            && let Ok(mp3) = lofty::mpeg::MpegFile::read_from(&mut BufReader::new(file), options)
+        {
+            inspected.id3v1 = mp3.id3v1().is_some();
+            inspected.ape = mp3.ape().is_some();
+        }
+    }
+    Ok(inspected)
 }
 
 /// What becomes of the tag's cover: the pictures shown as it (its front
@@ -290,7 +572,7 @@ pub enum CoverChange {
 pub fn read(path: &Path, version: Id3Version) -> Result<Values, String> {
     with_tag(
         path,
-        |tag, kind| {
+        |tag, kind, _| {
             let lyrics = LYRICS
                 .iter()
                 .find_map(|k| tag.get_strings(*k).next())
@@ -308,6 +590,7 @@ pub fn read(path: &Path, version: Id3Version) -> Result<Values, String> {
         },
         None,
         version,
+        None,
     )
 }
 
@@ -374,7 +657,13 @@ pub fn write(path: &Path, changes: &Changes, how: WriteTags) -> Result<(), Strin
     if std::fs::metadata(path).is_ok_and(|m| m.permissions().readonly()) {
         return Err(read_only());
     }
-    with_tag(path, |tag, _| apply(tag, changes), Some(changes), how.id3v2)?;
+    with_tag(
+        path,
+        |tag, _, _| apply(tag, changes),
+        Some(changes),
+        how.id3v2,
+        changes.keep.as_deref(),
+    )?;
     if FileType::from_path(path) == Some(FileType::Mpeg) {
         other_tags(path, changes, how)?;
     }
@@ -451,12 +740,16 @@ fn other_tags(path: &Path, changes: &Changes, how: WriteTags) -> Result<(), Stri
 
 /// Reads `path`'s own tag, lets `f` see (and change) its common fields,
 /// and when it writes `changes`, writes it back with the rest of it kept.
+/// With `keep`, an ID3v2 tag's frames of the other parts are removed
+/// before it is split (`strip_frames`), and `f` is told which.
 fn with_tag<R>(
     path: &Path,
-    f: impl FnOnce(&mut Tag, Kind) -> Result<R, String>,
+    f: impl FnOnce(&mut Tag, Kind, Vec<(TagPart, String)>) -> Result<R, String>,
     changes: Option<&Changes>,
     version: Id3Version,
+    keep: Option<&[TagPart]>,
 ) -> Result<R, String> {
+    let strip = |tag: &mut Id3v2Tag| keep.map(|k| strip_frames(tag, k)).unwrap_or_default();
     let save = changes.is_some();
     let numbers = |tag: &mut Id3v2Tag, read: &[(&'static str, String)]| {
         if let Some(changes) = changes {
@@ -497,7 +790,6 @@ fn with_tag<R>(
                 not_losing(path, tag)?;
             }
             let (write, kind) = id3(id3v23(file.id3v2()));
-            let f = move |t: &mut Tag| f(t, kind);
             let tag = file.id3v2().cloned().unwrap_or_else(|| {
                 seeded(
                     [
@@ -512,22 +804,23 @@ fn with_tag<R>(
                     .flatten(),
                 )
             });
-            let tag = mended(tag);
+            let mut tag = mended(tag);
+            let raw = strip(&mut tag);
             let read = numbers_read(&tag);
-            edit(tag, f, save, path, write, |t| numbers(t, &read))
+            edit(tag, move |t| f(t, kind, raw), save, path, write, |t| numbers(t, &read))
         }
         Some(FileType::Wav) => {
             let file = lofty::iff::wav::WavFile::read_from(&mut reader, options).map_err(err)?;
             drop(reader);
             let (write, kind) = id3(id3v23(file.id3v2()));
-            let f = move |t: &mut Tag| f(t, kind);
             let tag = file
                 .id3v2()
                 .cloned()
                 .unwrap_or_else(|| seeded(file.riff_info().cloned().map(Tag::from)));
-            let tag = mended(tag);
+            let mut tag = mended(tag);
+            let raw = strip(&mut tag);
             let read = numbers_read(&tag);
-            edit(tag, f, save, path, write, |t| numbers(t, &read))
+            edit(tag, move |t| f(t, kind, raw), save, path, write, |t| numbers(t, &read))
         }
         Some(FileType::Flac) => {
             let file = lofty::flac::FlacFile::read_from(&mut reader, options).map_err(err)?;
@@ -540,7 +833,7 @@ fn with_tag<R>(
                 let _ = tag.insert_picture(picture.clone(), Some(*info));
             }
             let kind = of(TagType::VorbisComments);
-            edit(tag, move |t| f(t, kind), save, path, write, |_| {})
+            edit(tag, move |t| f(t, kind, Vec::new()), save, path, write, |_| {})
         }
         Some(FileType::Mp4) => {
             let file = lofty::mp4::Mp4File::read_from(&mut reader, options).map_err(err)?;
@@ -548,7 +841,7 @@ fn with_tag<R>(
             let kind = of(TagType::Mp4Ilst);
             edit(
                 file.ilst().cloned().unwrap_or_default(),
-                move |t| f(t, kind),
+                move |t| f(t, kind, Vec::new()),
                 save,
                 path,
                 write,
@@ -914,6 +1207,9 @@ fn number_text(key: Key, value: &str) -> Result<Option<(String, Option<String>)>
 }
 
 fn apply(tag: &mut Tag, changes: &Changes) -> Result<(), String> {
+    if let Some(keep) = &changes.keep {
+        strip_items(tag, keep);
+    }
     for (key, value) in &changes.other {
         put_other(tag, *key, value);
     }
@@ -1932,5 +2228,45 @@ mod tests {
         let values = values.unwrap();
         assert_eq!(values.main[Key::Track as usize], "01/12");
         assert_eq!(values.main[Key::Disc as usize], "01");
+    }
+
+    /// The parts of a tag are listed by `inspect`, and a write keeping
+    /// some removes the rest, PRIV (which lofty keeps apart) too.
+    #[test]
+    fn parts_listed_and_removed() {
+        let text = |s: &str| [&[0u8][..], s.as_bytes()].concat();
+        let bytes = mp3_with(&[
+            (b"TIT2", text("Song")),
+            (b"TRCK", text("1/16")),
+            (b"COMM", [&[0u8][..], b"eng\0hi"].concat()),
+            (b"TENC", text("Someone")),
+            (b"PRIV", b"owner\0data".to_vec()),
+            (b"TXXX", [&[0u8][..], b"REPLAYGAIN_TRACK_GAIN\0-6.5 dB"].concat()),
+        ]);
+        let dir = std::env::temp_dir().join(format!("metalamp_parts_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("parts.mp3");
+        std::fs::write(&file, &bytes).unwrap();
+        let inspected = inspect(&file);
+        let mut changes = Changes {
+            keep: Some(vec![TagPart::ReplayGain]),
+            ..Default::default()
+        };
+        changes.main[Key::Track as usize] = Some("01".into());
+        let written = write(&file, &changes, WriteTags::default());
+        let frames = id3_frames(&file);
+        let again = inspect(&file);
+        std::fs::remove_dir_all(&dir).unwrap();
+        let inspected = inspected.unwrap();
+        let mut parts: Vec<TagPart> = inspected.parts.iter().map(|(p, _)| *p).collect();
+        parts.sort_by_key(|p| *p as u8);
+        assert_eq!(
+            parts,
+            [TagPart::Comment, TagPart::ReplayGain, TagPart::Encoder, TagPart::Other]
+        );
+        assert_eq!(inspected.main[Key::Track as usize], "1/16");
+        written.unwrap();
+        assert_eq!(frames, ["TIT2", "TRCK", "TXXX"]);
+        assert_eq!(again.unwrap().main[Key::Track as usize], "01");
     }
 }

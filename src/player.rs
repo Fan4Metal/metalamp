@@ -614,6 +614,14 @@ impl Player {
         changes
     }
 
+    /// Files renamed or moved (an album prepared): the playlist's entries
+    /// and the loudness measured follow them. True when the playlist
+    /// changed.
+    pub fn moved(&mut self, moved: &[(PathBuf, PathBuf)]) -> bool {
+        self.loudness.moved(moved);
+        self.queue.moved(moved)
+    }
+
     /// The path heard (or paused), if any.
     pub fn playing_path(&self) -> Option<&PathBuf> {
         let id = self.playing?;

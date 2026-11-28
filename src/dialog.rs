@@ -32,6 +32,8 @@ pub enum Ask {
     Lyrics,
     /// The PNG the track's spectrum is saved to.
     Spectrum,
+    /// The folder of an album to prepare.
+    PrepareFolder,
 }
 
 impl Ask {
@@ -45,6 +47,7 @@ impl Ask {
             Ask::Cover => "a cover",
             Ask::Lyrics => "lyrics",
             Ask::Spectrum => "the spectrum's picture",
+            Ask::PrepareFolder => "an album to prepare",
         }
     }
 }

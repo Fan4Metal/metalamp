@@ -238,6 +238,27 @@ impl Queue {
         at
     }
 
+    /// Files renamed or moved (where they were, where they are): the
+    /// entries of them follow, whatever the case of their paths. True when
+    /// any did.
+    pub fn moved(&mut self, moved: &[(PathBuf, PathBuf)]) -> bool {
+        let to: std::collections::HashMap<String, &PathBuf> = moved
+            .iter()
+            .map(|(from, to)| (from.to_string_lossy().to_lowercase(), to))
+            .collect();
+        let mut any = false;
+        for entry in &mut self.entries {
+            if let Some(new) = to.get(&entry.path.to_string_lossy().to_lowercase()) {
+                entry.path = (*new).clone();
+                any = true;
+            }
+        }
+        if any {
+            self.revision += 1;
+        }
+        any
+    }
+
     pub fn index_of(&self, id: u64) -> Option<usize> {
         self.entries.iter().position(|e| e.id == id)
     }

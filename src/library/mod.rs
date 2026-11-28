@@ -13,6 +13,7 @@ pub mod genres;
 pub mod id3v1;
 pub mod index;
 pub mod outside;
+pub mod prepare;
 pub mod scan;
 pub mod summary;
 pub mod tags;

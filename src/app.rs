@@ -109,6 +109,8 @@ pub struct App {
     info_request: Option<PathBuf>,
     /// The editor of the library's views.
     view_editor: crate::ui::view_editor::ViewEditor,
+    /// The album's preparation window.
+    prepare: crate::ui::prepare::PrepareWindow,
     /// The file dialog open, on a thread of its own (`dialog.rs`).
     dialogs: crate::dialog::Dialogs,
     /// The plays and ratings, and the clock of the track heard.
@@ -290,6 +292,7 @@ impl App {
             saved_playlist,
             info_request: None,
             view_editor: crate::ui::view_editor::ViewEditor::default(),
+            prepare: crate::ui::prepare::PrepareWindow::default(),
             dialogs: crate::dialog::Dialogs::default(),
             stats: crate::stats::Stats::load(),
             listening: crate::stats::Listening::default(),
@@ -498,6 +501,14 @@ impl App {
                 if let Some(ctx) = self.wake.get().cloned() {
                     self.file_info.open(&ctx, paths, true);
                 }
+            }
+            LibraryAction::Prepare(album) => self.prepare_album(album, ctx),
+            LibraryAction::PrepareFolder => {
+                let make = || {
+                    rfd::FileDialog::new()
+                        .set_title(tr!("The album's folder", "Папка альбома"))
+                };
+                self.ask(ctx, Ask::PrepareFolder, make, dialog::pick_folder);
             }
             LibraryAction::Rate(tracks, n) => {
                 let paths = self.paths_of(&tracks);
@@ -1278,6 +1289,75 @@ impl App {
             Ask::Cover => self.file_info.cover_from(path),
             Ask::Lyrics => self.file_info.lyrics_from(path),
             Ask::Spectrum => self.file_info.spectrum_to(path),
+            Ask::PrepareFolder => {
+                let files = audio_in_folder(&path);
+                let title = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                if let Some(ctx) = self.wake.get().cloned() {
+                    let side = self.settings.tag_cover_side.pixels();
+                    self.prepare.open(&ctx, files, title, side);
+                }
+            }
+        }
+    }
+
+    /// Opens the preparation of the library's album (all its tracks,
+    /// whatever the search leaves).
+    fn prepare_album(&mut self, album: crate::library::AlbumId, ctx: &egui::Context) {
+        let Some(a) = self.library.albums.get(album as usize) else {
+            return;
+        };
+        let paths = self.paths_of(&a.tracks);
+        let title = format!("{} — {}", a.artist, a.title);
+        let side = self.settings.tag_cover_side.pixels();
+        self.prepare.open(ctx, paths, title, side);
+    }
+
+    /// The preparation window's frame: Apply started (the player stopped
+    /// first when it plays a file to be renamed), and what was done taken
+    /// in: the plays, ratings, loudness and playlist moved to the new
+    /// paths, the folders read again.
+    fn show_prepare(&mut self, ctx: &egui::Context) {
+        if let Some(plan) = self.prepare.take_start() {
+            let renamed: std::collections::HashSet<String> = plan
+                .files
+                .iter()
+                .filter(|f| f.rename.is_some() || plan.new_folder.is_some())
+                .map(|f| f.path.to_string_lossy().to_lowercase())
+                .collect();
+            if self
+                .player
+                .playing_path()
+                .is_some_and(|p| renamed.contains(&p.to_string_lossy().to_lowercase()))
+            {
+                self.player.stop();
+            }
+            let how = crate::library::edit::WriteTags {
+                id3v2: self.settings.id3v2_version,
+                id3v1: self.settings.id3v1,
+                ape: self.settings.ape,
+            };
+            self.prepare
+                .start(ctx, self.settings.prepare.clone(), how, self.player.releaser());
+        }
+        let shown = self.prepare.show(ctx, &mut self.settings);
+        if shown.changed {
+            self.settings.save_in_background();
+        }
+        if let Some(outcome) = shown.done {
+            if !outcome.moved.is_empty() {
+                self.stats.moved(&outcome.moved);
+                self.player.moved(&outcome.moved);
+            }
+            if let Some((old, _)) = &outcome.folder {
+                self.library_view.covers.look_again_in(&self.library, old);
+            }
+            self.rescan();
+            self.outside.read_again(ctx);
+            self.playlist_view.loose.forget();
+            self.lyrics.again();
         }
     }
 
@@ -2166,6 +2246,20 @@ impl eframe::App for App {
             let paths = std::env::split_paths(&paths).collect();
             self.file_info.open(&ctx, paths, true);
         }
+        // `METALAMP_PREPARE=<folder>`: the preparation of its album at
+        // start (GUI checks).
+        if let Some(folder) = std::env::var_os("METALAMP_PREPARE")
+            && ctx.cumulative_frame_nr() == 1
+        {
+            let folder = PathBuf::from(folder);
+            let side = self.settings.tag_cover_side.pixels();
+            let title = folder
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            self.prepare
+                .open(&ctx, audio_in_folder(&folder), title, side);
+        }
         if self.env_view_editor && self.loaded {
             self.env_view_editor = false;
             self.view_editor
@@ -2176,7 +2270,8 @@ impl eframe::App for App {
             || self.statistics.open
             || self.file_info.open
             || self.settings_dialog.open
-            || self.view_editor.open;
+            || self.view_editor.open
+            || self.prepare.open;
         // Outside the modals only the search fields keep the focus: a
         // button that Tab focused took every key of the player until a
         // click elsewhere (the keys wait while anything has the focus).
@@ -2611,6 +2706,7 @@ impl eframe::App for App {
         {
             self.place_changed = Some(Instant::now());
         }
+        self.show_prepare(&ctx);
         if let Some(rule) = self.view_editor.browse.take() {
             let make = || {
                 rfd::FileDialog::new().set_title(tr!("Folder of the view", "Папка представления"))

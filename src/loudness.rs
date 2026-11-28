@@ -104,6 +104,20 @@ impl Loudness {
         out
     }
 
+    /// Files renamed or moved: their measurements go with them.
+    pub fn moved(&mut self, moved: &[(PathBuf, PathBuf)]) {
+        let mut any = false;
+        for (from, to) in moved {
+            if let Some(m) = self.known.remove(from) {
+                self.known.insert(to.clone(), m);
+                any = true;
+            }
+        }
+        if any {
+            self.save();
+        }
+    }
+
     fn save(&self) {
         let Some(file) = self.file.clone() else {
             return;

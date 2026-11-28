@@ -22,6 +22,7 @@ pub mod mini;
 pub mod notes;
 pub mod player_bar;
 pub mod playlist;
+pub mod prepare;
 pub mod raster;
 pub mod ribbons;
 pub mod ripples;

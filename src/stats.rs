@@ -109,6 +109,21 @@ impl Stats {
         self.changed();
     }
 
+    /// Files renamed or moved (`moved`: where they were, where they are):
+    /// their numbers go with them.
+    pub fn moved(&mut self, moved: &[(PathBuf, PathBuf)]) {
+        let mut any = false;
+        for (from, to) in moved {
+            if let Some(s) = self.tracks.remove(from) {
+                self.tracks.insert(to.clone(), s);
+                any = true;
+            }
+        }
+        if any {
+            self.changed();
+        }
+    }
+
     fn changed(&mut self) {
         self.revision += 1;
         self.save_in_background();

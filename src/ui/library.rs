@@ -78,6 +78,10 @@ pub enum LibraryAction {
     Rate(Vec<TrackId>, u8),
     /// Open the tag editor for tracks.
     EditTags(Vec<TrackId>),
+    /// Prepare an album (`ui::prepare`).
+    Prepare(AlbumId),
+    /// Choose a folder and prepare its album.
+    PrepareFolder,
     /// "Go to album" (`to_album`) or "Go to artist": `album`'s, from
     /// `track` if a track's menu asked (it is selected there then).
     GoTo {
@@ -1259,6 +1263,18 @@ fn top_bar(
                 actions.push(LibraryAction::ReadAll);
                 ui.close();
             }
+            ui.separator();
+            if ui
+                .button(tr!("Prepare an album from a folder…", "Подготовить альбом из папки…"))
+                .on_hover_text(tr!(
+                    "Tags, cover, file and folder names of a folder's album, as the preparation's profile says (a download, before it goes into the library)",
+                    "Теги, обложка, имена файлов и папки альбома в папке — по профилю подготовки (например, скачанный альбом, ещё не перенесённый в библиотеку)"
+                ))
+                .clicked()
+            {
+                actions.push(LibraryAction::PrepareFolder);
+                ui.close();
+            }
         });
         if crate::ui::icon_button(
             ui,
@@ -1686,15 +1702,20 @@ fn album_menu(
         Some(MenuChoice::EditTags) if album.is_some() => {
             actions.push(LibraryAction::EditTags(album_tracks(library, view, album)));
         }
+        Some(MenuChoice::Prepare) => {
+            if let Some(album) = album {
+                actions.push(LibraryAction::Prepare(album));
+            }
+        }
         _ => {}
     }
 }
 
-/// An album's menu goes to its artist and edits its tags; the menu of
-/// every album shown, neither.
+/// An album's menu goes to its artist, edits its tags and prepares it;
+/// the menu of every album shown, none of them.
 fn album_extras(album: Option<AlbumId>) -> &'static [MenuChoice] {
     if album.is_some() {
-        &[MenuChoice::GoToArtist, MenuChoice::EditTags]
+        &[MenuChoice::GoToArtist, MenuChoice::EditTags, MenuChoice::Prepare]
     } else {
         &[]
     }
@@ -2298,6 +2319,8 @@ enum MenuChoice {
     /// A rating chosen in it.
     Rate(u8),
     EditTags,
+    /// An album's preparation.
+    Prepare,
 }
 
 /// A pane's context menu, opened where the right button was let go on a
@@ -2390,6 +2413,13 @@ fn context_menu(
                     edit_tags_label()
                 };
                 item(ui, MenuChoice::EditTags, &label);
+            }
+            if extras.contains(&MenuChoice::Prepare) {
+                item(
+                    ui,
+                    MenuChoice::Prepare,
+                    tr!("Prepare the album…", "Подготовить альбом…"),
+                );
             }
             if extras.contains(&MenuChoice::Info) {
                 item(

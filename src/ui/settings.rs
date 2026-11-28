@@ -977,7 +977,7 @@ fn tall_row<R>(
 }
 
 /// An on/off switch: a pill with a knob that slides.
-fn switch(ui: &mut Ui, on: &mut bool) -> Response {
+pub(crate) fn switch(ui: &mut Ui, on: &mut bool) -> Response {
     let size = vec2(40.0, 20.0);
     let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
     if response.clicked() {

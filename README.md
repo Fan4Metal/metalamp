@@ -31,6 +31,7 @@ MetalAMP is an audio player for Windows built around a media library: the music 
 - **Visualizations**: spectrum analyzers, ridges, a spectrogram, synthwave, hyperspace, lightning, a vortex, fire, fireworks, an aurora, a cloth, ripples, ribbons, a waveform, an oscilloscope, a goniometer, the notes, a piano, guitar strings and a harp (see [Visualizations](#visualizations)).
 - **A playlist** beside the library, kept between runs, and saved playlists (see [The playlist](#the-playlist)).
 - **Library statistics**: the numbers of tracks, albums, artists and genres, the length and size, the plays, and charts of the bit rates, formats, years, genres, artists and the tracks played most (see [Statistics](#statistics)).
+- **Preparing an album**: the album's title without the edition, track numbers as `01`, the same album artist, year and genre in every file, the tags' unwanted parts removed, `folder.jpg` and the same cover in every tag, the files and the folder renamed, as a profile says (see [Preparing an album](#preparing-an-album)).
 - **File info and tags**: every field of a track's tag, its cover and its audio properties, in a window opened by a click on the player's cover or `I`, where the tags of one file or of several are also edited (see [File info](#file-info)).
 - **Mini player**: the cover, or a turning vinyl record, in a small window over the others (see [Mini player](#mini-player)).
 - **One window**: files opened from Explorer go to the window already open; several selected and opened at once (`Enter`) replace the playlist in the order the folder's window shows them (by name on the desktop) and play from the first, however many there are.
@@ -95,7 +96,7 @@ Albums are grouped by album artist (else artist) and album title, whatever the y
 <summary>Playing, the menus, going to an album or an artist</summary>
 
 - **Playing**: a double click or `Enter` plays: an artist plays its tracks, an album its tracks, a track the whole table from it on.
-- **Menus**: the right button opens a menu with **Play**, **Play next** (right after the track playing, also when shuffled), **Add to the playlist** and **Show in folder**, on an album also **Go to artist** and **Edit tags…** (its tracks at once), on a track also **Go to album**, **Go to artist**, **Rating**, **Edit tags…** and **File info…**.
+- **Menus**: the right button opens a menu with **Play**, **Play next** (right after the track playing, also when shuffled), **Add to the playlist** and **Show in folder**, on an album also **Go to artist**, **Edit tags…** (its tracks at once) and **Prepare the album…** (see [Preparing an album](#preparing-an-album)), on a track also **Go to album**, **Go to artist**, **Rating**, **Edit tags…** and **File info…**.
 - **Edit tags…** (`Ctrl+E`, also in the playlist's menu) opens the file info window with the tags of the selected files in text fields (see [File info](#file-info)).
 - **Going to an album or an artist** chooses them in the panes, scrolls them into sight and selects the track the menu was opened on; a search or a view that would hide them is cleared. The keys `G` (album) and `Shift+G` (artist) do the same for the track selected in the tracks' table or the playlist, whichever was clicked last, else for the track playing.
 
@@ -114,6 +115,18 @@ Albums are grouped by album artist (else artist) and album title, whatever the y
 - **An example**: a view "Soundtracks" with the rule *genre contains soundtrack* and a view "Everything else" with *genre does not contain soundtrack* split the library in two; an artist with albums of both kinds is in both views, with the counts of each.
 
 </details>
+
+### Preparing an album
+
+**Prepare the album…** in an album's menu, or **Prepare an album from a folder…** in the folders' menu (for an album not yet in the library), opens a window with the profile on the left and, on the right, what it would do to each file, shown again at every change. Nothing is written until **Apply**.
+
+- **Tags**: the album's title without a part in brackets at its end naming an edition (`Album [Deluxe Edition]` becomes `Album`; the words are listed in the window); track numbers as `01` without the total, the disc's number only on an album of several discs; the album, album artist, year and genre that most files have put into all of them (an empty album artist taken from the artists, an empty title from the file's name); the year as four digits.
+- **Removing the rest**: everything but the main fields and the cover is removed, except the parts chosen to stay (composer, comment, lyrics, ReplayGain, MusicBrainz, ratings, other pictures, people, release, music, encoder, links, sort orders, other); an MP3's ID3v1 and APE tags can be removed too. The fields every file must have are chosen as well, and a file that lacks one is pointed out.
+- **Cover**: taken from `folder.jpg`, else from a picture of the folder named as a cover, else from the cover most tags hold; it is written as `folder.jpg` and into every tag, either the same picture or, in the tags, a copy no larger than the size chosen in the file info's cover menu.
+- **Names**: the files by a template (`%track% - %title%` by default; `%track% - %artist% - %title%` for an album of several artists) and the folder (`(%year%) %album%`), with the fields of the playlist's line; the letters Windows refuses in a name are replaced (a colon by a dash). A name another file has is not given.
+- **Other files** of the folder (scans, `.cue`, `.log`, `.nfo`, `Thumbs.db`…) can be kept, put into the recycle bin or moved into a subfolder. A file with the read-only attribute has it taken off to be written (this can be turned off).
+- **Profiles**: three are ready (everything; tags and cover; names only), and the settings can be kept under a name of one's own.
+- **After applying**: the plays, ratings, loudness measurements and playlist entries follow the renamed files, and the library is read again. What was done is kept in a journal, `prepare\<time>.json` next to the settings.
 
 ### Statistics
 
