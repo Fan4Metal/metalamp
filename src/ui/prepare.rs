@@ -32,6 +32,9 @@ use crate::ui::settings::{divider, round_widgets, row, section, switch, tall_row
 const SIZE: egui::Vec2 = vec2(980.0, 700.0);
 /// The table's first column: the field's name.
 const NAME: f32 = 150.0;
+/// The window's rows' names (preset, album, genre, masks), so that what
+/// follows them lines up.
+const ROW_NAME: f32 = 112.0;
 /// The preset editor's size.
 const EDITOR: egui::Vec2 = vec2(900.0, 640.0);
 /// The editor's list of presets.
@@ -273,7 +276,7 @@ impl PrepareWindow {
                 } else {
                     ui.add_enabled_ui(!busy, |ui| {
                         ui.horizontal(|ui| {
-                            ui.label(tr!("Preset", "Пресет"));
+                            row_name(ui, tr!("Preset", "Пресет"));
                             let names: Vec<String> =
                                 settings.prepare_presets.iter().map(|p| p.name.clone()).collect();
                             egui::ComboBox::from_id_salt("prepare_preset")
@@ -400,7 +403,7 @@ impl PrepareWindow {
     /// have now and will have.
     fn genre_row(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
-            ui.label(tr!("Genre", "Жанр"));
+            row_name(ui, tr!("Genre", "Жанр"));
             let mode = match &self.this.genre {
                 GenreChoice::Preset => 0,
                 GenreChoice::Keep => 1,
@@ -526,8 +529,12 @@ impl PrepareWindow {
             ];
             // The fields share what the labels and the year leave.
             let room = (ui.available_width() - 420.0).max(200.0);
-            for (key, planned, share) in fields {
-                ui.label(key.label());
+            for (n, (key, planned, share)) in fields.into_iter().enumerate() {
+                if n == 0 {
+                    row_name(ui, key.label());
+                } else {
+                    ui.label(key.label());
+                }
                 let Some(slot) = self.this.own_mut(key) else {
                     continue;
                 };
@@ -573,7 +580,7 @@ impl PrepareWindow {
             } else {
                 tr!("Files' names", "Имена файлов")
             };
-            ui.label(label).on_hover_text(tr!(
+            row_name(ui, label).on_hover_text(tr!(
                 "Empty fields read from the names by masks",
                 "Пустые поля берутся из имён по маскам"
             ));
@@ -620,6 +627,15 @@ impl PrepareWindow {
             }
         });
     }
+}
+
+/// A row's name, `ROW_NAME` wide.
+fn row_name(ui: &mut Ui, text: &str) -> egui::Response {
+    ui.allocate_ui_with_layout(vec2(ROW_NAME, 20.0), Layout::left_to_right(Align::Center), |ui| {
+        ui.set_min_width(ROW_NAME);
+        ui.label(text)
+    })
+    .inner
 }
 
 /// The "+" menu of a mask's fields; true when one was added.
@@ -674,7 +690,7 @@ fn mask_status(plan: &Plan, folder: bool) -> (String, egui::Color32) {
     let used: Vec<String> = plan
         .file_masks
         .iter()
-        .map(|(m, n)| format!("{} {n}", quoted(m)))
+        .map(|(m, n)| tr!(format!("{} ({n} files)", quoted(m)), format!("{} — файлов: {n}", quoted(m))))
         .collect();
     let filled = plan.files.iter().filter(|f| !f.from_name.is_empty()).count();
     let mut text = used.join(", ");
