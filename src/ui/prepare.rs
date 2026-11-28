@@ -461,10 +461,13 @@ impl PrepareWindow {
                 })
                 .response
                 .on_hover_text(tr!("The library's genres", "Жанры библиотеки"));
+                // Only what is typed or chosen sets one's own genre: a click
+                // on "By the preset" or "As it is" in this frame stands.
+                let picked = chosen.is_some();
                 if let Some(g) = chosen {
                     self.own_genre = g;
                 }
-                if field.changed() || self.genre != GenreChoice::Own(self.own_genre.clone()) {
+                if field.changed() || picked {
                     self.genre = GenreChoice::Own(self.own_genre.clone());
                 }
             }
