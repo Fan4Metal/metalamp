@@ -448,22 +448,61 @@ fn part_of_frame(frame: &Frame) -> Option<TagPart> {
     }
 }
 
-/// An ID3v2 frame's name as the preparation lists it: its ID, a user
-/// text frame's with its description.
-fn frame_name(frame: &Frame) -> String {
-    match frame {
-        Frame::UserText(f) => format!("TXXX:{}", f.description),
-        _ => frame.id_str().to_owned(),
+/// An item of a tag beyond the main fields, as an album's preparation
+/// lists what it removes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Item {
+    pub part: TagPart,
+    /// As the tag names it: an ID3v2 frame's ID (a user text frame's
+    /// with its description, `TXXX:ARTISTS`), a Vorbis comment's or an
+    /// MP4 atom's key, a picture's type.
+    pub code: String,
+    /// The field it is, when lofty knows it (for its name in words).
+    pub key: Option<ItemKey>,
+    /// Its text, empty when it has none (or is not text).
+    pub value: String,
+}
+
+/// An ID3v2 frame as an [`Item`].
+fn frame_item(frame: &Frame, part: TagPart) -> Item {
+    let (code, key, value) = match frame {
+        Frame::UserText(f) => (
+            format!("TXXX:{}", f.description),
+            ItemKey::from_key(TagType::Id3v2, &f.description),
+            f.content.to_string(),
+        ),
+        Frame::UserUrl(f) => (
+            format!("WXXX:{}", f.description),
+            None,
+            f.content.to_string(),
+        ),
+        _ => {
+            let id = frame.id_str();
+            let value = match frame {
+                Frame::Text(f) => f.value.to_string(),
+                Frame::Comment(f) => f.content.to_string(),
+                Frame::UnsynchronizedText(f) => f.content.to_string(),
+                Frame::Url(f) => f.url().to_owned(),
+                _ => String::new(),
+            };
+            (id.to_owned(), ItemKey::from_key(TagType::Id3v2, id), value)
+        }
+    };
+    Item {
+        part,
+        code,
+        key,
+        value: value.trim_matches('\0').trim().to_owned(),
     }
 }
 
 /// Removes the frames of the parts not in `keep`, before the tag is
-/// split; what was removed, by part and name.
-fn strip_frames(tag: &mut Id3v2Tag, keep: &[TagPart]) -> Vec<(TagPart, String)> {
+/// split; what was removed.
+fn strip_frames(tag: &mut Id3v2Tag, keep: &[TagPart]) -> Vec<Item> {
     let mut removed = Vec::new();
     tag.retain(|frame| match part_of_frame(frame) {
         Some(part) if !keep.contains(&part) => {
-            removed.push((part, frame_name(frame)));
+            removed.push(frame_item(frame, part));
             false
         }
         _ => true,
@@ -474,16 +513,22 @@ fn strip_frames(tag: &mut Id3v2Tag, keep: &[TagPart]) -> Vec<(TagPart, String)> 
 /// Removes the common tag's items of the parts not in `keep`, and its
 /// pictures other than the front cover (the first front cover, else the
 /// first picture) unless `TagPart::Pictures` is kept; what was removed.
-fn strip_items(tag: &mut Tag, keep: &[TagPart]) -> Vec<(TagPart, String)> {
+fn strip_items(tag: &mut Tag, keep: &[TagPart]) -> Vec<Item> {
     let mut removed = Vec::new();
     let tag_type = tag.tag_type();
     tag.retain(|item| match part_of_key(item.key()) {
         Some(part) if !keep.contains(&part) => {
-            let name = item
+            let code = item
                 .key()
                 .map_key(tag_type)
                 .map_or_else(|| format!("{:?}", item.key()), str::to_owned);
-            removed.push((part, name));
+            let value = item.value().text().or(item.value().locator()).unwrap_or("");
+            removed.push(Item {
+                part,
+                code,
+                key: Some(item.key()),
+                value: value.trim().to_owned(),
+            });
             false
         }
         _ => true,
@@ -497,7 +542,12 @@ fn strip_items(tag: &mut Tag, keep: &[TagPart]) -> Vec<(TagPart, String)> {
         for i in (0..tag.pictures().len()).rev() {
             if i != cover {
                 let picture = tag.remove_picture(i);
-                removed.push((TagPart::Pictures, format!("{:?}", picture.pic_type())));
+                removed.push(Item {
+                    part: TagPart::Pictures,
+                    code: format!("{:?}", picture.pic_type()),
+                    key: None,
+                    value: String::new(),
+                });
             }
         }
     }
@@ -510,7 +560,7 @@ fn strip_items(tag: &mut Tag, keep: &[TagPart]) -> Vec<(TagPart, String)> {
 #[derive(Clone, Debug, Default)]
 pub struct Inspected {
     pub main: [String; MAIN],
-    pub parts: Vec<(TagPart, String)>,
+    pub parts: Vec<Item>,
     pub cover: Option<Vec<u8>>,
     /// An MP3's ID3v1 and APE tags.
     pub id3v1: bool,
@@ -744,7 +794,7 @@ fn other_tags(path: &Path, changes: &Changes, how: WriteTags) -> Result<(), Stri
 /// before it is split (`strip_frames`), and `f` is told which.
 fn with_tag<R>(
     path: &Path,
-    f: impl FnOnce(&mut Tag, Kind, Vec<(TagPart, String)>) -> Result<R, String>,
+    f: impl FnOnce(&mut Tag, Kind, Vec<Item>) -> Result<R, String>,
     changes: Option<&Changes>,
     version: Id3Version,
     keep: Option<&[TagPart]>,
@@ -2258,12 +2308,19 @@ mod tests {
         let again = inspect(&file);
         std::fs::remove_dir_all(&dir).unwrap();
         let inspected = inspected.unwrap();
-        let mut parts: Vec<TagPart> = inspected.parts.iter().map(|(p, _)| *p).collect();
+        let mut parts: Vec<TagPart> = inspected.parts.iter().map(|i| i.part).collect();
         parts.sort_by_key(|p| *p as u8);
         assert_eq!(
             parts,
             [TagPart::Comment, TagPart::ReplayGain, TagPart::Encoder, TagPart::Other]
         );
+        let item = |code: &str| inspected.parts.iter().find(|i| i.code == code).unwrap();
+        assert_eq!(item("COMM").key, Some(ItemKey::Comment));
+        assert_eq!(item("COMM").value, "hi");
+        assert_eq!(item("PRIV").key, None);
+        let gain = item("TXXX:REPLAYGAIN_TRACK_GAIN");
+        assert_eq!(gain.key, Some(ItemKey::ReplayGainTrackGain));
+        assert_eq!(gain.value, "-6.5 dB");
         assert_eq!(inspected.main[Key::Track as usize], "1/16");
         written.unwrap();
         assert_eq!(frames, ["TIT2", "TRCK", "TXXX"]);

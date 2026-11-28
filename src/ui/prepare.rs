@@ -19,7 +19,7 @@ use std::sync::mpsc::{Receiver, channel};
 
 use egui::{Align, Key, Layout, RichText, Ui, vec2};
 
-use crate::library::edit::{self, TagPart};
+use crate::library::edit::{self, Item, TagPart};
 use crate::library::prepare::{
     self, CoverFrom, DiscFormat, Extras, Fill, FolderJpg, GenreChoice, Kind, Known, Made, Need,
     Outcome, Plan, Preset, Profile, Source, TagCover, TrackFormat, Unify,
@@ -512,23 +512,72 @@ fn widths(ui: &Ui) -> [f32; 3] {
     [NAME, rest, rest]
 }
 
+/// A row of the table: its three cells, and a tooltip for its name (the
+/// tag's own code of a field removed).
+struct Row {
+    cells: [RichText; 3],
+    hint: Option<String>,
+}
+
+impl From<[RichText; 3]> for Row {
+    fn from(cells: [RichText; 3]) -> Row {
+        Row { cells, hint: None }
+    }
+}
+
 /// A row of the table: each cell cut with "…" to its column (whole in
-/// the tooltip).
-fn table_row(ui: &mut Ui, widths: [f32; 3], cells: [RichText; 3]) {
+/// the tooltip); `hint` the name's tooltip.
+fn table_row(ui: &mut Ui, widths: [f32; 3], cells: [RichText; 3], hint: Option<&str>) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        for (w, text) in widths.into_iter().zip(cells) {
+        for (i, (w, text)) in widths.into_iter().zip(cells).enumerate() {
             ui.allocate_ui_with_layout(vec2(w, 18.0), Layout::left_to_right(Align::Center), |ui| {
                 ui.set_width(w);
-                ui.add(egui::Label::new(text).truncate());
+                let resp = ui.add(egui::Label::new(text).truncate());
+                if i == 0
+                    && let Some(hint) = hint
+                {
+                    resp.on_hover_text(hint);
+                }
             });
         }
     });
 }
 
+/// A field of the tag removed: its name in words (the file info's), its
+/// value before, "removed" after; the tag's own code as the tooltip.
+fn removed_row(item: &Item) -> Row {
+    let name = match (item.key, item.code.split_once(':')) {
+        (Some(key), _) => super::info::field_name(key),
+        (None, Some(("TXXX" | "WXXX", description))) => description.to_owned(),
+        (None, _) if item.part == TagPart::Pictures => tr!(
+            format!("Picture: {}", item.code),
+            format!("Картинка: {}", item.code)
+        ),
+        (None, _) => tr!(
+            format!("Private data ({})", item.code),
+            format!("Служебные данные ({})", item.code)
+        ),
+    };
+    let before = if item.value.is_empty() {
+        RichText::new(tr!("(empty)", "(пусто)")).color(palette::text_weak())
+    } else {
+        RichText::new(item.value.replace(['\r', '\n'], " ")).color(palette::text())
+    };
+    let hint = (name != item.code).then(|| item.code.clone());
+    Row {
+        cells: [
+            RichText::new(name).color(palette::text_weak()),
+            before,
+            RichText::new(tr!("removed", "удаляется")).color(palette::text_weak()),
+        ],
+        hint,
+    }
+}
+
 /// A changed value: the old one plain, the new one in the accent; a dash
 /// for an empty one.
-fn change(name: &str, before: &str, after: &str) -> [RichText; 3] {
+fn change(name: &str, before: &str, after: &str) -> Row {
     let value = |text: &str, colour| {
         if text.is_empty() {
             RichText::new("—").color(palette::text_weak())
@@ -536,25 +585,25 @@ fn change(name: &str, before: &str, after: &str) -> [RichText; 3] {
             RichText::new(text).color(colour)
         }
     };
-    [
+    Row::from([
         RichText::new(name).color(palette::text_weak()),
         value(before, palette::text()),
         value(after, palette::accent()),
-    ]
+    ])
 }
 
 /// A row of what stays as it is.
-fn same(name: &str, now: &str) -> [RichText; 3] {
-    [
+fn same(name: &str, now: &str) -> Row {
+    Row::from([
         RichText::new(name).color(palette::text_weak()),
         RichText::new(now).color(palette::text()),
         RichText::new(tr!("as it is", "без изменений")).color(palette::text_weak()),
-    ]
+    ])
 }
 
 /// A group of the table: its heading (a name and a note on the right),
 /// then its rows.
-fn group(ui: &mut Ui, heading: &str, note: RichText, rows: Vec<[RichText; 3]>) {
+fn group(ui: &mut Ui, heading: &str, note: RichText, rows: Vec<Row>) {
     egui::Frame::new()
         .fill(palette::card_bg())
         .corner_radius(6.0)
@@ -580,8 +629,8 @@ fn group(ui: &mut Ui, heading: &str, note: RichText, rows: Vec<[RichText; 3]>) {
             if !rows.is_empty() {
                 ui.add_space(2.0);
                 let w = widths(ui);
-                for cells in rows {
-                    table_row(ui, w, cells);
+                for row in rows {
+                    table_row(ui, w, row.cells, row.hint.as_deref());
                 }
             }
         });
@@ -607,6 +656,7 @@ fn preview(ui: &mut Ui, plan: &Plan, height: f32, only_changes: bool) {
                 head(tr!("Before", "Было")),
                 head(tr!("After", "Станет")),
             ],
+            None,
         );
     });
     let height = (height - 24.0 - 18.0 * plan.warnings.len() as f32).max(120.0);
@@ -629,12 +679,12 @@ fn preview(ui: &mut Ui, plan: &Plan, height: f32, only_changes: bool) {
                     _ => name_of(&cover.from),
                 };
                 let made = picture(cover.made.size, cover.made.data.len());
-                rows.push([
+                rows.push(Row::from([
                     RichText::new(tr!("Album cover", "Обложка альбома")).color(palette::text_weak()),
                     RichText::new(format!("{from}, {}×{}", cover.size.0, cover.size.1)).color(palette::text()),
                     RichText::new(tr!(format!("for the tags: {made}"), format!("для тегов: {made}")))
                         .color(palette::text()),
-                ]);
+                ]));
             }
             let jpg_now = plan
                 .folder_jpg_now
@@ -681,11 +731,7 @@ fn preview(ui: &mut Ui, plan: &Plan, height: f32, only_changes: bool) {
                 for (key, before, after) in &f.fields {
                     rows.push(change(key.label(), before, after));
                 }
-                if !f.removed.is_empty() {
-                    let mut names: Vec<&str> = f.removed.iter().map(|(_, n)| n.as_str()).collect();
-                    names.dedup();
-                    rows.push(change(tr!("Removed", "Удаляется"), &names.join(", "), ""));
-                }
+                rows.extend(f.removed.iter().map(removed_row));
                 if f.cover
                     && let Some(cover) = &plan.cover
                 {
@@ -701,11 +747,11 @@ fn preview(ui: &mut Ui, plan: &Plan, height: f32, only_changes: bool) {
                 }
                 if !f.missing.is_empty() {
                     let names: Vec<&str> = f.missing.iter().map(|n| n.label()).collect();
-                    rows.push([
+                    rows.push(Row::from([
                         RichText::new(tr!("Missing", "Не хватает")).color(palette::error()),
                         RichText::new(names.join(", ")).color(palette::error()),
                         RichText::new(""),
-                    ]);
+                    ]));
                 }
                 let note = match &f.skip {
                     Some(why) => RichText::new(why).color(palette::error()),
@@ -715,7 +761,7 @@ fn preview(ui: &mut Ui, plan: &Plan, height: f32, only_changes: bool) {
                     None => {
                         let n = f.fields.len()
                             + usize::from(f.rename.is_some())
-                            + usize::from(!f.removed.is_empty())
+                            + f.removed.len()
                             + usize::from(f.cover)
                             + usize::from(f.other_tags);
                         RichText::new(tr!(format!("changes: {n}"), format!("изменений: {n}")))

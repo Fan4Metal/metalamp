@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-use super::edit::{self, Key, MAIN, TagPart, WriteTags};
+use super::edit::{self, Item, Key, MAIN, TagPart, WriteTags};
 
 /// A field every file is to have; a file without it is pointed out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -930,8 +930,8 @@ pub struct FilePlan {
     pub path: PathBuf,
     /// The fields changed: before, after.
     pub fields: Vec<(Key, String, String)>,
-    /// The tag's items removed, by part and name.
-    pub removed: Vec<(TagPart, String)>,
+    /// The tag's items removed.
+    pub removed: Vec<Item>,
     /// The album's cover put into its tag.
     pub cover: bool,
     /// Its cover now: its size and bytes.
@@ -1285,7 +1285,7 @@ pub fn plan(
                 plan.removed = tag
                     .parts
                     .iter()
-                    .filter(|(p, _)| !profile.keep.contains(p))
+                    .filter(|i| !profile.keep.contains(&i.part))
                     .cloned()
                     .collect();
             }
@@ -1307,7 +1307,7 @@ pub fn plan(
                     }
             });
             plan.other_tags = profile.only_id3v2 && (tag.id3v1 || tag.ape);
-            let lyrics = tag.parts.iter().any(|(p, _)| *p == TagPart::Lyrics)
+            let lyrics = tag.parts.iter().any(|i| i.part == TagPart::Lyrics)
                 && !(profile.clean && !profile.keep.contains(&TagPart::Lyrics));
             for need in &profile.required {
                 let lacks = match need {
@@ -1761,7 +1761,7 @@ fn journal(plan: &Plan, outcome: &Outcome) -> Option<PathBuf> {
                 "fields": f.fields.iter().map(|(k, before, after)| {
                     serde_json::json!([format!("{k:?}"), before, after])
                 }).collect::<Vec<_>>(),
-                "removed": f.removed.iter().map(|(_, name)| name).collect::<Vec<_>>(),
+                "removed": f.removed.iter().map(|i| serde_json::json!([i.code, i.value])).collect::<Vec<_>>(),
                 "cover": f.cover,
             })
         })
@@ -1902,7 +1902,15 @@ mod tests {
             path: PathBuf::from(path),
             tag: Ok(edit::Inspected {
                 main: values,
-                parts: parts.iter().map(|p| (*p, format!("{p:?}"))).collect(),
+                parts: parts
+                    .iter()
+                    .map(|p| Item {
+                        part: *p,
+                        code: format!("{p:?}"),
+                        key: None,
+                        value: String::new(),
+                    })
+                    .collect(),
                 ..Default::default()
             }),
             read_only: false,
@@ -1956,7 +1964,7 @@ mod tests {
         assert_eq!(field(first, Key::Year).as_deref(), Some("2011"));
         assert_eq!(field(first, Key::Genre), None, "the first's genre is one of the most common");
         assert_eq!(field(&plan.files[1], Key::Genre).as_deref(), Some("Metal"));
-        assert_eq!(first.removed.iter().map(|(p, _)| *p).collect::<Vec<_>>(), [TagPart::Comment]);
+        assert_eq!(first.removed.iter().map(|i| i.part).collect::<Vec<_>>(), [TagPart::Comment]);
         assert_eq!(
             first.rename.as_deref(),
             Some(Path::new(r"Z:\Music\Amaranthe\Amaranthe - 2011 [Deluxe]\01 - Leave Everything Behind.mp3"))
@@ -2041,7 +2049,7 @@ mod tests {
                 f.path.file_name().unwrap(),
                 f.rename.as_ref().and_then(|r| r.file_name()),
                 f.fields,
-                f.removed.iter().map(|(_, n)| n).collect::<Vec<_>>(),
+                f.removed.iter().map(|i| &i.code).collect::<Vec<_>>(),
                 f.cover,
                 f.skip,
                 f.missing

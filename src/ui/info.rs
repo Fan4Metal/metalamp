@@ -4128,7 +4128,7 @@ fn value<'a>(d: &'a Details, keys: &[ItemKey]) -> &'a str {
 
 /// A field's name as players and taggers show it; the others by
 /// lofty's name for them, in words.
-fn field_name(key: ItemKey) -> String {
+pub(crate) fn field_name(key: ItemKey) -> String {
     let name = match key {
         ItemKey::TrackNumber => tr!("Track #", "Трек №"),
         ItemKey::DiscNumber => tr!("Disc #", "Диск №"),
@@ -4141,6 +4141,7 @@ fn field_name(key: ItemKey) -> String {
         ItemKey::Comment => tr!("Comment", "Комментарий"),
         ItemKey::AlbumArtist => tr!("Album artist", "Исп. альбома"),
         ItemKey::Composer => tr!("Composer", "Композитор"),
+        ItemKey::TrackArtists => tr!("Artists", "Исполнители"),
         ItemKey::Publisher => tr!("Publisher", "Издатель"),
         ItemKey::Label => tr!("Label", "Лейбл"),
         ItemKey::InternetRadioStationName => tr!("Radio station", "Радиостанция"),
