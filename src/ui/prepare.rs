@@ -265,7 +265,9 @@ impl PrepareWindow {
                     });
                 });
                 ui.add_space(4.0);
-                let body = (size.y - 160.0).max(200.0);
+                // Under the heading: the preset's, the album's, the genre's
+                // and the two masks' rows.
+                let body = (size.y - 250.0).max(200.0);
                 if let Some(outcome) = &self.outcome {
                     report(ui, outcome, body);
                 } else {
@@ -300,6 +302,7 @@ impl PrepareWindow {
                         });
                     });
                     ui.add_enabled_ui(!busy, |ui| {
+                        self.album_row(ui);
                         self.genre_row(ui);
                         self.mask_row(ui, false);
                         self.mask_row(ui, true);
@@ -508,6 +511,53 @@ impl PrepareWindow {
 }
 
 impl PrepareWindow {
+    /// The album, its artist and year: what most files will have, and a
+    /// value typed goes into every file (in the accent, with a × to go
+    /// back to what the preset makes).
+    fn album_row(&mut self, ui: &mut Ui) {
+        let Some(plan) = self.plan.as_ref().map(|(_, _, p)| p.clone()) else {
+            return;
+        };
+        ui.horizontal(|ui| {
+            let fields = [
+                (edit::Key::Album, plan.album.as_str(), 0.45),
+                (edit::Key::AlbumArtist, plan.album_artist.as_str(), 0.35),
+                (edit::Key::Year, plan.year.as_str(), 0.0),
+            ];
+            // The fields share what the labels and the year leave.
+            let room = (ui.available_width() - 420.0).max(200.0);
+            for (key, planned, share) in fields {
+                ui.label(key.label());
+                let Some(slot) = self.this.own_mut(key) else {
+                    continue;
+                };
+                let typed = slot.is_some();
+                let mut text = slot.clone().unwrap_or_else(|| planned.to_owned());
+                let width = if share > 0.0 { room * share } else { 50.0 };
+                let mut field = egui::TextEdit::singleline(&mut text).desired_width(width);
+                if typed {
+                    field = field.text_color(palette::accent());
+                }
+                let resp = ui.add(field).on_hover_text(tr!(
+                    "What most files will have; a value typed goes into every file",
+                    "Что будет у большинства файлов; введённое значение ставится во все файлы"
+                ));
+                if resp.changed() {
+                    *slot = Some(text);
+                }
+                if typed
+                    && ui
+                        .small_button("×")
+                        .on_hover_text(tr!("As the preset makes it", "Как получается по пресету"))
+                        .clicked()
+                {
+                    *slot = None;
+                }
+                ui.add_space(6.0);
+            }
+        });
+    }
+
     /// The masks the files' names (or the folder's) are read by this time:
     /// the preset's, none, or one's own; then what they read.
     fn mask_row(&mut self, ui: &mut Ui, folder: bool) {
@@ -643,6 +693,9 @@ fn mask_status(plan: &Plan, folder: bool) -> (String, egui::Color32) {
 
 /// Where a field's new value was read from, for its row's tooltip.
 fn read_hint(plan: &Plan, f: &prepare::FilePlan, key: edit::Key) -> Option<String> {
+    if plan.own.contains(&key) {
+        return Some(tr!("Typed for this album", "Задано для этого альбома").to_owned());
+    }
     if f.from_name.contains(&key) {
         let mask = f.mask.as_deref().unwrap_or("");
         return Some(tr!(

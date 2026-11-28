@@ -653,6 +653,35 @@ pub struct ThisAlbum {
     pub genre: GenreChoice,
     pub file_mask: MaskChoice,
     pub folder_mask: MaskChoice,
+    /// Values typed for the album, put into every file as they are (an
+    /// empty one is not put).
+    pub album: Option<String>,
+    pub album_artist: Option<String>,
+    pub year: Option<String>,
+}
+
+impl ThisAlbum {
+    /// The value typed for a field of the album.
+    pub fn own(&self, key: Key) -> Option<&str> {
+        match key {
+            Key::Album => &self.album,
+            Key::AlbumArtist => &self.album_artist,
+            Key::Year => &self.year,
+            _ => &None,
+        }
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    }
+
+    pub fn own_mut(&mut self, key: Key) -> Option<&mut Option<String>> {
+        match key {
+            Key::Album => Some(&mut self.album),
+            Key::AlbumArtist => Some(&mut self.album_artist),
+            Key::Year => Some(&mut self.year),
+            _ => None,
+        }
+    }
 }
 
 /// A genre field as the preset wants it: split at `genre_split`, each
@@ -1252,6 +1281,12 @@ pub struct Plan {
     pub folder_masks_tried: bool,
     pub folder_mask: Option<String>,
     pub from_folder: Vec<Key>,
+    /// The fields given the album's own values (`ThisAlbum`).
+    pub own: Vec<Key>,
+    /// The album, its artist and year most files will have.
+    pub album: String,
+    pub album_artist: String,
+    pub year: String,
     /// The genre most files have, before and after.
     pub genre: (String, String),
 }
@@ -1396,6 +1431,15 @@ pub fn plan(
         for v in &mut values {
             v[at(Key::Year)] = year_only(&v[at(Key::Year)]);
         }
+    }
+    // This album's own values, as typed.
+    let own: Vec<Key> = [Key::Album, Key::AlbumArtist, Key::Year]
+        .into_iter()
+        .filter(|&k| this.own(k).is_some())
+        .collect();
+    for &k in &own {
+        let value = this.own(k).unwrap_or_default().to_owned();
+        values.iter_mut().for_each(|v| v[at(k)] = value.clone());
     }
     let common = |values: &[[String; MAIN]], k: Key| {
         most_common(values.iter().map(|v| v[at(k)].as_str()))
@@ -1911,7 +1955,7 @@ pub fn plan(
         cover,
         extras,
         warnings,
-        album_cuts: if profile.album_title {
+        album_cuts: if profile.album_title && !own.contains(&Key::Album) {
             common(&original, Key::Album)
                 .map(|a| edition_cut(&a, &profile.editions, profile.album_brackets).1)
                 .unwrap_or_default()
@@ -1924,6 +1968,10 @@ pub fn plan(
         folder_masks_tried: !folder_masks.is_empty() && source.one_place,
         folder_mask,
         from_folder,
+        album: common(&values, Key::Album).unwrap_or_default(),
+        album_artist: common(&values, Key::AlbumArtist).unwrap_or_default(),
+        year: common(&values, Key::Year).unwrap_or_default(),
+        own,
     }
 }
 
@@ -2518,6 +2566,17 @@ mod tests {
         let plan = super::plan(&source, &Profile::default(), &this, &mut no_cover);
         assert_eq!(field(&plan.files[1], Key::Album), None);
         assert_eq!(field(&plan.files[1], Key::Title).as_deref(), Some("Start_Another_Round"));
+        // Typed for the album: as typed, the edition not cut; empty, not put.
+        let this = ThisAlbum {
+            album: Some(" Melodies (EP) ".into()),
+            year: Some(String::new()),
+            ..ThisAlbum::default()
+        };
+        let plan = super::plan(&source, &Profile::default(), &this, &mut no_cover);
+        assert_eq!(field(&plan.files[1], Key::Album).as_deref(), Some("Melodies (EP)"));
+        assert_eq!(field(&plan.files[1], Key::Year).as_deref(), Some("2021"));
+        assert_eq!((plan.album.as_str(), plan.own.as_slice()), ("Melodies (EP)", [Key::Album].as_slice()));
+        assert!(plan.album_cuts.is_empty());
     }
 
     #[test]
