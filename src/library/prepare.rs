@@ -317,6 +317,8 @@ pub struct Profile {
     pub album_title: bool,
     /// The words of an edition, separated by commas.
     pub editions: String,
+    /// Every part in brackets at the title's end cut, whatever it says.
+    pub album_brackets: bool,
     /// The year as its four digits (`2011-05-01` → `2011`).
     pub year_only: bool,
     pub unify: Vec<Unify>,
@@ -365,8 +367,15 @@ pub struct Profile {
     pub clear_read_only: bool,
 }
 
-/// The editions' words by default.
+/// The editions' words by default: what a release is (an edition, a
+/// version, an EP), not what the music is.
 pub const EDITIONS: &str = "deluxe, limited, special, expanded, anniversary, collector, \
+    remaster, reissue, bonus track, edition, digipak, japan, japanese, tour, version, \
+    ep, single, lp, demo, promo";
+
+/// The words by default before `ep`, `single` and the like were among
+/// them: a preset that kept them gets the new ones.
+pub const EDITIONS_BEFORE: &str = "deluxe, limited, special, expanded, anniversary, collector, \
     remaster, reissue, bonus track, edition, digipak, japan, tour, version";
 
 impl Default for Profile {
@@ -377,6 +386,7 @@ impl Default for Profile {
             disc: DiscFormat::Several,
             album_title: true,
             editions: EDITIONS.to_owned(),
+            album_brackets: false,
             year_only: true,
             unify: Unify::ALL.to_vec(),
             fill: Fill::ALL.to_vec(),
@@ -837,12 +847,19 @@ fn disc_of_folder(path: &Path) -> Option<u32> {
 
 /// `title` without the parts in brackets at its end that name an edition
 /// (any of `words`, separated by commas, in any case).
-pub fn without_edition(title: &str, words: &str) -> String {
-    let words: Vec<String> = words
-        .split(',')
-        .map(|w| w.trim().to_lowercase())
-        .filter(|w| !w.is_empty())
-        .collect();
+pub fn without_edition(title: &str, words: &str, all: bool) -> String {
+    let phrases: Vec<Vec<String>> = words.split(',').map(words_of).filter(|p| !p.is_empty()).collect();
+    let names_one = |inner: &str| {
+        let said = words_of(inner);
+        phrases.iter().any(|phrase| {
+            (0..said.len()).any(|at| {
+                phrase
+                    .iter()
+                    .enumerate()
+                    .all(|(i, w)| said.get(at + i).is_some_and(|s| same_word(s, w)))
+            })
+        })
+    };
     let mut title = title.trim().to_owned();
     loop {
         let close = match title.chars().last() {
@@ -853,8 +870,7 @@ pub fn without_edition(title: &str, words: &str) -> String {
         let Some(open) = title.rfind(close) else {
             break;
         };
-        let inner = title[open + 1..title.len() - 1].to_lowercase();
-        if !words.iter().any(|w| inner.contains(w.as_str())) {
+        if !all && !names_one(&title[open + 1..title.len() - 1]) {
             break;
         }
         let cut = title[..open].trim_end().trim_end_matches(['-', '–']).trim_end();
@@ -864,6 +880,23 @@ pub fn without_edition(title: &str, words: &str) -> String {
         title = cut.to_owned();
     }
     title
+}
+
+/// The lower-case words of `text` (an apostrophe kept: "collector's").
+fn words_of(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric() && c != '\'')
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
+/// `said` is the word `word`, or it with an ending: "editions",
+/// "remastered", "reissued", "collector's" (so "ep" is not "deep").
+fn same_word(said: &str, word: &str) -> bool {
+    said == word
+        || ["s", "es", "ed", "d", "'s"]
+            .iter()
+            .any(|end| said.strip_suffix(end) == Some(word))
 }
 
 /// A year's four digits, when it starts with them.
@@ -1041,7 +1074,8 @@ pub fn plan(
 
     if profile.album_title {
         for v in &mut values {
-            v[at(Key::Album)] = without_edition(&v[at(Key::Album)], &profile.editions);
+            v[at(Key::Album)] =
+                without_edition(&v[at(Key::Album)], &profile.editions, profile.album_brackets);
         }
     }
     if profile.year_only {
@@ -1786,13 +1820,24 @@ mod tests {
 
     #[test]
     fn editions_cut() {
-        let cut = |t: &str| without_edition(t, EDITIONS);
+        let cut = |t: &str| without_edition(t, EDITIONS, false);
         assert_eq!(cut("Amaranthe [Deluxe]"), "Amaranthe");
         assert_eq!(cut("Album (Limited Edition) [Remastered 2015]"), "Album");
         assert_eq!(cut("Album - (Deluxe Edition)"), "Album");
         assert_eq!(cut("Live (In Moscow)"), "Live (In Moscow)");
         assert_eq!(cut("(Deluxe)"), "(Deluxe)");
         assert_eq!(cut("Album (Deluxe"), "Album (Deluxe");
+        assert_eq!(
+            cut("Melodies of Green and Blue (Acoustic Version) (EP)"),
+            "Melodies of Green and Blue"
+        );
+        assert_eq!(cut("Album (Collector's Editions)"), "Album");
+        assert_eq!(cut("Album (Japanese Reissued)"), "Album");
+        // Whole words: "ep" is not in "Deep".
+        assert_eq!(cut("Album (Deep Cuts)"), "Album (Deep Cuts)");
+        assert_eq!(cut("Album (Single Mix) (In Moscow)"), "Album (Single Mix) (In Moscow)");
+        let all = |t: &str| without_edition(t, EDITIONS, true);
+        assert_eq!(all("Live (In Moscow) [Bootleg]"), "Live");
     }
 
     #[test]

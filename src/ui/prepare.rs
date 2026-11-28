@@ -200,6 +200,13 @@ impl PrepareWindow {
             settings.prepare_presets = prepare::first_presets();
             shown.changed = true;
         }
+        // A preset keeping the words by default of before gets today's.
+        for preset in &mut settings.prepare_presets {
+            if preset.profile.editions == prepare::EDITIONS_BEFORE {
+                preset.profile.editions = prepare::EDITIONS.to_owned();
+                shown.changed = true;
+            }
+        }
         if !settings.prepare_presets.iter().any(|p| p.name == settings.prepare_preset) {
             settings.prepare_preset = settings.prepare_presets[0].name.clone();
             shown.changed = true;
@@ -1191,13 +1198,32 @@ fn tags_tab(ui: &mut Ui, p: &mut Profile) {
             |ui| switch(ui, &mut p.album_title),
         );
         if p.album_title {
-            ui.add(
-                egui::TextEdit::multiline(&mut p.editions)
-                    .desired_rows(2)
-                    .desired_width(ui.available_width())
-                    .hint_text(tr!("words, separated by commas", "слова через запятую")),
+            ui.add_enabled_ui(!p.album_brackets, |ui| {
+                ui.add(
+                    egui::TextEdit::multiline(&mut p.editions)
+                        .desired_rows(2)
+                        .desired_width(ui.available_width())
+                        .hint_text(tr!("words, separated by commas", "слова через запятую")),
+                );
+            });
+            ui.label(
+                RichText::new(tr!(
+                    "Whole words, with their endings: \"remaster\" finds \"Remastered\", \"ep\" does not find \"Deep\".",
+                    "Целые слова с окончаниями: «remaster» находит «Remastered», «ep» не находит «Deep»."
+                ))
+                .size(12.0)
+                .color(palette::text_weak()),
             );
-            ui.add_space(6.0);
+            row(
+                ui,
+                tr!("Every part in brackets at the end", "Любые части в скобках в конце"),
+                Some(tr!(
+                    "Whatever they say: \"Live (In Moscow)\" becomes \"Live\"",
+                    "Что бы в них ни было: «Live (In Moscow)» становится «Live»"
+                )),
+                60.0,
+                |ui| switch(ui, &mut p.album_brackets),
+            );
         }
         divider(ui);
         row(
