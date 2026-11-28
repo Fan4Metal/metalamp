@@ -848,18 +848,35 @@ fn disc_of_folder(path: &Path) -> Option<u32> {
 /// `title` without the parts in brackets at its end that name an edition
 /// (any of `words`, separated by commas, in any case).
 pub fn without_edition(title: &str, words: &str, all: bool) -> String {
+    edition_cut(title, words, all).0
+}
+
+/// A part cut from an album's title, and the word of the list that named
+/// it (none: every part in brackets at the end is cut).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Cut {
+    pub part: String,
+    pub word: Option<String>,
+}
+
+/// `without_edition`, with what was cut and why, from the end.
+pub fn edition_cut(title: &str, words: &str, all: bool) -> (String, Vec<Cut>) {
     let phrases: Vec<Vec<String>> = words.split(',').map(words_of).filter(|p| !p.is_empty()).collect();
-    let names_one = |inner: &str| {
+    let named_by = |inner: &str| {
         let said = words_of(inner);
-        phrases.iter().any(|phrase| {
-            (0..said.len()).any(|at| {
-                phrase
-                    .iter()
-                    .enumerate()
-                    .all(|(i, w)| said.get(at + i).is_some_and(|s| same_word(s, w)))
+        phrases
+            .iter()
+            .find(|phrase| {
+                (0..said.len()).any(|at| {
+                    phrase
+                        .iter()
+                        .enumerate()
+                        .all(|(i, w)| said.get(at + i).is_some_and(|s| same_word(s, w)))
+                })
             })
-        })
+            .map(|phrase| phrase.join(" "))
     };
+    let mut cuts = Vec::new();
     let mut title = title.trim().to_owned();
     loop {
         let close = match title.chars().last() {
@@ -870,16 +887,21 @@ pub fn without_edition(title: &str, words: &str, all: bool) -> String {
         let Some(open) = title.rfind(close) else {
             break;
         };
-        if !all && !names_one(&title[open + 1..title.len() - 1]) {
+        let word = named_by(&title[open + 1..title.len() - 1]);
+        if !all && word.is_none() {
             break;
         }
         let cut = title[..open].trim_end().trim_end_matches(['-', '–']).trim_end();
         if cut.is_empty() {
             break;
         }
+        cuts.push(Cut {
+            part: title[open..].to_owned(),
+            word: if all { None } else { word },
+        });
         title = cut.to_owned();
     }
-    title
+    (title, cuts)
 }
 
 /// The lower-case words of `text` (an apostrophe kept: "collector's").
@@ -1019,6 +1041,11 @@ pub struct Plan {
     /// The other files deleted or moved.
     pub extras: Vec<PathBuf>,
     pub warnings: Vec<String>,
+    /// What was cut from the album's title (the one most files have), and
+    /// why, from the end.
+    pub album_cuts: Vec<Cut>,
+    /// The folder's template, when the folder is renamed.
+    pub folder_template: String,
     /// The genre most files have, before and after.
     pub genre: (String, String),
 }
@@ -1563,6 +1590,14 @@ pub fn plan(
         cover,
         extras,
         warnings,
+        album_cuts: if profile.album_title {
+            common(&original, Key::Album)
+                .map(|a| edition_cut(&a, &profile.editions, profile.album_brackets).1)
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        },
+        folder_template: profile.folder_name.clone(),
     }
 }
 
@@ -1838,6 +1873,10 @@ mod tests {
         assert_eq!(cut("Album (Single Mix) (In Moscow)"), "Album (Single Mix) (In Moscow)");
         let all = |t: &str| without_edition(t, EDITIONS, true);
         assert_eq!(all("Live (In Moscow) [Bootleg]"), "Live");
+        let (_, cuts) = edition_cut("Melodies (Acoustic Version) (EP)", EDITIONS, false);
+        let why: Vec<(&str, Option<&str>)> =
+            cuts.iter().map(|c| (c.part.as_str(), c.word.as_deref())).collect();
+        assert_eq!(why, [("(EP)", Some("ep")), ("(Acoustic Version)", Some("version"))]);
     }
 
     #[test]

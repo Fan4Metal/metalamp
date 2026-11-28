@@ -568,7 +568,7 @@ impl From<[RichText; 3]> for Row {
 }
 
 /// A row of the table: each cell cut with "…" to its column (whole in
-/// the tooltip); `hint` the name's tooltip.
+/// the tooltip); `hint` the tooltip of the name and the new value.
 fn table_row(ui: &mut Ui, widths: [f32; 3], cells: [RichText; 3], hint: Option<&str>) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
@@ -576,7 +576,7 @@ fn table_row(ui: &mut Ui, widths: [f32; 3], cells: [RichText; 3], hint: Option<&
             ui.allocate_ui_with_layout(vec2(w, 18.0), Layout::left_to_right(Align::Center), |ui| {
                 ui.set_width(w);
                 let resp = ui.add(egui::Label::new(text).truncate());
-                if i == 0
+                if i != 1
                     && let Some(hint) = hint
                 {
                     resp.on_hover_text(hint);
@@ -615,6 +615,33 @@ fn removed_row(item: &Item) -> Row {
         ],
         hint,
     }
+}
+
+/// Why the album's title lost its tail: each part cut and the word that
+/// named it; none when nothing was cut.
+fn cut_hint(plan: &Plan) -> Option<String> {
+    if plan.album_cuts.is_empty() {
+        return None;
+    }
+    let parts: Vec<String> = plan
+        .album_cuts
+        .iter()
+        .rev()
+        .map(|c| match &c.word {
+            Some(w) => tr!(
+                format!("{} by the word \"{w}\"", c.part),
+                format!("{} — по слову «{w}»", c.part)
+            ),
+            None => tr!(
+                format!("{}: any part in brackets at the end", c.part),
+                format!("{} — любая часть в скобках в конце", c.part)
+            ),
+        })
+        .collect();
+    Some(tr!(
+        format!("Cut from the album's title (the album title without the edition):\n{}", parts.join("\n")),
+        format!("Убрано из названия альбома (пункт «Альбом без пометки издания»):\n{}", parts.join("\n"))
+    ))
 }
 
 /// A changed value: the old one plain, the new one in the accent; a dash
@@ -712,7 +739,21 @@ fn preview(ui: &mut Ui, plan: &Plan, height: f32, only_changes: bool) {
             let mut rows = Vec::new();
             let folder = name_of(&plan.folder);
             match &plan.new_folder {
-                Some(to) => rows.push(change(tr!("Folder", "Папка"), &folder, &name_of(to))),
+                Some(to) => {
+                    // Made anew from the tags by the template: the old name
+                    // is not cut, it is replaced.
+                    let made = tr!(
+                        format!("Made from the tags by the template \"{}\"", plan.folder_template),
+                        format!("Собрано из тегов по шаблону «{}»", plan.folder_template)
+                    );
+                    let hint = match cut_hint(plan) {
+                        Some(cut) => format!("{made}\n\n{cut}"),
+                        None => made,
+                    };
+                    let mut row = change(tr!("Folder", "Папка"), &folder, &name_of(to));
+                    row.hint = Some(hint);
+                    rows.push(row);
+                }
                 None => rows.push(same(tr!("Folder", "Папка"), &folder)),
             }
             if let Some(cover) = &plan.cover {
@@ -771,7 +812,11 @@ fn preview(ui: &mut Ui, plan: &Plan, height: f32, only_changes: bool) {
                     rows.push(change(tr!("File name", "Имя файла"), &name_of(&f.path), &name_of(to)));
                 }
                 for (key, before, after) in &f.fields {
-                    rows.push(change(key.label(), before, after));
+                    let mut row = change(key.label(), before, after);
+                    if *key == edit::Key::Album {
+                        row.hint = cut_hint(plan);
+                    }
+                    rows.push(row);
                 }
                 rows.extend(f.removed.iter().map(removed_row));
                 if f.cover
