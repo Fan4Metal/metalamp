@@ -519,14 +519,15 @@ impl PrepareWindow {
     /// value typed goes into every file (in the accent, with a × to go
     /// back to what the preset makes).
     fn album_row(&mut self, ui: &mut Ui) {
-        let Some(plan) = self.plan.as_ref().map(|(_, _, p)| p.clone()) else {
-            return;
-        };
+        // Shown while the tags are read too, empty, so the window does not
+        // jump when they come.
+        let plan = self.plan.as_ref().map(|(_, _, p)| p.clone());
+        let planned = |f: fn(&Plan) -> &String| plan.as_deref().map(f).cloned().unwrap_or_default();
         ui.horizontal(|ui| {
             let fields = [
-                (edit::Key::Album, plan.album.as_str(), 0.45),
-                (edit::Key::AlbumArtist, plan.album_artist.as_str(), 0.35),
-                (edit::Key::Year, plan.year.as_str(), 0.0),
+                (edit::Key::Album, planned(|p| &p.album), 0.45),
+                (edit::Key::AlbumArtist, planned(|p| &p.album_artist), 0.35),
+                (edit::Key::Year, planned(|p| &p.year), 0.0),
             ];
             // The fields share what the labels and the year leave.
             let room = (ui.available_width() - 420.0).max(200.0);
@@ -540,7 +541,7 @@ impl PrepareWindow {
                     continue;
                 };
                 let typed = slot.is_some();
-                let mut text = slot.clone().unwrap_or_else(|| planned.to_owned());
+                let mut text = slot.clone().unwrap_or(planned);
                 let width = if share > 0.0 { room * share } else { 50.0 };
                 let mut field = egui::TextEdit::singleline(&mut text).desired_width(width);
                 if typed {
@@ -582,8 +583,8 @@ impl PrepareWindow {
                 tr!("Files' names", "Имена файлов")
             };
             row_name(ui, label).on_hover_text(tr!(
-                "Empty fields read from the names by masks",
-                "Пустые поля берутся из имён по маскам"
+                "Fields read from the names by masks (the preset's tab \"From the names\")",
+                "Поля берутся из имён по маскам (вкладка «Из имён» пресета)"
             ));
             let mode = match choice {
                 MaskChoice::Preset => 0,
@@ -757,25 +758,25 @@ fn summary(plan: &Plan) -> String {
         .to_owned();
     }
     let mut parts = vec![tr!(
-        format!("tags of {} of {} files", plan.writes(), plan.files.len()),
-        format!("теги {} из {} файлов", plan.writes(), plan.files.len())
+        format!("tags written: {} of {} files", plan.writes(), plan.files.len()),
+        format!("теги записываются: {} из {} файлов", plan.writes(), plan.files.len())
     )];
     if plan.renames() > 0 {
         parts.push(tr!(
-            format!("{} renamed", plan.renames()),
-            format!("переименований: {}", plan.renames())
+            format!("files renamed: {}", plan.renames()),
+            format!("файлов переименовывается: {}", plan.renames())
         ));
     }
     if plan.new_folder.is_some() {
         parts.push(tr!("the folder renamed", "папка переименовывается").to_owned());
     }
     if plan.folder_jpg.is_some() {
-        parts.push("folder.jpg".to_owned());
+        parts.push(tr!("folder.jpg written", "folder.jpg записывается").to_owned());
     }
     if !plan.extras.is_empty() {
         parts.push(tr!(
-            format!("{} other files", plan.extras.len()),
-            format!("прочих файлов: {}", plan.extras.len())
+            format!("other files {}: {}", extras_where(plan), plan.extras.len()),
+            format!("прочие файлы {}: {}", extras_where(plan), plan.extras.len())
         ));
     }
     parts.join(" · ")

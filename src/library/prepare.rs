@@ -2043,7 +2043,7 @@ pub fn plan(
             .map(|(_, b)| (picture_size(b).unwrap_or_default(), b.len())),
         cover,
         extras,
-        extras_to: (profile.extras == Extras::Folder).then(|| profile.extras_folder.clone()),
+        extras_to: (profile.extras == Extras::Folder).then(|| as_file_name(&profile.extras_folder)),
         folder_unnamed,
         warnings,
         album_cuts: if profile.album_title && !own.contains(&Key::Album) {
