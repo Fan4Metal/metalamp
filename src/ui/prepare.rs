@@ -22,7 +22,7 @@ use egui::{Align, Key, Layout, RichText, Ui, vec2};
 use crate::library::edit::{self, Item, TagPart};
 use crate::library::prepare::{
     self, CoverFrom, DiscFormat, Extras, Fill, FolderJpg, GenreChoice, Kind, Known, Made, MaskChoice,
-    Need, Outcome, Plan, Preset, Profile, Source, TagCover, ThisAlbum, TrackFormat, Unify,
+    Need, Numbering, Outcome, Plan, Preset, Profile, Source, TagCover, ThisAlbum, TrackFormat, Unify,
 };
 use crate::palette;
 use crate::settings::{CoverSide, Settings};
@@ -695,6 +695,15 @@ fn mask_status(plan: &Plan, folder: bool) -> (String, egui::Color32) {
 fn read_hint(plan: &Plan, f: &prepare::FilePlan, key: edit::Key) -> Option<String> {
     if plan.own.contains(&key) {
         return Some(tr!("Typed for this album", "Задано для этого альбома").to_owned());
+    }
+    if key == edit::Key::Track && f.numbered {
+        return Some(
+            tr!(
+                "Its place in the order: by the disc, then the file's name",
+                "Место по порядку: по диску, затем по имени файла"
+            )
+            .to_owned(),
+        );
     }
     if f.from_name.contains(&key) {
         let mask = f.mask.as_deref().unwrap_or("");
@@ -1454,7 +1463,27 @@ fn tags_tab(ui: &mut Ui, p: &mut Profile) {
     section(ui, tr!("Numbers", "Номера"), |ui| {
         row(
             ui,
-            tr!("Track number", "Номер трека"),
+            tr!("Track numbers", "Номера треков"),
+            Some(tr!(
+                "In order: by the disc, then the file's name; each disc from 1",
+                "По порядку: по диску, затем по имени файла; каждый диск с 1"
+            )),
+            240.0,
+            |ui| {
+                choice(
+                    ui,
+                    "prepare_numbering",
+                    &mut p.numbering,
+                    &Numbering::ALL,
+                    |n| n.label().to_owned(),
+                    220.0,
+                )
+            },
+        );
+        divider(ui);
+        row(
+            ui,
+            tr!("Written as", "Формат номера"),
             Some(tr!("x is a digit: 0x is 01, 0x/xx is 01/16", "x — цифра: 0x — это 01, 0x/xx — 01/16")),
             240.0,
             |ui| choice(ui, "prepare_track", &mut p.track, &TrackFormat::ALL, |t| t.label().to_owned(), 220.0),

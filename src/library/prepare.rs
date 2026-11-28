@@ -149,6 +149,32 @@ impl TrackFormat {
     }
 }
 
+/// Where the tracks' numbers come from (Tag&Rename's "Auto Fill Track #"
+/// besides).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Numbering {
+    /// The tag's, else the digits the file's name starts with.
+    #[default]
+    Tags,
+    /// Those, and a file without one gets its place in the order.
+    Empty,
+    /// Every file its place: each disc from 1, by the files' names.
+    All,
+}
+
+impl Numbering {
+    pub const ALL: [Numbering; 3] = [Numbering::Tags, Numbering::Empty, Numbering::All];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Numbering::Tags => tr!("The tag's, else the file name's", "Из тега, иначе из имени файла"),
+            Numbering::Empty => tr!("In order, where there is none", "По порядку, где номера нет"),
+            Numbering::All => tr!("All anew, in order", "Все заново, по порядку"),
+        }
+    }
+}
+
 /// How the disc's number is written.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -310,6 +336,7 @@ impl FolderJpg {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Profile {
+    pub numbering: Numbering,
     pub track: TrackFormat,
     pub disc: DiscFormat,
     /// The edition cut from the album's title: a part in brackets at its
@@ -408,6 +435,7 @@ impl Default for Profile {
     /// Its first owner's way (Tag&Rename's), the preset by default.
     fn default() -> Self {
         Profile {
+            numbering: Numbering::Tags,
             track: TrackFormat::Auto,
             disc: DiscFormat::Several,
             album_title: true,
@@ -1224,6 +1252,8 @@ pub struct FilePlan {
     /// The fields its name's template needs and it lacks: it keeps its
     /// name (no `01 - .mp3`).
     pub unnamed: Vec<&'static str>,
+    /// Its number is its place in the order (`Numbering`).
+    pub numbered: bool,
     /// The mask its name was read by, and the fields it filled.
     pub mask: Option<String>,
     pub from_name: Vec<Key>,
@@ -1552,11 +1582,37 @@ pub fn plan(
     let discs: HashSet<u32> = disc_numbers.iter().flatten().copied().collect();
     let several_discs = discs.len() > 1 || folders.len() > 1;
     let disc_count = discs.iter().copied().max().unwrap_or(1).max(discs.len() as u32);
-    let numbers: Vec<Option<u32>> = values
+    let mut numbers: Vec<Option<u32>> = values
         .iter()
         .zip(&source.files)
         .map(|(v, f)| number_of(&v[at(Key::Track)]).or_else(|| leading_number(&stem(&f.path))))
         .collect();
+    // Numbered in order: each disc from 1, by the files' names.
+    let mut numbered = vec![false; n];
+    if profile.numbering != Numbering::Tags {
+        let mut order: Vec<usize> = (0..n).collect();
+        let name = |i: usize| {
+            source.files[i]
+                .path
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        order.sort_by(|&a, &b| {
+            disc_numbers[a]
+                .cmp(&disc_numbers[b])
+                .then_with(|| crate::format::natural_cmp(&name(a), &name(b)))
+        });
+        let mut place: HashMap<Option<u32>, u32> = HashMap::new();
+        for i in order {
+            let p = place.entry(disc_numbers[i]).or_insert(0);
+            *p += 1;
+            if (profile.numbering == Numbering::All || numbers[i].is_none()) && numbers[i] != Some(*p) {
+                numbers[i] = Some(*p);
+                numbered[i] = true;
+            }
+        }
+    }
     let most = numbers.iter().flatten().copied().max().unwrap_or(0).max(n as u32);
     let width = most.to_string().len().max(2);
     // A disc's tracks: its files or its largest number.
@@ -1566,8 +1622,12 @@ pub fn plan(
         largest.max(on.len() as u32)
     };
     for i in 0..n {
+        // A number given by its place is written even "as it is".
         if let Some(number) = numbers[i]
-            && let Some(t) = profile.track.format(number, total_of(disc_numbers[i]), width)
+            && let Some(t) = profile
+                .track
+                .format(number, total_of(disc_numbers[i]), width)
+                .or_else(|| numbered[i].then(|| number.to_string()))
         {
             values[i][at(Key::Track)] = t;
         }
@@ -1641,6 +1701,7 @@ pub fn plan(
             read_only: f.read_only,
             mask: read_by[i].clone(),
             from_name: from_name[i].clone(),
+            numbered: numbered[i],
             ..FilePlan::default()
         };
         match &f.tag {
@@ -2577,6 +2638,41 @@ mod tests {
         assert_eq!(field(&plan.files[1], Key::Year).as_deref(), Some("2021"));
         assert_eq!((plan.album.as_str(), plan.own.as_slice()), ("Melodies (EP)", [Key::Album].as_slice()));
         assert!(plan.album_cuts.is_empty());
+    }
+
+    #[test]
+    fn numbered_in_order() {
+        // Disc 1: b without a number, a with 5; disc 2: c with 1.
+        let source = Source {
+            folder: PathBuf::from(r"Z:\A"),
+            one_place: true,
+            files: vec![
+                file(r"Z:\A\b.mp3", &[(Key::Title, "B"), (Key::Disc, "1")], &[]),
+                file(r"Z:\A\a.mp3", &[(Key::Title, "A"), (Key::Disc, "1"), (Key::Track, "5")], &[]),
+                file(r"Z:\A\c.mp3", &[(Key::Title, "C"), (Key::Disc, "2"), (Key::Track, "1")], &[]),
+            ],
+            ..Default::default()
+        };
+        let tracks = |numbering: Numbering, track: TrackFormat| {
+            let profile = Profile {
+                numbering,
+                track,
+                ..Profile::default()
+            };
+            let plan = plan(&source, &profile, &ThisAlbum::default(), &mut no_cover);
+            plan.files
+                .iter()
+                .map(|f| {
+                    let t = f.fields.iter().find(|(k, ..)| *k == Key::Track);
+                    format!("{}{}", t.map_or("=", |(_, _, a)| a.as_str()), if f.numbered { "*" } else { "" })
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(tracks(Numbering::Tags, TrackFormat::Two), ["=", "05", "01"]);
+        assert_eq!(tracks(Numbering::Empty, TrackFormat::Two), ["02*", "05", "01"]);
+        assert_eq!(tracks(Numbering::All, TrackFormat::Two), ["02*", "01*", "01"]);
+        // "As it is": a number given is written, plain.
+        assert_eq!(tracks(Numbering::All, TrackFormat::Keep), ["2*", "1*", "="]);
     }
 
     #[test]
