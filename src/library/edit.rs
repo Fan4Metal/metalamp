@@ -458,9 +458,9 @@ fn with_tag<R>(
     version: Id3Version,
 ) -> Result<R, String> {
     let save = changes.is_some();
-    let numbers = |tag: &mut Id3v2Tag| {
+    let numbers = |tag: &mut Id3v2Tag, read: &[(&'static str, String)]| {
         if let Some(changes) = changes {
-            keep_numbers(tag, changes);
+            keep_numbers(tag, changes, read);
         }
         mend_languages(tag);
     };
@@ -513,7 +513,8 @@ fn with_tag<R>(
                 )
             });
             let tag = mended(tag);
-            edit(tag, f, save, path, write, numbers)
+            let read = numbers_read(&tag);
+            edit(tag, f, save, path, write, |t| numbers(t, &read))
         }
         Some(FileType::Wav) => {
             let file = lofty::iff::wav::WavFile::read_from(&mut reader, options).map_err(err)?;
@@ -525,7 +526,8 @@ fn with_tag<R>(
                 .cloned()
                 .unwrap_or_else(|| seeded(file.riff_info().cloned().map(Tag::from)));
             let tag = mended(tag);
-            edit(tag, f, save, path, write, numbers)
+            let read = numbers_read(&tag);
+            edit(tag, f, save, path, write, |t| numbers(t, &read))
         }
         Some(FileType::Flac) => {
             let file = lofty::flac::FlacFile::read_from(&mut reader, options).map_err(err)?;
@@ -737,11 +739,34 @@ fn mended(mut tag: Id3v2Tag) -> Id3v2Tag {
     tag
 }
 
+/// The track and disc numbers' frames (TRCK, TPOS) as the tag has them.
+fn numbers_read(tag: &Id3v2Tag) -> Vec<(&'static str, String)> {
+    ["TRCK", "TPOS"]
+        .into_iter()
+        .filter_map(|id| {
+            let text = tag.get_text(&FrameId::Valid(std::borrow::Cow::Borrowed(id)))?;
+            Some((id, text.to_owned()))
+        })
+        .collect()
+}
+
 /// lofty writes an ID3v2 tag's track and disc numbers from numbers
-/// (`3/12`): the frames written are put back as typed (`03/12`).
-fn keep_numbers(tag: &mut Id3v2Tag, changes: &Changes) {
+/// (`3/12`): the frames written are put back as typed (`03/12`), and
+/// those not changed as they were read.
+fn keep_numbers(tag: &mut Id3v2Tag, changes: &Changes, read: &[(&'static str, String)]) {
     for (key, id) in [(Key::Track, "TRCK"), (Key::Disc, "TPOS")] {
+        let frame_id = FrameId::Valid(std::borrow::Cow::Borrowed(id));
         let Some(value) = &changes.main[key as usize] else {
+            // Not changed: as it was read (lofty wrote `01` as `1`).
+            if let Some((_, text)) = read.iter().find(|(i, _)| *i == id)
+                && tag.get_text(&frame_id).is_some()
+            {
+                tag.insert(Frame::Text(TextInformationFrame::new(
+                    frame_id,
+                    TextEncoding::Latin1,
+                    text.clone(),
+                )));
+            }
             continue;
         };
         let Ok(Some((number, total))) = number_text(key, value) else {
@@ -1886,5 +1911,26 @@ mod tests {
         ids.sort();
         ids.dedup();
         ids
+    }
+
+    /// A number not changed stays as it was written (`01/12`): lofty
+    /// writes it from the number (`1/12`).
+    #[test]
+    fn numbers_not_changed_stay() {
+        let text = |s: &str| [&[0u8][..], s.as_bytes()].concat();
+        let bytes = mp3_with(&[(b"TRCK", text("01/12")), (b"TPOS", text("01"))]);
+        let dir = std::env::temp_dir().join(format!("metalamp_trck_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("numbers.mp3");
+        std::fs::write(&file, &bytes).unwrap();
+        let mut changes: Changes = Default::default();
+        changes.main[Key::Genre as usize] = Some("Metal".into());
+        let written = write(&file, &changes, WriteTags::default());
+        let values = read(&file, Id3Version::default());
+        std::fs::remove_dir_all(&dir).unwrap();
+        written.unwrap();
+        let values = values.unwrap();
+        assert_eq!(values.main[Key::Track as usize], "01/12");
+        assert_eq!(values.main[Key::Disc as usize], "01");
     }
 }
